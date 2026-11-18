@@ -1,0 +1,14 @@
+{
+  "channel": "Example Channel",
+  "title": "Five facts about Saturn's rings",
+  "prompt": "Make one vertical short video (1080x1920, 45 to 60 seconds) for the channel described in ./brief.md, on the topic in its title. Write the script first (./output/script.md), then produce the video with the tools on this machine (ffmpeg, ImageMagick, Python). Deliverables, all in ./output/: video.mp4, thumbnail.png (1280x720), script.md, and metadata.json with title, description and tags. Nobody can answer questions during the run: make reasonable choices and list them in your final summary.",
+  "files": [
+    {
+      "path": "brief.md",
+      "content": "# Example Channel\n\nTone: curious and upbeat, plain words, no hype.\nAudience: general, mobile viewers.\nTopic for this video: five facts about Saturn's rings.\nEnd card: 'Follow for more space facts'.\n"
+    }
+  ],
+  "timeout_minutes": 180,
+  "max_turns": 300,
+  "max_retries": 1
+}

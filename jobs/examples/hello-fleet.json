@@ -1,0 +1,8 @@
+{
+  "channel": "Fleet test",
+  "title": "Hello from the fleet",
+  "prompt": "This is a short test of the video fleet. Work only inside the current folder. 1) Write ./output/hello.txt with one line: the output of `hostname`, then the output of `ffmpeg -version | head -n 1`. 2) Make a 5-second 1280x720 test video ./output/test.mp4 with ffmpeg: a color test pattern (testsrc2) with silent audio (anullsrc), H.264 video and AAC audio. 3) Check the video with ffprobe and write its duration and resolution to ./output/hello.txt as well. Keep it short; do not install anything.",
+  "timeout_minutes": 15,
+  "max_turns": 20,
+  "max_budget_usd": 1
+}

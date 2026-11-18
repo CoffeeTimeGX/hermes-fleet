@@ -1,0 +1,76 @@
+#!/bin/bash
+# Test stand-in for systemctl in the fake-VPS container, which has no systemd.
+# It runs fleet-worker the way vps/systemd/fleet-worker.service does: as the
+# fleet user, with /etc/fleet/worker.env (and worker.local.env), and a restart
+# stops only the main process (KillMode=process), so running jobs survive.
+PIDFILE=/run/fleet-worker.pid
+UNIT=/etc/systemd/system/fleet-worker.service
+echo "$(date -u +%FT%TZ) systemctl $*" >>/var/log/systemctl-stub.log
+
+worker_pid() {
+  local p
+  p="$(cat "$PIDFILE" 2>/dev/null)"
+  [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null && echo "$p"
+}
+start_worker() {
+  [[ -n "$(worker_pid)" ]] && return 0
+  [[ -f "$UNIT" ]] || { echo "Unit fleet-worker.service not found." >&2; return 5; }
+  # setpriv execs directly (no fork), so $! is the worker loop itself.
+  setsid setpriv --reuid=fleet --regid=fleet --init-groups -- \
+    env -i HOME=/home/fleet USER=fleet LOGNAME=fleet SHELL=/bin/bash PATH=/usr/local/bin:/usr/bin:/bin \
+    bash -c 'set -a; . /etc/fleet/worker.env; if [ -f /etc/fleet/worker.local.env ]; then . /etc/fleet/worker.local.env; fi; set +a
+             cd /home/fleet/fleet && exec /home/fleet/fleet/app/worker/fleet-worker loop' \
+    </dev/null >>/var/log/fleet-worker.out 2>&1 &
+  echo $! >"$PIDFILE"
+}
+stop_worker() {
+  local p
+  p="$(worker_pid)" || true
+  [[ -n "$p" ]] || return 0
+  kill -TERM "$p" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$p" 2>/dev/null || break; sleep 0.2; done
+  rm -f "$PIDFILE"
+}
+
+now=0 args=()
+for a in "$@"; do
+  case "$a" in
+    --now) now=1 ;;
+    -q|--quiet|--no-pager|--no-block) ;;
+    *) args+=("${a%.service}") ;;
+  esac
+done
+set -- "${args[@]}"
+cmd="${1:-}"
+shift || true
+rc=0
+case "$cmd" in
+  start) for u in "$@"; do [[ "$u" == fleet-worker ]] && { start_worker || rc=$?; }; done ;;
+  stop) for u in "$@"; do [[ "$u" == fleet-worker ]] && stop_worker; done ;;
+  restart|try-restart|reload-or-restart)
+    for u in "$@"; do
+      case "$u" in
+        fleet-worker) stop_worker; start_worker || rc=$? ;;
+        ssh|sshd) pkill -HUP -o -x sshd ;;
+      esac
+    done ;;
+  reload) for u in "$@"; do [[ "$u" == ssh || "$u" == sshd ]] && { pkill -HUP -o -x sshd || rc=1; }; done ;;
+  enable) if [[ $now -eq 1 ]]; then for u in "$@"; do [[ "$u" == fleet-worker ]] && start_worker; done; fi ;;
+  is-active)
+    if [[ "${1:-}" == fleet-worker ]]; then
+      if [[ -n "$(worker_pid)" ]]; then echo active; else echo inactive; rc=3; fi
+    else
+      echo active
+    fi ;;
+  status)
+    if [[ "${1:-}" == fleet-worker && -z "$(worker_pid)" ]]; then echo "fleet-worker.service: inactive (stub)"; rc=3
+    else echo "${1:-system}: active (running) (stub)"; fi ;;
+  show)
+    # systemctl show -p LoadState --value fleet-worker
+    unit="${*: -1}"
+    if [[ "$unit" == fleet-worker ]]; then [[ -f "$UNIT" ]] && echo loaded || echo not-found; else echo loaded; fi ;;
+  is-enabled) echo enabled ;;
+  reboot) echo "reboot requested (test stub: nothing happens)" ;;
+  *) : ;;   # daemon-reload, disable, mask, ... : nothing to do here
+esac
+exit "$rc"

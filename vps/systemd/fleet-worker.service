@@ -1,0 +1,27 @@
+[Unit]
+Description=Fleet job worker (runs the Claude sessions the home Hermes director dispatches)
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=fleet
+Group=fleet
+EnvironmentFile=/etc/fleet/worker.env
+EnvironmentFile=-/etc/fleet/worker.local.env
+WorkingDirectory=/home/fleet/fleet
+ExecStart=/home/fleet/fleet/app/worker/fleet-worker loop
+# Each job runs in its own session and must survive a worker restart (for
+# example after `fleet sync`). The worker re-adopts running jobs when it starts.
+KillMode=process
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+# Hardening that does not get in the way of video tooling. Jobs get their own
+# TMPDIR inside their workspace, so /tmp is not made private here.
+NoNewPrivileges=true
+ProtectSystem=full
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

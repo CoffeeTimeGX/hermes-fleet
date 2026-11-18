@@ -1,0 +1,22 @@
+// Tailscale access policy for the fleet.
+// Paste it in the admin console: https://login.tailscale.com/admin/acls
+// (Access controls > JSON editor), replacing the default "allow everything" policy.
+//
+// - Your own devices (your PC, laptop, phone) can reach each other and SSH on the VPSs.
+// - The VPSs (tag:fleet) can reach nothing on your tailnet. If one were ever
+//   compromised, it could not touch your PC or the other VPSs.
+{
+  "tagOwners": {
+    "tag:fleet": ["autogroup:admin"],
+  },
+
+  "acls": [
+    // you -> your own devices
+    {"action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self:*"]},
+    // you -> SSH on every fleet VPS
+    {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:fleet:22"]},
+  ],
+
+  // The fleet uses normal SSH keys over Tailscale, not Tailscale SSH.
+  "ssh": [],
+}

@@ -1,0 +1,54 @@
+#!/bin/bash
+# Test stand-in for ufw in the fake-VPS container: it keeps the rules in a file
+# and prints `ufw status` the way ufw does (IPv4 rules, then their IPv6 twins).
+D=/var/lib/ufw-stub
+mkdir -p "$D"
+touch "$D/rules"
+[[ -f "$D/state" ]] || echo inactive >"$D/state"
+echo "$(date -u +%FT%TZ) ufw $*" >>/var/log/ufw-stub.log
+args=()
+for a in "$@"; do [[ "$a" == "--force" ]] || args+=("$a"); done
+set -- "${args[@]}"
+
+# "limit 22/tcp" -> "LIMIT|22/tcp"; "allow in on tailscale0" -> "ALLOW|Anywhere on tailscale0"
+rule_of() {
+  local action="${1^^}"
+  shift
+  if [[ "${1:-}" == in && "${2:-}" == on ]]; then echo "$action|Anywhere on $3"; else echo "$action|$1"; fi
+}
+
+case "${1:-}" in
+  status)
+    if [[ "$(cat "$D/state")" != active ]]; then echo "Status: inactive"; exit 0; fi
+    echo "Status: active"
+    echo
+    printf '%-27s%-12s%s\n' "To" "Action" "From" "--" "------" "----"
+    while IFS='|' read -r act to; do
+      [[ -n "$act" ]] && printf '%-27s%-12s%s\n' "$to" "$act" "Anywhere"
+    done <"$D/rules"
+    while IFS='|' read -r act to; do
+      [[ -n "$act" ]] || continue
+      if [[ "$to" == "Anywhere on "* ]]; then v6="Anywhere (v6) on ${to#Anywhere on }"; else v6="$to (v6)"; fi
+      printf '%-27s%-12s%s\n' "$v6" "$act" "Anywhere (v6)"
+    done <"$D/rules"
+    ;;
+  reset) : >"$D/rules"; echo inactive >"$D/state" ;;
+  enable) echo active >"$D/state"; echo "Firewall is active and enabled on system startup" ;;
+  disable) echo inactive >"$D/state"; echo "Firewall stopped and disabled on system startup" ;;
+  default) echo "Default ${3:-incoming} policy changed to '${2:-deny}'" ;;
+  allow|deny|limit|reject)
+    r="$(rule_of "$@")"
+    grep -qxF "$r" "$D/rules" || echo "$r" >>"$D/rules"
+    echo "Rule added"; echo "Rule added (v6)" ;;
+  delete)
+    shift
+    r="$(rule_of "$@")"
+    if grep -qxF "$r" "$D/rules"; then
+      grep -vxF "$r" "$D/rules" >"$D/rules.new"
+      mv "$D/rules.new" "$D/rules"
+      echo "Rule deleted"; echo "Rule deleted (v6)"
+    else
+      echo "Could not delete non-existent rule"; echo "Could not delete non-existent rule (v6)"
+    fi ;;
+  *) echo "ufw test stub: unsupported command: $*" >&2; exit 1 ;;
+esac

@@ -1,0 +1,25 @@
+#!/bin/bash
+# Test stand-in for the tailscale CLI in the fake-VPS container: any auth key
+# "joins" the tailnet, with the address 100.64.0.5.
+D=/var/lib/tailscale-stub
+mkdir -p "$D"
+echo "$(date -u +%FT%TZ) tailscale $*" >>/var/log/tailscale-stub.log
+case "${1:-}" in
+  status)
+    if [[ -f "$D/up" ]]; then
+      printf '{"BackendState":"Running","Self":{"HostName":"%s","TailscaleIPs":["100.64.0.5"]}}\n' "$(cat "$D/hostname" 2>/dev/null)"
+    else
+      echo '{"BackendState":"NeedsLogin"}'
+    fi ;;
+  up)
+    key="" host=""
+    for a in "$@"; do
+      case "$a" in --auth-key=*|--authkey=*) key="${a#*=}" ;; --hostname=*) host="${a#*=}" ;; esac
+    done
+    [[ -n "$key" ]] || { echo "tailscale (stub): no auth key" >&2; exit 1; }
+    echo "$host" >"$D/hostname"
+    touch "$D/up" ;;
+  set) for a in "$@"; do [[ "$a" == --hostname=* ]] && echo "${a#*=}" >"$D/hostname"; done ;;
+  ip) if [[ -f "$D/up" ]]; then echo 100.64.0.5; else exit 1; fi ;;
+  *) : ;;
+esac

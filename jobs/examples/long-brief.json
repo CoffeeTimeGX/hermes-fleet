@@ -1,0 +1,7 @@
+{
+  "channel": "Example Channel",
+  "title": "Weekly episode from a long brief",
+  "prompt_file": "long-brief.md",
+  "timeout_minutes": 240,
+  "max_turns": 400
+}

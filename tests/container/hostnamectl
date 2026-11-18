@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stand-in: a container cannot change its hostname, so just record it.
+echo "$(date -u +%FT%TZ) hostnamectl $*" >>/var/log/hostnamectl-stub.log
+[[ "${1:-}" == set-hostname && -n "${2:-}" ]] && echo "$2" >/etc/hostname
+exit 0

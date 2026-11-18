@@ -1,0 +1,189 @@
+# Everyday use
+
+Most days you only talk to Hermes, in the terminal (`hermes`) or on Telegram. It turns
+what you ask into `fleet` commands, runs them and reports back. This page shows what to
+ask and the commands behind it, so you can also run them yourself.
+
+Run `fleet` commands from any terminal: PowerShell, cmd or Git Bash on Windows, any
+shell on Linux and macOS.
+
+## A normal day
+
+1. **Queue the work.** Tell Hermes what to make: *"Make three shorts for Space Facts:
+   Saturn's rings, Europa's ocean and the Kuiper belt."* Hermes writes one job per video
+   and spreads them over the VPSs.
+2. **Do something else.** Each VPS works through its queue on its own, also while your
+   PC is off.
+3. **Get the results.** Every 30 minutes Hermes downloads what finished and sends you a
+   message with each job's summary. Each morning at 9 it sends a short report on the
+   whole fleet.
+4. **Deal with problems when Hermes tells you.** The health check messages you only
+   when something changes: a VPS stops answering, a job fails, the disk gets low.
+
+## What to ask, and what Hermes runs
+
+| You ask | Hermes runs |
+| --- | --- |
+| *"How is the fleet?"* | `fleet status` |
+| *"Anything wrong?"* | `fleet health` |
+| *"Make a 60-second short for Space Facts about Saturn's rings."* | writes a job file, then `fleet dispatch <file>` |
+| *"Run this on vps2 only."* | `fleet dispatch <file> --to vps2` |
+| *"Test every VPS."* | `fleet dispatch jobs/examples/hello-fleet.json --to all` |
+| *"What is running?"* | `fleet jobs --state running` |
+| *"Show me what vps3 is doing."* | `fleet logs vps3 <job-id>` |
+| *"Collect the finished videos."* | `fleet pull` |
+| *"Stop that job."* | `fleet cancel vps3 <job-id>` |
+| *"Try that one again on another VPS."* | `fleet retry vps3 <job-id> --to auto` |
+| *"Pause vps2, I want to update it."* | `fleet pause vps2` |
+| *"Start vps2 again."* | `fleet resume vps2` |
+
+For anything that changes a server (closing SSH, rebooting, deleting), Hermes says what
+it will run and waits for your yes.
+
+## Check the fleet
+
+```
+fleet status
+```
+
+```
+NODE  SERVICE                   QUEUED  RUNNING  DONE  FAILED  UNPULLED  DISK FREE      LOAD  PROVIDERS
+vps1  active                    0       1/1      12    1       0         71.3 GB (74%)  1.92  claude:ok
+vps2  active                    2       1/1      9     0       1         68.0 GB (71%)  2.1   claude:ok
+vps3  active LIMIT until 17:05  1       0/1      14    0       0         70.2 GB (73%)  0.04  claude:ok
+vps4  active PAUSED             0       0/1      7     0       0         74.9 GB (78%)  0.0   claude:ok
+vps5  UNREACHABLE               -       -        -     -       -         -              -     ssh: connect to host vps5 port 22: Connection timed out
+```
+
+| Column | Meaning |
+| --- | --- |
+| `SERVICE` | `active` when the worker runs. `PAUSED` after `fleet pause`. `LIMIT until 17:05` while the Claude account waits for its usage limit to reset (in your PC's local time). `UNREACHABLE` when your PC cannot reach the VPS; the last column says why. |
+| `QUEUED` | Jobs waiting to start. |
+| `RUNNING` | Jobs running now, out of how many the VPS may run at once (`sessions` in your inventory). |
+| `DONE`, `FAILED` | Finished jobs still on the VPS. Pulled jobs stay listed until the nightly cleanup deletes them, 7 days after the pull. |
+| `UNPULLED` | Finished jobs your PC has not downloaded yet. |
+| `DISK FREE` | Free space on the VPS. New jobs stop starting under 3 GB. |
+| `LOAD` | The VPS's load average over the last minute. Above its number of CPUs, it is busy. |
+| `PROVIDERS` | `claude:ok`, `claude:BAD` (with the reason in `fleet health`) or `claude:not-installed`. |
+
+`fleet health` prints only the problems, each with the command or page that fixes it.
+It exits with code 2 when there are problems, which makes it easy to use in scripts.
+
+## Queue work
+
+The quickest way is a one-line job:
+
+```
+fleet dispatch --prompt "Make a 30-second vertical teaser for ..." --channel "Space Facts"
+```
+
+For real work, write a job file. Hermes keeps them in `fleet-jobs/` in your home
+folder. Only `prompt` is required:
+
+```json
+{
+  "channel": "Space Facts",
+  "title": "Saturn's rings in 60 seconds",
+  "prompt": "Make one vertical short (1080x1920, 45 to 60 seconds) about Saturn's rings ...",
+  "timeout_minutes": 180
+}
+```
+
+```
+fleet dispatch ~/fleet-jobs/saturn-rings.json
+```
+
+```
+queued 20261118-142233-space-facts-k3x9p on vps2 (channel Space Facts, provider claude)
+```
+
+`fleet dispatch` asks every VPS for its status and puts the job on the least busy one
+that can start it now. A VPS is skipped while it is unreachable, paused, low on disk,
+waiting for a usage limit, or when Claude is not working on it. Other choices:
+
+- `--to vps2` puts it on vps2, even if vps2 is busy (you get a warning if vps2 cannot
+  start it soon).
+- `--to vps2,vps4` picks the least busy of the two.
+- `--to all` puts a copy on every VPS (the copies get `-vps1`, `-vps2` and so on at the
+  end of their ids).
+- `--dry-run` prints the job as it would be queued, without queuing it.
+- Several files at once: `fleet dispatch ~/fleet-jobs/*.json`. This works in PowerShell
+  and cmd too: `fleet` expands the `*` itself.
+
+Every field of a job file is described in [Job format](job-format.md).
+
+## Follow progress
+
+```
+fleet jobs
+```
+
+```
+NODE  STATE    ID                                 CHANNEL      STARTED               FINISHED              NOTE
+vps1  running  20261118-141502-history-7fq2m      History      2026-11-18T14:15:07Z  -
+vps2  inbox    20261118-142233-space-facts-k3x9p  Space Facts  -                     -
+vps2  done     20261118-101145-space-facts-a81kd  Space Facts  2026-11-18T10:11:50Z  2026-11-18T11:02:13Z  (pulled)
+vps3  failed   20261118-093010-history-p02xs      History      2026-11-18T09:30:15Z  2026-11-18T12:30:16Z  timed out after 180m
+```
+
+Job times are in UTC (the `Z` at the end). Narrow the list with a VPS name or a state:
+`fleet jobs vps2 --state failed`. States are `inbox` (waiting), `running`, `done` and
+`failed`.
+
+To watch a job, show the last lines of its log:
+
+```
+fleet logs vps1 20261118-141502-history-7fq2m
+fleet logs vps1 20261118-141502-history-7fq2m -f     # keep following; Ctrl+C to stop
+```
+
+The log shows the Claude Code version, how the session signed in, and how it ended.
+The full record of what the session did is `logs/transcript.jsonl`, which comes with
+the results.
+
+## Collect the results
+
+```
+fleet pull
+```
+
+```
+Pulled 2 finished job(s) into /home/you/fleet-results:
+[done] vps2/20261118-101145-space-facts-a81kd  channel: Space Facts
+    /home/you/fleet-results/vps2/20261118-101145-space-facts-a81kd
+    Made a 58-second vertical short about Saturn's rings. Files in ./output/: video.mp4, thumbnail.png, script.md, metadata.json. ...
+[FAILED] vps3/20261118-093010-history-p02xs  channel: History (timed out after 180m)
+    /home/you/fleet-results/vps3/20261118-093010-history-p02xs
+    log: claude: 2.1.300 (Claude Code) | subscription token | mode bypassPermissions | max turns 300
+```
+
+Hermes runs this every 30 minutes by itself. The videos and everything else a job made
+are in `output/` inside each job's folder. See [Results](results.md).
+
+## Fix a job
+
+- **Stop it:** `fleet cancel vps1 <job-id>`. A waiting job is removed from the queue; a
+  running one is stopped and filed as `failed` with the note `cancelled`.
+- **Run it again:** `fleet retry vps3 <job-id>` queues a fresh copy on the same VPS,
+  with `-r1` added to the id (then `-r2` and so on). Add `--to auto` to let the least
+  busy VPS take it.
+- **Find out why it failed:** the `NOTE` column of `fleet jobs` and the pull message
+  give the reason. [Job failures](../runbooks/job-failures.md) explains each one.
+
+## Pause a VPS
+
+```
+fleet pause vps2 --reason "updating"
+fleet resume vps2
+```
+
+A paused VPS starts no new jobs. Running jobs finish normally and the queue waits.
+`fleet dispatch` sends new work to the other VPSs meanwhile. `fleet resume` also ends a
+usage-limit wait early (see [Usage limits](usage-limits.md)).
+
+## Where to go next
+
+- [Job format](job-format.md): every setting a job can have.
+- [Scheduled checks](scheduled-checks.md): what Hermes checks and when it messages you.
+- [Runbooks](../runbooks/index.md): what to do when something goes wrong.
+- [Command reference](../reference/cli.md): every `fleet` command and option.

@@ -1,0 +1,1576 @@
+#!/usr/bin/env python3
+"""fleet: the home machine's control CLI for the Hostinger VPS fleet.
+
+The Hermes agent on the home machine runs this tool in its terminal, and you can
+use it by hand too. Every VPS is reached over SSH, normally through Tailscale.
+Standard library only; runs on Windows, Linux and macOS with Python 3.9+.
+
+Everyday
+  fleet status [TARGETS] [--json]          worker, queue, disk and provider state
+  fleet health [--quiet|--changes-only]    problems only (scheduled checks use this)
+  fleet dispatch JOB.json [...] [--to T]   queue jobs (least busy VPS by default)
+  fleet dispatch --prompt "..." --channel C [--to T]
+  fleet jobs [TARGETS] [--state S] [--json]
+  fleet logs NODE JOB_ID [-f]              a job's provider log
+  fleet cancel NODE JOB_ID                 cancel a queued or running job
+  fleet retry NODE JOB_ID [--to T]         queue a copy of a finished or failed job
+  fleet pull [TARGETS] [--quiet]           download finished jobs into results_dir
+  fleet pause|resume TARGETS               stop or restart taking new jobs
+
+Setup and maintenance
+  fleet init [--keep-model] [--no-hermes]  set up this home machine (installers call it)
+  fleet hermes-cron [--deliver telegram]   create the scheduled Hermes jobs
+  fleet doctor                             check this home machine
+  fleet list | ping [TARGETS] | ssh-config
+  fleet bootstrap NODE [--public]          first-time VPS setup (runs as root)
+  fleet lockdown NODE [--undo]             close (or reopen) public SSH
+  fleet provider install|check NAME [TARGETS] [--version V] [--smoke]
+  fleet secrets push NAME [TARGETS]        copy provider credentials to VPSs
+  fleet sync [TARGETS]                     push the repo's vps/ code, restart workers
+  fleet restart [TARGETS]                  restart the worker service
+  fleet reboot NODE [--force]              reboot a VPS (refuses while jobs run)
+  fleet exec TARGETS [--root] -- CMD...    run a shell command
+  fleet forget-host NODE                   drop a rebuilt VPS's old SSH host key
+
+TARGETS is "all" (default), a node name such as vps1, or a list: vps1,vps3.
+Config: $FLEET_CONFIG or ~/.config/fleet/fleet.ini
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import concurrent.futures as cf
+import configparser
+import glob
+import io
+import json
+import os
+import random
+import re
+import shlex
+import shutil
+import socket
+import stat
+import string
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "1.2.0"
+IS_WINDOWS = os.name == "nt"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+HOME = Path.home()
+DEFAULT_CONFIG = Path(os.environ.get("FLEET_CONFIG", str(HOME / ".config" / "fleet" / "fleet.ini"))).expanduser()
+STATE_DIR = Path(os.environ.get("FLEET_STATE_DIR", str(HOME / ".config" / "fleet" / "state"))).expanduser()
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+NODE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{0,100}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+EFFORTS = {"", "low", "medium", "high", "xhigh", "max", "ultracode"}
+PERMISSION_MODES = {"", "bypassPermissions", "dontAsk", "acceptEdits"}
+TOKEN_WARN_DAYS = 330  # `claude setup-token` tokens last one year
+LIMIT_ALERT_HOURS = 6  # usage-limit holds longer than this (weekly limits) are health problems
+DIRECTOR_MODEL = "claude-opus-5-5"
+
+
+class FleetError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- config
+
+@dataclass
+class Node:
+    name: str
+    host: str
+    public_ip: str = ""
+    user: str = "fleet"
+    port: int = 22
+    hostinger_account: str = ""
+    providers: list = field(default_factory=lambda: ["claude"])
+    sessions: int = 1
+    channels: str = "all"
+    enabled: bool = True
+
+
+@dataclass
+class Config:
+    path: Path
+    remote_root: str
+    results_dir: Path
+    secrets_dir: Path
+    ssh_key: Path
+    connect_timeout: int
+    transport: str
+    nodes: dict
+
+
+def _expand(v: str) -> Path:
+    return Path(os.path.expandvars(str(v))).expanduser()
+
+
+def load_config(path: Path = DEFAULT_CONFIG) -> Config:
+    if not path.exists():
+        raise FleetError(f"no config at {path}. Run `fleet init` (the installers do) or copy home/fleet.ini.example there.")
+    cp = configparser.ConfigParser(inline_comment_prefixes=(";", "#"), interpolation=None)
+    cp.read(path, encoding="utf-8")
+    d = cp["defaults"] if cp.has_section("defaults") else {}
+    nodes = {}
+    for sec in cp.sections():
+        if sec == "defaults":
+            continue
+        if not NODE_RE.match(sec):
+            raise FleetError(f"node name [{sec}] in {path} must be a lowercase hostname like vps1")
+        s = cp[sec]
+        try:
+            nodes[sec] = Node(
+                name=sec,
+                host=(s.get("host", sec) or sec).strip(),
+                public_ip=s.get("public_ip", "").strip(),
+                user=s.get("user", d.get("user", "fleet")).strip(),
+                port=int(s.get("port", d.get("port", "22"))),
+                hostinger_account=s.get("hostinger_account", "").strip(),
+                providers=[p.strip() for p in s.get("providers", "claude").split(",") if p.strip()],
+                sessions=max(1, int(s.get("sessions", "1"))),
+                channels=s.get("channels", "all").strip(),
+                enabled=s.getboolean("enabled", True),
+            )
+        except ValueError as e:
+            raise FleetError(f"bad value in [{sec}] of {path}: {e}") from None
+    return Config(
+        path=path,
+        remote_root=d.get("remote_root", "/home/fleet/fleet"),
+        results_dir=_expand(d.get("results_dir", "~/fleet-results")),
+        secrets_dir=_expand(d.get("secrets_dir", "~/.config/fleet/secrets")),
+        ssh_key=_expand(d.get("ssh_key", "~/.ssh/fleet_ed25519")),
+        connect_timeout=int(d.get("connect_timeout", "10")),
+        transport=os.environ.get("FLEET_TRANSPORT", d.get("transport", "ssh")),
+        nodes=nodes,
+    )
+
+
+def resolve_targets(cfg: Config, spec, include_disabled: bool = False) -> list:
+    if not spec or spec == "all":
+        out = [n for n in cfg.nodes.values() if n.enabled or include_disabled]
+        if not out:
+            raise FleetError("no enabled nodes in the inventory")
+        return out
+    out = []
+    for name in str(spec).split(","):
+        name = name.strip()
+        if name not in cfg.nodes:
+            raise FleetError(f"unknown node '{name}' (known: {', '.join(cfg.nodes) or 'none'})")
+        out.append(cfg.nodes[name])
+    return out
+
+
+# --------------------------------------------------------------------------- transport
+
+def ssh_binary() -> str:
+    if IS_WINDOWS:
+        # Prefer Windows' own OpenSSH over Git's copy so behaviour is predictable.
+        win = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
+        if win.exists():
+            return str(win)
+    found = shutil.which("ssh")
+    if not found:
+        raise FleetError("ssh not found. Windows: Settings > System > Optional features > OpenSSH Client.")
+    return found
+
+
+def ssh_options(cfg: Config, node: Node) -> list:
+    opts = [
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={cfg.connect_timeout}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=4",
+        "-p", str(node.port),
+    ]
+    if not IS_WINDOWS:  # Windows OpenSSH has no connection multiplexing
+        control = HOME / ".ssh" / "cm"
+        control.mkdir(parents=True, exist_ok=True, mode=0o700)
+        opts += ["-o", "ControlMaster=auto", "-o", f"ControlPath={control}/%C", "-o", "ControlPersist=120"]
+    if cfg.ssh_key.exists():
+        opts += ["-i", str(cfg.ssh_key), "-o", "IdentitiesOnly=yes"]
+    return opts
+
+
+def wrap_remote(command: str) -> str:
+    """Encode a shell script so it survives any local quoting rules (cmd.exe,
+    PowerShell, list2cmdline) and runs in a login bash on the VPS. Only
+    [A-Za-z0-9+/=] travel inside the payload; stdin stays free for data."""
+    b64 = base64.b64encode(command.encode("utf-8")).decode("ascii")
+    return (f"f=$(mktemp /tmp/fleet-cmd.XXXXXX) && printf %s {b64} | base64 -d > $f && "
+            f"bash -l $f; rc=$?; rm -f $f; exit $rc")
+
+
+def remote(cfg: Config, node: Node, command: str, *, stdin: bytes = None, user: str = None,
+           host: str = None, timeout=300, capture: bool = True, stdout=None) -> subprocess.CompletedProcess:
+    """Run a bash script on a node (local transport exists for tests)."""
+    if cfg.transport == "local":
+        env = dict(os.environ, FLEET_ROOT=root_of(cfg, node), FLEET_NODE=node.name)
+        argv = ["bash", "-c", command]
+    else:
+        env = None
+        argv = [ssh_binary()] + ssh_options(cfg, node) + [f"{user or node.user}@{host or node.host}",
+                                                           wrap_remote(command)]
+    out = stdout if stdout is not None else (subprocess.PIPE if capture else None)
+    err = subprocess.PIPE if capture else None
+    try:
+        return subprocess.run(argv, input=stdin, env=env, timeout=timeout, stdout=out, stderr=err,
+                              stdin=None if stdin is not None else subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, b"", b"timed out")
+    except FileNotFoundError as e:
+        raise FleetError(f"cannot run {argv[0]}: {e}") from None
+
+
+def root_of(cfg: Config, node: Node) -> str:
+    return cfg.remote_root.replace("{node}", node.name)
+
+
+def worker(cfg: Config, node: Node) -> str:
+    return shlex.quote(f"{root_of(cfg, node)}/app/worker/fleet-worker")
+
+
+def parallel(nodes: list, fn, max_workers: int = 8) -> dict:
+    out = {}
+    with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(fn, n): n.name for n in nodes}
+        for f in cf.as_completed(futs):
+            try:
+                out[futs[f]] = f.result()
+            except Exception as e:  # report per node, never crash the whole run
+                out[futs[f]] = e
+    return {n.name: out[n.name] for n in nodes}
+
+
+def text(b) -> str:
+    return (b or b"").decode("utf-8", "replace").strip()
+
+
+def last_json(b, default=None):
+    """The worker prints one JSON document on its last line; anything a login
+    shell printed before it is ignored."""
+    for line in reversed(text(b).splitlines()):
+        line = line.strip()
+        if line:
+            try:
+                return json.loads(line)
+            except ValueError:
+                break
+    if default is not None:
+        return default
+    raise ValueError("no JSON in output")
+
+
+def tar_dir(src: Path) -> bytes:
+    """Pack a folder for a VPS. Text files are normalised to LF so a Windows
+    checkout with CRLF line endings still produces runnable bash scripts."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for p in sorted(src.rglob("*")):
+            rel = p.relative_to(src).as_posix()
+            if p.name.endswith(".env") or "__pycache__" in rel or p.name.startswith(".DS_Store"):
+                continue
+            ti = tarfile.TarInfo(rel)
+            ti.mtime = int(p.stat().st_mtime)
+            ti.uid = ti.gid = 0
+            if p.is_dir():
+                ti.type, ti.mode = tarfile.DIRTYPE, 0o755
+                tf.addfile(ti)
+                continue
+            if not p.is_file():
+                continue
+            data = p.read_bytes()
+            if b"\0" not in data[:8192]:
+                data = data.replace(b"\r\n", b"\n")
+            executable = data.startswith(b"#!") or p.suffix == ".sh" or (p.stat().st_mode & 0o111)
+            ti.mode = 0o755 if executable else 0o644
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def print_table(rows) -> None:
+    widths = [max(len(str(r[i])) for r in rows) for i in range(len(rows[0]))]
+    for r in rows:
+        print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip())
+
+
+def private_file(path: Path) -> bool:
+    if IS_WINDOWS:  # NTFS ACLs: `fleet init` restricts the folder to your user
+        return True
+    return not (path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO))
+
+
+# --------------------------------------------------------------------------- status & health
+
+def fetch_status(cfg: Config, n: Node) -> dict:
+    r = remote(cfg, n, f"{worker(cfg, n)} status --json", timeout=60)
+    if r.returncode != 0:
+        return {"node": n.name, "reachable": False, "error": text(r.stderr)[-300:] or f"exit {r.returncode}"}
+    try:
+        st = last_json(r.stdout)
+        if not isinstance(st, dict) or "queue" not in st:
+            raise ValueError
+    except ValueError:
+        return {"node": n.name, "reachable": False, "error": "worker returned no status (run `fleet sync`)"}
+    st["reachable"] = True
+    st["node"] = n.name
+    return st
+
+
+def cmd_status(cfg: Config, a) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+    res = parallel(nodes, lambda n: fetch_status(cfg, n))
+    if a.json:
+        print(json.dumps(list(res.values()), indent=2, default=str))
+        return 0
+    rows = [("NODE", "SERVICE", "QUEUED", "RUNNING", "DONE", "FAILED", "UNPULLED", "DISK FREE", "LOAD", "PROVIDERS")]
+    for name, st in res.items():
+        if isinstance(st, Exception) or not st.get("reachable"):
+            err = st if isinstance(st, Exception) else st.get("error")
+            rows.append((name, "UNREACHABLE", "-", "-", "-", "-", "-", "-", "-", str(err).replace("\n", " ")[:70]))
+            continue
+        q = st["queue"]
+        wanted = cfg.nodes[name].providers
+        reports = {p.get("provider"): p for p in st.get("providers", [])}
+        prov = " ".join(f"{w}:{provider_word(reports.get(w))}" for w in wanted) or "none"
+        if st.get("reboot_required"):
+            prov += " (reboot pending)"
+        service = st.get("service", "?") + (" PAUSED" if st.get("paused") else "")
+        if active_limit(st):
+            service += f" LIMIT until {short_time(st['limit'].get('until'))}"
+        rows.append((name, service, q["inbox"], f"{q['running']}/{st.get('max_parallel', '?')}",
+                     q["done"], q["failed"], q["unpulled"], f"{st.get('disk_free_gb')} GB ({st.get('disk_free_pct')}%)",
+                     st.get("load1"), prov))
+    print_table(rows)
+    return 0
+
+
+def active_limit(st) -> dict:
+    """The node's usage-limit hold ({provider, kind, message, until, ...}) while it lasts, else {}."""
+    lim = st.get("limit") if isinstance(st, dict) else None
+    if isinstance(lim, dict) and number(lim.get("until"), 0) > time.time():
+        return lim
+    return {}
+
+
+def short_time(epoch) -> str:
+    """A reset time as the owner reads it: local time, with the date when it is not today."""
+    t = datetime.fromtimestamp(number(epoch, 0))
+    return t.strftime("%H:%M" if t.date() == datetime.now().date() else "%a %d %b %H:%M")
+
+
+def number(v, default: float) -> float:
+    """A number from a worker status field, or the default when it is missing or odd."""
+    if isinstance(v, bool):
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def provider_word(rep) -> str:
+    if not rep or not rep.get("installed"):
+        return "not-installed"
+    return "ok" if rep.get("ok") else "BAD"
+
+
+def health_problems(cfg: Config, a) -> dict:
+    nodes = resolve_targets(cfg, None)
+    res = parallel(nodes, lambda n: fetch_status(cfg, n))
+    problems = {}
+    for name, st in res.items():
+        if isinstance(st, Exception):
+            problems[f"{name}:check"] = f"{name}: health check crashed: {st}"
+            continue
+        if not st.get("reachable"):
+            problems[f"{name}:unreachable"] = f"{name}: unreachable ({st.get('error', '')[:160]})"
+            continue
+        hb = st.get("heartbeat_age_s")
+        if st.get("service") not in ("active", "unknown"):
+            problems[f"{name}:service"] = f"{name}: fleet-worker service is {st.get('service')} (fleet restart {name})"
+        elif isinstance(hb, int) and (hb < 0 or hb > 180):
+            problems[f"{name}:heartbeat"] = (f"{name}: the worker loop is not running "
+                                             f"(no heartbeat {'yet' if hb < 0 else f'for {hb}s'}; fleet restart {name})")
+        if st.get("paused"):
+            problems[f"{name}:paused"] = f"{name}: paused, not starting new jobs (fleet resume {name})"
+        if st.get("low_disk") or number(st.get("disk_free_pct"), 100) < a.min_disk_pct:
+            stop = ", new jobs are on hold" if st.get("low_disk") else ""
+            problems[f"{name}:disk"] = (f"{name}: low disk, {st.get('disk_free_gb')} GB free "
+                                        f"({st.get('disk_free_pct')}%){stop}; run fleet pull, then see the disk-full runbook")
+        reports = {p.get("provider"): p for p in st.get("providers", [])}
+        for prov in cfg.nodes[name].providers:
+            rp = reports.get(prov)
+            if not rp or not rp.get("installed"):
+                problems[f"{name}:provider:{prov}"] = f"{name}: {prov} is not installed (fleet provider install {prov} {name})"
+            elif not rp.get("ok"):
+                problems[f"{name}:provider:{prov}"] = f"{name}: {prov} not ok: {rp.get('error')}"
+            elif rp.get("auth") == "oauth-token" and (rp.get("credential_age_days") or 0) >= TOKEN_WARN_DAYS:
+                problems[f"{name}:token-age:{prov}"] = (
+                    f"{name}: the {prov} subscription token was pushed {rp['credential_age_days']} days ago and "
+                    f"expires after a year; make a new one (see the rotate-credentials runbook)")
+        if number(st["queue"].get("inbox"), 0) > a.max_backlog:
+            problems[f"{name}:backlog"] = f"{name}: {st['queue']['inbox']} jobs waiting in the queue"
+        if st.get("reboot_required"):
+            problems[f"{name}:reboot"] = f"{name}: security updates need a reboot (fleet reboot {name} when idle)"
+        lim = active_limit(st)
+        if lim and number(lim.get("until"), 0) - number(lim.get("since"), 0) > LIMIT_ALERT_HOURS * 3600:
+            problems[f"{name}:limit"] = (
+                f"{name}: {lim.get('provider', 'provider')} usage limit reached ({lim.get('message', '')}); "
+                f"its queue waits until {short_time(lim.get('until'))} and then continues by itself "
+                f"(fleet dispatch sends new jobs to other VPSs meanwhile)")
+    return problems
+
+
+def cmd_health(cfg: Config, a) -> int:
+    problems = health_problems(cfg, a)
+    if not a.changes_only:
+        if problems:
+            print(f"Fleet health: {len(problems)} problem(s)\n- " + "\n- ".join(problems.values()))
+            return 2
+        if not a.quiet:
+            print(f"Fleet health: all {len(resolve_targets(cfg, None))} nodes OK")
+        return 0
+    # --changes-only: alert on new and resolved problems, remind about open ones.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    sf = STATE_DIR / "health.json"
+    try:
+        prev = json.loads(sf.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = {"open": {}, "last_alert": 0}
+    opened = {k: v for k, v in problems.items() if k not in prev.get("open", {})}
+    resolved = {k: v for k, v in prev.get("open", {}).items() if k not in problems}
+    now = time.time()
+    remind = bool(problems) and now - prev.get("last_alert", 0) >= a.remind_hours * 3600
+    lines = []
+    if opened or remind:
+        lines.append(f"Fleet health: {len(problems)} open problem(s)")
+        lines += [("NEW  " if k in opened else "STILL ") + v for k, v in problems.items()]
+    if resolved:
+        lines.append("Resolved:" if lines else "Fleet health: resolved")
+        lines += ["OK   " + v for v in resolved.values()]
+    state = {"open": problems, "last_alert": now if lines else prev.get("last_alert", 0), "checked": now}
+    sf.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    if lines:
+        print("\n".join(lines))
+    return 0
+
+
+# --------------------------------------------------------------------------- jobs
+
+def make_job_id(channel: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", channel.lower()).strip("-")[:40] or "job"
+    rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    return f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{slug}-{rnd}"
+
+
+def validate_job(job: dict, where: str = "job") -> dict:
+    def bad(msg):
+        raise FleetError(f"{where}: {msg}")
+    if not isinstance(job, dict):
+        bad("must be a JSON object")
+    if not isinstance(job.get("prompt"), str) or not job["prompt"].strip():
+        bad("needs a non-empty \"prompt\"")
+    job.setdefault("provider", "claude")
+    job.setdefault("channel", "general")
+    if not NAME_RE.match(str(job["provider"])):
+        bad(f"invalid provider {job['provider']!r}")
+    if not isinstance(job["channel"], str) or not job["channel"].strip():
+        bad("\"channel\" must be a non-empty string")
+    if "id" in job and not ID_RE.match(str(job["id"])):
+        bad(f"invalid id {job['id']!r} (letters, digits, . _ - only)")
+    for key, lo, hi in (("max_turns", 1, 10000), ("timeout_minutes", 1, 1440), ("max_retries", 0, 5)):
+        if key in job and (not isinstance(job[key], int) or isinstance(job[key], bool) or not lo <= job[key] <= hi):
+            bad(f"\"{key}\" must be a whole number from {lo} to {hi}")
+    if "max_budget_usd" in job and (not isinstance(job["max_budget_usd"], (int, float)) or job["max_budget_usd"] <= 0):
+        bad("\"max_budget_usd\" must be a positive number")
+    if not MODEL_RE.match(str(job.get("model", ""))):
+        bad(f"invalid model {job.get('model')!r}")
+    if str(job.get("effort", "")) not in EFFORTS:
+        bad(f"\"effort\" must be one of {', '.join(sorted(e for e in EFFORTS if e))}")
+    if str(job.get("permission_mode", "")) not in PERMISSION_MODES:
+        bad(f"\"permission_mode\" must be one of {', '.join(sorted(m for m in PERMISSION_MODES if m))}")
+    for key in ("title", "channel"):
+        if key in job and (not isinstance(job[key], str) or len(job[key]) > 200):
+            bad(f"\"{key}\" must be text of at most 200 characters")
+    if "template" in job and not NAME_RE.match(str(job["template"])):
+        bad(f"invalid template {job['template']!r}")
+    tools = job.get("allowed_tools")
+    if tools is not None and not (isinstance(tools, str) or (isinstance(tools, list) and all(isinstance(t, str) for t in tools))):
+        bad("\"allowed_tools\" must be a string or a list of strings")
+    files = job.get("files", [])
+    if not isinstance(files, list):
+        bad("\"files\" must be a list")
+    for f in files:
+        p = f.get("path", "") if isinstance(f, dict) else ""
+        if not p or p.startswith(("/", "\\")) or ".." in Path(p).parts or ":" in p:
+            bad(f"unsafe or missing file path {p!r} (use a relative path inside the workspace)")
+        if not isinstance(f.get("content"), str):
+            bad(f"file {p!r} needs string \"content\"")
+        if f.get("encoding", "utf-8") not in ("utf-8", "base64"):
+            bad(f"file {p!r}: encoding must be utf-8 or base64")
+    return job
+
+
+def expand_job_files(paths: list) -> list:
+    """Expand ~ and wildcards such as ~/fleet-jobs/*.json. Bash does it before `fleet`
+    starts, but PowerShell and cmd pass them through unchanged."""
+    out = []
+    for fp in map(os.path.expanduser, paths):
+        if any(ch in fp for ch in "*?[") and not Path(fp).exists():
+            matches = sorted(glob.glob(fp))
+            if not matches:
+                raise FleetError(f"{fp}: no file matches")
+            out += matches
+        else:
+            out.append(fp)
+    return out
+
+
+def load_jobs(a) -> list:
+    jobs = []
+    if a.job_files:
+        for fp in expand_job_files(a.job_files):
+            p = Path(fp)
+            try:
+                job = json.loads(p.read_text(encoding="utf-8-sig"))
+                if isinstance(job, dict) and "prompt_file" in job and "prompt" not in job:
+                    job["prompt"] = (p.parent / job.pop("prompt_file")).read_text(encoding="utf-8-sig")
+            except (OSError, ValueError) as e:
+                raise FleetError(f"{p}: {e}") from None
+            jobs.append((str(p), job))
+    elif a.prompt:
+        jobs.append(("--prompt", {"prompt": a.prompt}))
+    else:
+        raise FleetError("give one or more job files, or --prompt \"...\"")
+    out = []
+    for where, job in jobs:
+        if isinstance(job, dict):
+            if a.channel:
+                job["channel"] = a.channel
+            if a.provider:
+                job["provider"] = a.provider
+        out.append(validate_job(job, where))
+    return out
+
+
+def upload_job(cfg: Config, n: Node, job: dict) -> None:
+    root, jid = shlex.quote(root_of(cfg, n)), job["id"]
+    cmd = (f"set -e; r={root}; id={jid}\n"
+           f"if [ -e \"$r/work/$id\" ] || ls \"$r\"/jobs/*/\"$id\".json >/dev/null 2>&1; then\n"
+           f"  echo \"job id $id already exists on {n.name}\" >&2; exit 3; fi\n"
+           f"mkdir -p \"$r/jobs/inbox\"\n"
+           f"cat > \"$r/jobs/inbox/.$id.tmp\"\n"
+           f"mv \"$r/jobs/inbox/.$id.tmp\" \"$r/jobs/inbox/$id.json\"\n")
+    r = remote(cfg, n, cmd, stdin=json.dumps(job, indent=2).encode("utf-8"), timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"{n.name}: could not queue {jid}: {text(r.stderr) or 'exit ' + str(r.returncode)}")
+
+
+def cmd_dispatch(cfg: Config, a) -> int:
+    return dispatch_jobs(cfg, load_jobs(a), a.to or "auto", a.dry_run, a.json)
+
+
+LIMIT_WORDS = "at its usage limit"
+
+
+def node_readiness(st, provider: str):
+    """None when the node can start a job for this provider right now, else why not."""
+    if not isinstance(st, dict) or not st.get("reachable"):
+        return "unreachable"
+    if st.get("service") not in ("active", "unknown"):
+        return f"its worker service is {st.get('service')}"
+    if st.get("paused"):
+        return "paused"
+    if st.get("low_disk"):
+        return "low on disk"
+    rep = {p.get("provider"): p for p in st.get("providers", [])}.get(provider)
+    if not rep or not rep.get("installed"):
+        return f"{provider} is not installed"
+    if not rep.get("ok"):
+        return f"{provider} is not ok ({rep.get('error')})"
+    lim = active_limit(st)
+    if lim:
+        return f"{LIMIT_WORDS} until {short_time(lim.get('until'))}"
+    return None
+
+
+def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bool) -> int:
+    """auto: the least busy ready VPS. all: a copy on every VPS. A node list:
+    the least busy ready node in the list (or, if none is ready, it still queues
+    there and warns, because you asked for those nodes)."""
+    explicit = spec not in ("auto", "all")
+    pool = resolve_targets(cfg, spec if explicit else None)
+    status = {} if dry_run else parallel(pool, lambda n: fetch_status(cfg, n))
+    loads = {}
+    for n in pool:
+        st = status.get(n.name)
+        if isinstance(st, dict) and st.get("reachable"):
+            q = st["queue"]
+            busy = number(q.get("inbox"), 0) + number(q.get("running"), 0)
+            loads[n.name] = [busy, max(1, int(number(st.get("max_parallel"), n.sessions)))]
+    queued, rc = [], 0
+    for job in jobs:
+        prov = job["provider"]
+        label = job.get("id") or job.get("title") or job["channel"]
+        candidates = [n for n in pool if prov in n.providers]
+        if not candidates:
+            print(f"fleet: {label}: no enabled node in the inventory offers provider '{prov}'", file=sys.stderr)
+            rc = 1
+            continue
+        base_id = job.get("id") or make_job_id(job["channel"])
+        if dry_run:
+            targets = candidates if spec == "all" else candidates[:1]
+        elif spec == "all":
+            targets = [n for n in candidates if n.name in loads]
+            for n in candidates:
+                if n.name not in loads:
+                    print(f"fleet: {n.name} is unreachable; no copy of {label} was queued there", file=sys.stderr)
+                    rc = 1
+        else:
+            reachable = [n for n in candidates if n.name in loads]
+            ready = [n for n in reachable if node_readiness(status.get(n.name), prov) is None]
+            pickable = ready or (reachable if explicit else [])
+            if not pickable:
+                # Every account is at its usage limit: queue where the limit ends first.
+                waiting = [n for n in reachable
+                           if (node_readiness(status.get(n.name), prov) or "").startswith(LIMIT_WORDS)]
+                if waiting:
+                    first = min(waiting, key=lambda n: number(active_limit(status.get(n.name)).get("until"), 0))
+                    pickable = [first]
+            if not pickable:
+                why = "; ".join(f"{n.name} {node_readiness(status.get(n.name), prov)}" for n in candidates)
+                print(f"fleet: {label}: no VPS can take a {prov} job right now ({why}). Run `fleet health`.",
+                      file=sys.stderr)
+                rc = 1
+                continue
+            best = min(pickable, key=lambda n: (loads[n.name][0] / loads[n.name][1], n.name))
+            loads[best.name][0] += 1
+            targets = [best]
+        for n in targets:
+            j = dict(job, id=base_id if len(targets) == 1 else f"{base_id}-{n.name}", node=n.name,
+                     submitted_at=now_iso())
+            if dry_run:
+                print(json.dumps(j, indent=2))
+                continue
+            why = node_readiness(status.get(n.name), prov)
+            if why:
+                print(f"warning: {n.name}: {why}; {j['id']} waits in its queue until that is fixed", file=sys.stderr)
+            try:
+                upload_job(cfg, n, j)
+            except FleetError as e:
+                print(f"fleet: {e}", file=sys.stderr)
+                rc = 1
+                continue
+            queued.append({"node": n.name, "id": j["id"], "channel": j["channel"]})
+            if not as_json:
+                print(f"queued {j['id']} on {n.name} (channel {j['channel']}, provider {j['provider']})")
+    if as_json:
+        print(json.dumps(queued))
+    return rc
+
+
+def cmd_jobs(cfg: Config, a) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+    state = f" --state {shlex.quote(a.state)}" if a.state else ""
+    res = parallel(nodes, lambda n: remote(cfg, n, f"{worker(cfg, n)} jobs --json{state}", timeout=60))
+    all_jobs, rc = [], 0
+    for name, r in res.items():
+        if isinstance(r, Exception) or r.returncode != 0:
+            print(f"{name}: unreachable", file=sys.stderr)
+            rc = 1
+            continue
+        for j in last_json(r.stdout, []):
+            j["node"] = name
+            all_jobs.append(j)
+    if a.json:
+        print(json.dumps(all_jobs, indent=2))
+        return rc
+    rows = [("NODE", "STATE", "ID", "CHANNEL", "STARTED", "FINISHED", "NOTE")]
+    for j in all_jobs:
+        note = (j.get("reason") or "") + (" (pulled)" if j.get("pulled") else "")
+        rows.append((j["node"], j["state"], j["id"], j.get("channel") or "-", j.get("started_at") or "-",
+                     j.get("finished_at") or "-", note.strip()))
+    if len(rows) > 1:
+        print_table(rows)
+    else:
+        print("no jobs")
+    return rc
+
+
+def one_node(cfg: Config, name: str) -> Node:
+    nodes = resolve_targets(cfg, name, include_disabled=True)
+    if len(nodes) != 1:
+        raise FleetError("name exactly one node")
+    return nodes[0]
+
+
+def cmd_logs(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    if not ID_RE.match(a.job_id):
+        raise FleetError("invalid job id")
+    follow = " -f" if a.follow else ""
+    return remote(cfg, n, f"{worker(cfg, n)} logs {a.job_id}{follow}", capture=False, timeout=None).returncode
+
+
+def cmd_cancel(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    if not ID_RE.match(a.job_id):
+        raise FleetError("invalid job id")
+    r = remote(cfg, n, f"{worker(cfg, n)} cancel {a.job_id}")
+    print(text(r.stdout) or text(r.stderr))
+    return r.returncode
+
+
+def cmd_retry(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    if not ID_RE.match(a.job_id):
+        raise FleetError("invalid job id")
+    r = remote(cfg, n, f"cat {shlex.quote(root_of(cfg, n))}/work/{a.job_id}/job.json", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"{n.name}: no workspace for job {a.job_id} (it may have been cleaned up)")
+    try:
+        job = json.loads(text(r.stdout))
+    except ValueError:
+        raise FleetError(f"{n.name}: job {a.job_id} has an unreadable job.json") from None
+    for k in ("node", "submitted_at", "id"):
+        job.pop(k, None)
+    m = re.match(r"^(.*)-r(\d+)$", a.job_id)
+    base, k = (m.group(1), int(m.group(2)) + 1) if m else (a.job_id, 1)
+    job["id"] = f"{base[:120]}-r{k}"
+    job["retry_of"] = a.job_id
+    return dispatch_jobs(cfg, [validate_job(job, a.job_id)], a.to or n.name, False, False)
+
+
+def cmd_pause(cfg: Config, a, resume: bool = False) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+    reason = shlex.quote(a.reason) if not resume and a.reason else ""
+    verb = "resume" if resume else f"pause {reason}".rstrip()
+    res = parallel(nodes, lambda n: remote(cfg, n, f"{worker(cfg, n)} {verb}", timeout=60))
+    rc = 0
+    for name, r in res.items():
+        ok = not isinstance(r, Exception) and r.returncode == 0
+        print(text(r.stdout) if ok else f"{name}: FAILED {r if isinstance(r, Exception) else text(r.stderr)}")
+        rc = rc or (0 if ok else 1)
+    return rc
+
+
+def cmd_resume(cfg: Config, a) -> int:
+    return cmd_pause(cfg, a, resume=True)
+
+
+_index_lock = threading.Lock()
+PULL_PARTS = ("output", "logs", "result.json", "status.json", "job.json")
+
+
+def fetch_workspace(cfg: Config, n: Node, jid: str, dest: Path) -> None:
+    wd = f"{root_of(cfg, n)}/work/{jid}"
+    use_rsync = os.environ.get("FLEET_PULL_METHOD", "auto") != "tar" and shutil.which("rsync")
+    if cfg.transport == "ssh" and not IS_WINDOWS and use_rsync:
+        rsh = " ".join(shlex.quote(x) for x in [ssh_binary()] + ssh_options(cfg, n))
+        filters = [f"--include=/{p}" + ("/***" if "." not in p else "") for p in PULL_PARTS] + ["--exclude=*"]
+        r = subprocess.run(["rsync", "-a", "--partial", "--timeout=300", "-e", rsh, *filters,
+                            f"{n.user}@{n.host}:{wd}/", f"{dest}/"],
+                           capture_output=True, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            raise FleetError(text(r.stderr)[-300:] or f"rsync exit {r.returncode}")
+        return
+    part = dest.parent / f".{jid}.tar.gz.part"
+    cmd = f"cd {shlex.quote(wd)} && tar -czf - $(ls -d {' '.join(PULL_PARTS)} 2>/dev/null)"
+    with part.open("wb") as fh:
+        r = remote(cfg, n, cmd, stdout=fh, timeout=4 * 3600)
+    try:
+        if r.returncode != 0:
+            raise FleetError(text(r.stderr)[-300:] or f"exit {r.returncode}")
+        with tarfile.open(part, mode="r:gz") as tf:
+            safe = [m for m in tf.getmembers()
+                    if not m.name.startswith("/") and ".." not in Path(m.name).parts and (m.isfile() or m.isdir())]
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(dest, members=safe, filter="data")
+            else:
+                tf.extractall(dest, members=safe)
+    finally:
+        part.unlink(missing_ok=True)
+
+
+def pull_node(cfg: Config, n: Node) -> list:
+    r = remote(cfg, n, f"{worker(cfg, n)} finished --json", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"unreachable: {text(r.stderr)[-200:]}")
+    pulled = []
+    for j in last_json(r.stdout, []):
+        jid = j.get("id", "")
+        if not ID_RE.match(jid):
+            continue
+        dest = cfg.results_dir / n.name / jid
+        dest.mkdir(parents=True, exist_ok=True)
+        j["node"], j["path"] = n.name, str(dest)
+        try:
+            fetch_workspace(cfg, n, jid, dest)
+        except FleetError as e:
+            j["pull_error"] = str(e)
+            pulled.append(j)
+            continue
+        remote(cfg, n, f"{worker(cfg, n)} mark-pulled {jid}", timeout=60)
+        summary = dest / "output" / "SUMMARY.txt"
+        j["summary"] = summary.read_text(encoding="utf-8", errors="replace")[:600] if summary.exists() else ""
+        with _index_lock, (cfg.results_dir / "index.jsonl").open("a", encoding="utf-8") as idx:
+            idx.write(json.dumps(dict(j, pulled_at=now_iso())) + "\n")
+        pulled.append(j)
+    return pulled
+
+
+def cmd_pull(cfg: Config, a) -> int:
+    cfg.results_dir.mkdir(parents=True, exist_ok=True)
+    nodes = resolve_targets(cfg, a.targets)
+    res = parallel(nodes, lambda n: pull_node(cfg, n), max_workers=5)
+    lines, errors = [], []
+    for name, r in res.items():
+        if isinstance(r, Exception):
+            errors.append(f"{name}: {r}")
+            continue
+        for j in r:
+            status = "FAILED" if j.get("state") == "failed" else "done"
+            reason = f" ({j['reason']})" if j.get("reason") else ""
+            err = f"\n    could not download: {j['pull_error']}" if j.get("pull_error") else ""
+            summary = " ".join(j.get("summary", "").split())[:300]
+            if status == "FAILED" and not summary and j.get("log_tail"):
+                summary = "log: " + " | ".join(j["log_tail"].splitlines())[:300]
+            lines.append(f"[{status}] {name}/{j['id']}  channel: {j.get('channel')}{reason}{err}\n"
+                         f"    {j['path']}" + (f"\n    {summary}" if summary else ""))
+    if lines:
+        print(f"Pulled {len(lines)} finished job(s) into {cfg.results_dir}:")
+        print("\n".join(lines))
+    elif not a.quiet:
+        print("nothing new to pull")
+    if errors and not a.quiet:  # scheduled pulls stay quiet: `fleet health` reports unreachable nodes
+        print("\n".join(errors), file=sys.stderr)
+    return 1 if errors and not a.quiet else 0
+
+
+# --------------------------------------------------------------------------- maintenance
+
+def cmd_list(cfg: Config, a) -> int:
+    rows = [("NODE", "HOST", "PUBLIC IP", "ACCOUNT", "PROVIDERS", "SESSIONS", "CHANNELS", "ENABLED")]
+    for n in cfg.nodes.values():
+        rows.append((n.name, n.host, n.public_ip or "-", n.hostinger_account or "-", ",".join(n.providers),
+                     n.sessions, n.channels, "yes" if n.enabled else "no"))
+    print_table(rows)
+    return 0
+
+
+def cmd_ping(cfg: Config, a) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+
+    def one(n):
+        t0 = time.time()
+        r = remote(cfg, n, "echo ok", timeout=cfg.connect_timeout + 15)
+        return r.returncode == 0 and text(r.stdout).endswith("ok"), int((time.time() - t0) * 1000), text(r.stderr)
+
+    bad = 0
+    for name, res in parallel(nodes, one).items():
+        if isinstance(res, Exception):
+            print(f"{name:8} ERROR {res}")
+            bad += 1
+            continue
+        ok, ms, err = res
+        print(f"{name:8} {'ok' if ok else 'UNREACHABLE'} {ms} ms {'' if ok else err[-200:]}")
+        bad += 0 if ok else 1
+    return 1 if bad else 0
+
+
+def cmd_exec(cfg: Config, a) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+    command = " ".join(a.command)
+    if not command:
+        raise FleetError("nothing to run: fleet exec TARGETS -- CMD")
+    user = "root" if a.root else None
+    res = parallel(nodes, lambda n: remote(cfg, n, command, user=user, timeout=a.timeout))
+    rc = 0
+    for name, r in res.items():
+        if isinstance(r, Exception):
+            print(f"--- {name}: ERROR {r}")
+            rc = 1
+            continue
+        print(f"--- {name} (exit {r.returncode})")
+        if r.stdout:
+            print(text(r.stdout))
+        if r.stderr and r.returncode != 0:
+            print(text(r.stderr), file=sys.stderr)
+        rc = rc or r.returncode
+    return rc
+
+
+def push_code(cfg: Config, n: Node) -> str:
+    root = shlex.quote(root_of(cfg, n))
+    cmd = (f"set -e; mkdir -p {root}; cd {root}; rm -rf app.new; mkdir app.new\n"
+           f"tar -xzf - -C app.new\n"
+           f"rm -rf app.old; if [ -d app ]; then mv app app.old; fi; mv app.new app\n"
+           f"sudo -n systemctl restart fleet-worker >/dev/null 2>&1 || true\n"
+           f"echo \"synced worker $(app/worker/fleet-worker version)\"\n")
+    r = remote(cfg, n, cmd, stdin=tar_dir(REPO_ROOT / "vps"), timeout=300)
+    if r.returncode != 0:
+        raise FleetError(text(r.stderr)[-300:] or f"exit {r.returncode}")
+    return text(r.stdout)
+
+
+def cmd_sync(cfg: Config, a) -> int:
+    rc = 0
+    for name, r in parallel(resolve_targets(cfg, a.targets), lambda n: push_code(cfg, n)).items():
+        print(f"{name}: {r}")
+        rc = rc or (1 if isinstance(r, Exception) else 0)
+    return rc
+
+
+def cmd_restart(cfg: Config, a) -> int:
+    nodes = resolve_targets(cfg, a.targets)
+    res = parallel(nodes, lambda n: remote(cfg, n, "sudo -n systemctl restart fleet-worker && systemctl is-active fleet-worker"))
+    rc = 0
+    for name, r in res.items():
+        ok = not isinstance(r, Exception) and r.returncode == 0
+        print(f"{name}: {'restarted' if ok else 'FAILED ' + (str(r) if isinstance(r, Exception) else text(r.stderr))}")
+        rc = rc or (0 if ok else 1)
+    return rc
+
+
+def cmd_reboot(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    st = fetch_status(cfg, n)
+    if st.get("reachable") and st["queue"]["running"] and not a.force:
+        raise FleetError(f"{n.name} is running {st['queue']['running']} job(s); wait, or add --force "
+                         "(running jobs are retried after the reboot)")
+    remote(cfg, n, "systemctl reboot", user="root", timeout=30)
+    print(f"{n.name}: reboot requested; it is usually back in about a minute (fleet ping {n.name})")
+    return 0
+
+
+def read_env_file(path: Path) -> dict:
+    out = {}
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k.startswith("export "):
+            k = k[len("export "):].strip()
+        out[k] = v.strip().strip('"').strip("'")
+    return out
+
+
+def secret_file(cfg: Config, node: Node, name: str):
+    for p in (cfg.secrets_dir / node.name / f"{name}.env", cfg.secrets_dir / f"{name}.env"):
+        if p.exists():
+            if not private_file(p):
+                raise FleetError(f"{p} is readable by other users; run: chmod 600 {p}")
+            return p
+    return None
+
+
+def cmd_secrets(cfg: Config, a) -> int:
+    if not NAME_RE.match(a.name):
+        raise FleetError("invalid secret name")
+    rc = 0
+    for n in resolve_targets(cfg, a.targets):
+        src = secret_file(cfg, n, a.name)
+        if not src:
+            print(f"{n.name}: no {cfg.secrets_dir / n.name / (a.name + '.env')} (or shared {a.name}.env); skipped")
+            rc = 1
+            continue
+        values = {k: v for k, v in read_env_file(src).items() if v}
+        bad_keys = [k for k in values if not ENV_KEY_RE.match(k)]
+        if bad_keys:
+            raise FleetError(f"{src}: not a valid variable name: {', '.join(bad_keys)} (use NAME=value lines)")
+        if not values:
+            print(f"{n.name}: {src} has no values filled in; skipped")
+            rc = 1
+            continue
+        body = "".join(f"{k}={shlex.quote(v)}\n" for k, v in values.items()).encode("utf-8")
+        cmd = (f"set -e; umask 077; mkdir -p ~/.config/fleet/providers\n"
+               f"cat > ~/.config/fleet/providers/.{a.name}.env.tmp\n"
+               f"mv ~/.config/fleet/providers/.{a.name}.env.tmp ~/.config/fleet/providers/{a.name}.env\n"
+               f"date +%s > ~/.config/fleet/providers/.{a.name}.pushed\n")
+        r = remote(cfg, n, cmd, stdin=body)
+        print(f"{n.name}: {'pushed ' + ', '.join(values) if r.returncode == 0 else 'FAILED ' + text(r.stderr)}")
+        rc = rc or r.returncode
+    return rc
+
+
+def cmd_bootstrap(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    if a.public and not n.public_ip:
+        raise FleetError(f"set public_ip for [{n.name}] in {cfg.path} (hPanel > VPS > Overview)")
+    host = n.public_ip if a.public else n.host
+    pub = Path(str(cfg.ssh_key) + ".pub")
+    if not pub.exists():
+        raise FleetError(f"missing {pub}; run `fleet init` first")
+    env = {"FLEET_NODE": n.name, "FLEET_PUBKEY": pub.read_text(encoding="utf-8").strip(),
+           "MAX_PARALLEL": str(n.sessions), "FLEET_TZ": a.tz}
+    if a.skip_upgrade:
+        env["SKIP_UPGRADE"] = "1"
+    ts = secret_file(cfg, n, "tailscale")
+    if ts and read_env_file(ts).get("TS_AUTHKEY"):
+        env["TS_AUTHKEY"] = read_env_file(ts)["TS_AUTHKEY"]
+    else:
+        print(f"warning: no TS_AUTHKEY in {cfg.secrets_dir / 'tailscale.env'}; the node will not join Tailscale",
+              file=sys.stderr)
+    print(f"==> uploading the bootstrap bundle to root@{host}")
+    r = remote(cfg, n, "rm -rf /root/fleet-bootstrap && mkdir -p /root/fleet-bootstrap && "
+                       "tar -xzf - -C /root/fleet-bootstrap", stdin=tar_dir(REPO_ROOT / "vps"),
+               user="root", host=host, timeout=300)
+    if r.returncode != 0:
+        raise FleetError(f"could not reach root@{host}: {text(r.stderr)[-400:]}\n"
+                         f"Is the fleet key on the VPS? See docs/vps/provisioning.md (step 1).")
+    print(f"==> running bootstrap.sh on {n.name} (a few minutes)")
+    envtext = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in env.items()).encode("utf-8")
+    cmd = ("umask 077; cat > /root/fleet-bootstrap/.boot.env; . /root/fleet-bootstrap/.boot.env; "
+           "rm -f /root/fleet-bootstrap/.boot.env; bash /root/fleet-bootstrap/bootstrap.sh")
+    r = remote(cfg, n, cmd, stdin=envtext, user="root", host=host, timeout=3600, capture=False)
+    if r.returncode == 0:
+        print(f"\nBootstrap finished. Next: fleet ping {n.name}   (over Tailscale, host '{n.host}')")
+    return r.returncode
+
+
+def cmd_lockdown(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    flag = " --undo" if a.undo else ""
+    return remote(cfg, n, f"bash {shlex.quote(root_of(cfg, n))}/app/lockdown.sh{flag}", user="root",
+                  capture=False).returncode
+
+
+def cmd_provider(cfg: Config, a) -> int:
+    if not NAME_RE.match(a.name) or not (REPO_ROOT / "vps" / "providers" / a.name).is_dir():
+        raise FleetError(f"unknown provider '{a.name}' (see vps/providers/)")
+    nodes = resolve_targets(cfg, a.targets)
+    pdir = lambda n: shlex.quote(f"{root_of(cfg, n)}/app/providers/{a.name}")  # noqa: E731
+    if a.action == "install":
+        for name, r in parallel(nodes, lambda n: push_code(cfg, n)).items():
+            if isinstance(r, Exception):
+                print(f"{name}: sync failed: {r}")
+                return 1
+        ver = f" {shlex.quote(a.version)}" if a.version else ""
+        res = parallel(nodes, lambda n: remote(cfg, n, f"bash {pdir(n)}/install.sh{ver}", timeout=900))
+    else:
+        flags = " --smoke" if a.smoke else ""
+        res = parallel(nodes, lambda n: remote(cfg, n, f"bash {pdir(n)}/check.sh{flags}", timeout=300))
+    rc = 0
+    for name, r in res.items():
+        if isinstance(r, Exception):
+            print(f"--- {name}: ERROR {r}")
+            rc = 1
+            continue
+        print(f"--- {name} (exit {r.returncode})\n{text(r.stdout)}")
+        if r.returncode:
+            print(text(r.stderr)[-1500:], file=sys.stderr)
+            rc = 1
+    return rc
+
+
+def ssh_config_text(cfg: Config) -> str:
+    out = ["# hermes-fleet nodes, written by `fleet init` / `fleet ssh-config`. Edit fleet.ini instead."]
+    for n in cfg.nodes.values():
+        out.append(f"Host {n.name}\n  HostName {n.host}\n  User {n.user}\n  Port {n.port}\n"
+                   f"  IdentityFile {cfg.ssh_key.as_posix()}\n  IdentitiesOnly yes\n  ServerAliveInterval 30\n")
+    return "\n".join(out)
+
+
+def cmd_ssh_config(cfg: Config, a) -> int:
+    print(ssh_config_text(cfg))
+    return 0
+
+
+def cmd_forget_host(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    keygen = shutil.which("ssh-keygen") or "ssh-keygen"
+    for h in filter(None, {n.host, n.public_ip, n.name}):
+        target = h if n.port == 22 else f"[{h}]:{n.port}"
+        subprocess.run([keygen, "-R", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"forgot host key for {target}")
+    return 0
+
+
+# --------------------------------------------------------------------------- home setup
+
+def find_hermes():
+    exe = shutil.which("hermes")
+    if not exe and IS_WINDOWS:
+        cand = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "bin" / "hermes.exe"
+        exe = str(cand) if cand.exists() else None
+    if not exe:
+        cand = HOME / ".local" / "bin" / "hermes"
+        exe = str(cand) if cand.exists() else None
+    return exe
+
+
+def hermes_home() -> Path:
+    if os.environ.get("HERMES_HOME"):
+        return Path(os.environ["HERMES_HOME"]).expanduser()
+    if IS_WINDOWS:
+        return Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "hermes"
+    return HOME / ".hermes"
+
+
+def restrict_dir(path: Path) -> None:
+    if IS_WINDOWS:
+        user = os.environ.get("USERNAME", "")
+        dom = os.environ.get("USERDOMAIN", "")
+        who = f"{dom}\\{user}" if dom and user else user
+        if who:
+            subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{who}:(OI)(CI)F",
+                            "/grant:r", "SYSTEM:(OI)(CI)F", "/T", "/Q"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    os.chmod(path, 0o700)
+    for p in path.rglob("*"):
+        os.chmod(p, 0o700 if p.is_dir() else 0o600)
+
+
+def write_file(path: Path, content: str, newline: str = "\n") -> None:
+    """Write UTF-8 text with fixed line endings (Path.write_text has no newline= before Python 3.10)."""
+    with open(path, "w", encoding="utf-8", newline=newline) as fh:
+        fh.write(content)
+
+
+def write_if_missing(path: Path, content: str) -> bool:
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_file(path, content)
+    return True
+
+
+CRON_SCRIPT = '''#!/usr/bin/env python3
+# Written by `fleet init`. Hermes runs this as a no-agent cron script: whatever it
+# prints is sent to you; printing nothing means "all quiet".
+import os, runpy, sys
+os.environ.setdefault("FLEET_CONFIG", {config!r})
+sys.argv = ["fleet"] + {args!r}
+try:
+    runpy.run_path({cli!r}, run_name="__main__")
+except SystemExit as exc:
+    code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    sys.exit(0 if code in (0, 2) else code)
+'''
+
+
+def hermes_cmd(exe: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    env = dict(os.environ, HERMES_NONINTERACTIVE="1")
+    return subprocess.run([exe, *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, env=env)
+
+
+def hermes_get(exe: str, key: str):
+    r = hermes_cmd(exe, "config", "get", key, "--json")
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(text(r.stdout) or "null")
+    except ValueError:
+        return text(r.stdout) or None
+
+
+def apply_hermes_settings(exe: str, repo: str, keep_model: bool) -> list:
+    """Apply the director's settings through `hermes config set`, so Hermes
+    validates and writes them itself. Lists are merged, never replaced."""
+    skills_dir = (REPO_ROOT / "home" / "hermes" / "skills").as_posix()
+    wanted = [
+        ("terminal.cwd", repo, "set"),
+        ("terminal.timeout", 900, "min"),
+        ("skills.external_dirs", [skills_dir], "union"),
+        ("skills.auto_load", ["fleet-ops"], "union"),
+        ("approvals.deny", ["fleet exec all*rm -rf*", "*.config?fleet?secrets*", "*hermes?.env*"], "union"),
+    ]
+    if not keep_model:
+        wanted = [("model.provider", "anthropic", "set"), ("model.default", DIRECTOR_MODEL, "set")] + wanted
+    report = []
+    for key, value, mode in wanted:
+        cur = hermes_get(exe, key)
+        if mode == "union":
+            base = cur if isinstance(cur, list) else []
+            new = base + [v for v in value if v not in base]
+        elif mode == "min":
+            new = value if not isinstance(cur, (int, float)) or cur < value else cur
+        else:
+            new = value
+        if new == cur:
+            report.append(f"  = {key} already {json.dumps(new)}")
+            continue
+        literal = json.dumps(new) if isinstance(new, (list, dict)) else str(new)
+        r = hermes_cmd(exe, "config", "set", key, literal)
+        if r.returncode != 0:
+            report.append(f"  !! could not set {key}: {text(r.stderr)[-200:]}  (set it with: hermes config edit)")
+            continue
+        after = hermes_get(exe, key)
+        if isinstance(new, list) and not isinstance(after, list):
+            report.append(f"  !! {key} was stored as text, not a list. Fix with `hermes config edit`:\n"
+                          f"       {key}: {json.dumps(new)}")
+            continue
+        report.append(f"  + {key} = {json.dumps(new)}" + (f"   (was {json.dumps(cur)})" if cur not in (None, "") else ""))
+    return report
+
+
+def install_shims(bin_dir: Path) -> list:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    cli = REPO_ROOT / "home" / "bin" / "fleet"
+    made = []
+    if IS_WINDOWS:
+        py = Path(sys.executable)
+        if py.name.lower() == "pythonw.exe":
+            py = py.with_name("python.exe")
+        sh = bin_dir / "fleet"           # for Git Bash, which Hermes uses for its terminal
+        write_file(sh, f'#!/bin/sh\nexec "{py.as_posix()}" "{cli.as_posix()}" "$@"\n')
+        cmd = bin_dir / "fleet.cmd"      # for cmd.exe and PowerShell
+        write_file(cmd, f'@echo off\r\n"{py}" "{cli}" %*\r\n', newline="")
+        made += [str(sh), str(cmd)]
+    else:
+        link = bin_dir / "fleet"
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(cli)
+        os.chmod(cli, 0o755)
+        made.append(f"{link} -> {cli}")
+    return made
+
+
+def cmd_init(cfg_path: Path, a) -> int:
+    cfg_dir = cfg_path.parent
+    secrets = cfg_dir / "secrets"
+    for d in (cfg_dir, secrets, STATE_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    print("==> Fleet inventory and secrets (existing files are never overwritten)")
+    if write_if_missing(cfg_path, (REPO_ROOT / "home" / "fleet.ini.example").read_text(encoding="utf-8")):
+        print(f"  + {cfg_path}  (fill in each public_ip later)")
+    else:
+        print(f"  = kept {cfg_path}")
+    cfg = load_config(cfg_path)
+    claude_tpl = (REPO_ROOT / "home" / "secrets.example" / "claude.env.example").read_text(encoding="utf-8")
+    ts_tpl = (REPO_ROOT / "home" / "secrets.example" / "tailscale.env.example").read_text(encoding="utf-8")
+    for n in cfg.nodes.values():
+        if write_if_missing(cfg.secrets_dir / n.name / "claude.env", claude_tpl):
+            print(f"  + {cfg.secrets_dir / n.name / 'claude.env'}")
+    if write_if_missing(cfg.secrets_dir / "tailscale.env", ts_tpl):
+        print(f"  + {cfg.secrets_dir / 'tailscale.env'}")
+    restrict_dir(cfg.secrets_dir)
+    print(f"  secrets folder is private to your user: {cfg.secrets_dir}")
+
+    print("==> SSH key for the fleet")
+    if not cfg.ssh_key.exists():
+        cfg.ssh_key.parent.mkdir(parents=True, exist_ok=True)
+        keygen = shutil.which("ssh-keygen")
+        if not keygen:
+            raise FleetError("ssh-keygen not found (install the OpenSSH client)")
+        # No passphrase: scheduled checks must use it unattended. It opens only the
+        # fleet VPSs, and only over Tailscale once they are locked down.
+        subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "", "-C", f"hermes-fleet@{socket.gethostname()}",
+                        "-f", str(cfg.ssh_key)], check=True)
+        print(f"  + {cfg.ssh_key}")
+    else:
+        print(f"  = kept {cfg.ssh_key}")
+    pub = Path(str(cfg.ssh_key) + ".pub").read_text(encoding="utf-8").strip()
+
+    ssh_dir = HOME / ".ssh"
+    (ssh_dir / "config.d").mkdir(parents=True, exist_ok=True)
+    write_file(ssh_dir / "config.d" / "fleet", ssh_config_text(cfg) + "\n")
+    main_cfg = ssh_dir / "config"
+    existing = main_cfg.read_text(encoding="utf-8") if main_cfg.exists() else ""
+    if not re.search(r"(?im)^\s*Include\s+\S*config\.d/\*", existing):
+        if existing:
+            shutil.copy2(main_cfg, ssh_dir / f"config.bak-{int(time.time())}")
+        write_file(main_cfg, "Include config.d/*\n\n" + existing)
+    if not IS_WINDOWS:
+        os.chmod(main_cfg, 0o600)
+    print("  ssh config written: you can type `ssh vps1` once a VPS is up")
+
+    print("==> fleet command")
+    for s in install_shims(HOME / ".local" / "bin"):
+        print(f"  + {s}")
+
+    if a.no_hermes:
+        print("==> Hermes: skipped (--no-hermes)")
+    else:
+        exe = find_hermes()
+        hh = hermes_home()
+        if not exe:
+            print("==> Hermes: not found yet. Install it, then run `fleet init` again.")
+        else:
+            print(f"==> Hermes ({exe}, data in {hh})")
+            hh.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            if (hh / "config.yaml").exists():
+                shutil.copy2(hh / "config.yaml", hh / f"config.yaml.bak-{stamp}")
+            soul_src = REPO_ROOT / "home" / "hermes" / "SOUL.md"
+            soul = hh / "SOUL.md"
+            if soul.exists() and soul.read_bytes() != soul_src.read_bytes():
+                shutil.copy2(soul, hh / f"SOUL.md.bak-{stamp}")
+            shutil.copy2(soul_src, soul)
+            print(f"  + {soul}")
+            scripts = hh / "scripts"
+            scripts.mkdir(parents=True, exist_ok=True)
+            cli = str(REPO_ROOT / "home" / "bin" / "fleet")
+            for name, args in (("fleet_health.py", ["health", "--changes-only"]), ("fleet_pull.py", ["pull", "--quiet"])):
+                write_file(scripts / name, CRON_SCRIPT.format(config=str(cfg_path), args=args, cli=cli))
+                print(f"  + {scripts / name}")
+            for line in apply_hermes_settings(exe, REPO_ROOT.as_posix(), a.keep_model):
+                print(line)
+    print("\n==> Your fleet public key (add it in hPanel > VPS > Settings > SSH keys on each Hostinger account):")
+    print(f"  {pub}")
+    print("\nNext: give Hermes its API key and connect Telegram (steps 4 and 5 of docs/home/windows.md or\n"
+          "docs/home/linux-macos.md). The secrets files are filled in later, while you set up Tailscale and the VPSs.")
+    return 0
+
+
+def cmd_hermes_cron(cfg: Config, a) -> int:
+    exe = find_hermes()
+    if not exe:
+        raise FleetError("hermes not found")
+    listing = text(hermes_cmd(exe, "cron", "list").stdout)
+    jobs = [
+        ("fleet-health", ["every 10m", "--no-agent", "--script", "fleet_health.py"]),
+        ("fleet-pull", ["every 30m", "--no-agent", "--script", "fleet_pull.py"]),
+        ("fleet-daily-report", [
+            "every day at 9am",
+            "Daily fleet report. Run `fleet status` and `fleet jobs --json`. Report, per VPS: healthy or not, "
+            "jobs finished and failed in the last 24 hours (use finished_at), anything still queued or running, "
+            "and any action the owner needs to take. Under 12 lines, plain text.",
+            "--skill", "fleet-ops", "--workdir", REPO_ROOT.as_posix()]),
+    ]
+    rc = 0
+    for name, args in jobs:
+        if re.search(rf"\b{re.escape(name)}\b", listing):
+            print(f"= {name} already exists")
+            continue
+        r = hermes_cmd(exe, "cron", "create", *args, "--deliver", a.deliver, "--name", name)
+        print(f"{'+' if r.returncode == 0 else '!!'} {name}" + ("" if r.returncode == 0 else f": {text(r.stderr)[-300:]}"))
+        rc = rc or r.returncode
+    print("Cron runs inside the Hermes gateway: keep it running (hermes gateway status).")
+    return rc
+
+
+def cmd_doctor(cfg_path: Path, a) -> int:
+    fails = 0
+
+    def check(label, ok, hint="", warn=False):
+        nonlocal fails
+        mark = "ok" if ok else ("warn" if warn else "FAIL")
+        if not ok and not warn:
+            fails += 1
+        print(f"[{mark:>4}] {label}" + ("" if ok or not hint else f"\n       -> {hint}"))
+
+    check(f"python {sys.version.split()[0]} ({sys.executable})", sys.version_info >= (3, 9), "Python 3.9 or newer")
+    try:
+        check(f"ssh client: {ssh_binary()}", True)
+    except FleetError as e:
+        check("ssh client", False, str(e))
+    check("ssh-keygen", shutil.which("ssh-keygen") is not None, "install the OpenSSH client")
+    check("git", shutil.which("git") is not None, "Windows: winget install --id Git.Git -e")
+    if IS_WINDOWS:
+        bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+        check(f"Git Bash (Hermes runs terminal commands with it): {bash}", bash.exists(),
+              "winget install --id Git.Git -e")
+    exe = find_hermes()
+    check(f"hermes: {exe or 'not found'}", exe is not None, "see docs/home for the Hermes install command")
+    ts = shutil.which("tailscale") or (r"C:\Program Files\Tailscale\tailscale.exe"
+                                       if IS_WINDOWS and Path(r"C:\Program Files\Tailscale\tailscale.exe").exists() else None)
+    if ts:
+        r = subprocess.run([ts, "status", "--json"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        state = ""
+        try:
+            state = json.loads(r.stdout or b"{}").get("BackendState", "")
+        except ValueError:
+            pass
+        check(f"tailscale is {state or 'unknown'}", state == "Running", "open Tailscale and sign in", warn=True)
+    else:
+        check("tailscale installed", False, "https://tailscale.com/download", warn=True)
+    on_path = any(Path(p) == HOME / ".local" / "bin" for p in os.environ.get("PATH", "").split(os.pathsep) if p)
+    check("~/.local/bin is on PATH (so Hermes can run `fleet`)", on_path,
+          "re-run the installer, then open a new terminal and restart the Hermes gateway", warn=True)
+    check(f"config {cfg_path}", cfg_path.exists(), "run `fleet init`")
+    if cfg_path.exists():
+        cfg = load_config(cfg_path)
+        check(f"ssh key {cfg.ssh_key}", cfg.ssh_key.exists(), "run `fleet init`")
+        check(f"{len(cfg.nodes)} node(s) in the inventory", bool(cfg.nodes))
+        for n in cfg.nodes.values():
+            if not n.enabled:
+                continue
+            for prov in n.providers:
+                p = cfg.secrets_dir / n.name / f"{prov}.env"
+                filled = p.exists() and any(read_env_file(p).values())
+                check(f"{n.name}: {prov} credentials filled in", filled, f"edit {p}", warn=True)
+            try:
+                socket.getaddrinfo(n.host, n.port)
+                check(f"{n.name}: '{n.host}' resolves", True)
+            except OSError:
+                check(f"{n.name}: '{n.host}' resolves", False, "not on Tailscale yet (normal before bootstrap)", warn=True)
+        tsf = cfg.secrets_dir / "tailscale.env"
+        check("Tailscale auth key filled in (needed to bootstrap)", tsf.exists() and bool(read_env_file(tsf).get("TS_AUTHKEY")),
+              f"edit {tsf}", warn=True)
+    if exe:
+        cwd = hermes_get(exe, "terminal.cwd")
+        check("Hermes terminal.cwd points at this repo", str(cwd) == REPO_ROOT.as_posix(), "run `fleet init`", warn=True)
+    print("\nAll required checks passed." if not fails else f"\n{fails} required check(s) failed.")
+    return 1 if fails else 0
+
+
+# --------------------------------------------------------------------------- main
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="fleet", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="inventory file (default: %(default)s)")
+    p.add_argument("--version", action="version", version=f"fleet {VERSION}")
+    sp = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
+
+    sp.add_parser("list", help="show the inventory")
+    s = sp.add_parser("ping", help="check SSH reachability")
+    s.add_argument("targets", nargs="?")
+    s = sp.add_parser("status", help="worker, queue, disk and provider state")
+    s.add_argument("targets", nargs="?")
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("health", help="report problems only")
+    s.add_argument("--quiet", action="store_true", help="print nothing when everything is fine")
+    s.add_argument("--changes-only", action="store_true", help="only new/resolved problems, plus reminders")
+    s.add_argument("--remind-hours", type=float, default=6.0)
+    s.add_argument("--min-disk-pct", type=int, default=15)
+    s.add_argument("--max-backlog", type=int, default=25)
+    s = sp.add_parser("dispatch", help="queue jobs")
+    s.add_argument("job_files", nargs="*", metavar="JOB.json")
+    s.add_argument("--prompt")
+    s.add_argument("--channel")
+    s.add_argument("--provider")
+    s.add_argument("--to", help="auto (default, least busy), all (a copy on every VPS), or node name(s)")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("jobs", help="list jobs")
+    s.add_argument("targets", nargs="?")
+    s.add_argument("--state", choices=["inbox", "running", "done", "failed"])
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("logs", help="show a job's log")
+    s.add_argument("node")
+    s.add_argument("job_id")
+    s.add_argument("-f", "--follow", action="store_true")
+    s = sp.add_parser("cancel", help="cancel a job")
+    s.add_argument("node")
+    s.add_argument("job_id")
+    s = sp.add_parser("retry", help="queue a copy of a finished or failed job")
+    s.add_argument("node")
+    s.add_argument("job_id")
+    s.add_argument("--to", help="where to run the copy (default: the same node)")
+    s = sp.add_parser("pause", help="stop starting new jobs on nodes")
+    s.add_argument("targets")
+    s.add_argument("--reason", default="")
+    s = sp.add_parser("resume", help="start queued jobs again")
+    s.add_argument("targets")
+    s = sp.add_parser("pull", help="download finished jobs")
+    s.add_argument("targets", nargs="?")
+    s.add_argument("--quiet", action="store_true")
+    s = sp.add_parser("exec", help="run a shell command on nodes",
+                      usage="fleet exec TARGETS [--root] [--timeout SECONDS] -- COMMAND...")
+    s.add_argument("targets")
+    s.add_argument("--root", action="store_true", help="run as root instead of the fleet user")
+    s.add_argument("--timeout", type=int, default=600, help="seconds (default: %(default)s)")
+    s = sp.add_parser("sync", help="push vps/ code and restart workers")
+    s.add_argument("targets", nargs="?")
+    s = sp.add_parser("restart", help="restart the worker service")
+    s.add_argument("targets", nargs="?")
+    s = sp.add_parser("reboot", help="reboot a VPS")
+    s.add_argument("node")
+    s.add_argument("--force", action="store_true")
+    s = sp.add_parser("bootstrap", help="first-time VPS setup")
+    s.add_argument("node")
+    s.add_argument("--public", action="store_true", help="connect to public_ip (first run, before Tailscale)")
+    s.add_argument("--tz", default=os.environ.get("FLEET_TZ", "UTC"), help="VPS timezone (default UTC)")
+    s.add_argument("--skip-upgrade", action="store_true", help="skip the full OS upgrade (quick re-runs)")
+    s = sp.add_parser("lockdown", help="close public SSH")
+    s.add_argument("node")
+    s.add_argument("--undo", action="store_true")
+    s = sp.add_parser("provider", help="install or check an LLM provider")
+    s.add_argument("action", choices=["install", "check"])
+    s.add_argument("name")
+    s.add_argument("targets", nargs="?", default="all")
+    s.add_argument("--version", dest="version")
+    s.add_argument("--smoke", action="store_true", help="also run a one-turn session")
+    s = sp.add_parser("secrets", help="push provider credentials")
+    s.add_argument("action", choices=["push"])
+    s.add_argument("name")
+    s.add_argument("targets", nargs="?", default="all")
+    sp.add_parser("ssh-config", help="print ~/.ssh/config blocks")
+    s = sp.add_parser("forget-host", help="drop a rebuilt VPS's old host key")
+    s.add_argument("node")
+    s = sp.add_parser("init", help="set up this home machine")
+    s.add_argument("--keep-model", action="store_true", help="leave Hermes' model setting alone")
+    s.add_argument("--no-hermes", action="store_true", help="do not touch Hermes")
+    s = sp.add_parser("hermes-cron", help="create the scheduled Hermes jobs")
+    s.add_argument("--deliver", default="telegram", help="where reports go (default: telegram)")
+    sp.add_parser("doctor", help="check this home machine")
+    return p
+
+
+COMMANDS = {
+    "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
+    "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "pause": cmd_pause,
+    "resume": cmd_resume, "pull": cmd_pull, "exec": cmd_exec,
+    "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
+    "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,
+    "forget-host": cmd_forget_host, "hermes-cron": cmd_hermes_cron,
+}
+
+
+def subcommand_index(argv: list):
+    """Where the subcommand is in argv, skipping the global options."""
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--config":
+            i += 2
+        elif argv[i].startswith("-"):
+            i += 1
+        else:
+            return i
+    return None
+
+
+def parse_cli(argv: list) -> argparse.Namespace:
+    """For `fleet exec`, everything after the first `--` is the remote command,
+    so options such as --root work before or after the node names."""
+    command = []
+    i = subcommand_index(argv)
+    if i is not None and argv[i] == "exec" and "--" in argv[i:]:
+        cut = argv.index("--", i)
+        argv, command = argv[:cut], argv[cut + 1:]
+    a = build_parser().parse_args(argv)
+    if a.cmd == "exec":
+        a.command = command
+    return a
+
+
+def main(argv=None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    a = parse_cli(list(sys.argv[1:] if argv is None else argv))
+    try:
+        if a.cmd == "doctor":
+            return cmd_doctor(a.config, a)
+        if a.cmd == "init":
+            return cmd_init(a.config, a)
+        return COMMANDS[a.cmd](load_config(a.config), a)
+    except FleetError as e:
+        print(f"fleet: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,8 @@
+#!/bin/bash
+# Test stand-in: set the timezone the way timedatectl does, without systemd.
+echo "$(date -u +%FT%TZ) timedatectl $*" >>/var/log/timedatectl-stub.log
+if [[ "${1:-}" == set-timezone && -e "/usr/share/zoneinfo/${2:-}" ]]; then
+  ln -sf "/usr/share/zoneinfo/$2" /etc/localtime
+  echo "$2" >/etc/timezone
+fi
+exit 0

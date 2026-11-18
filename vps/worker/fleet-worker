@@ -1,0 +1,671 @@
+#!/usr/bin/env bash
+# fleet-worker: the job runner that lives on every VPS.
+#
+# The Hermes director on the home machine never runs LLM sessions itself. It
+# drops job files into this node's inbox over SSH. This worker claims them,
+# prepares a workspace, runs the job's provider adapter
+# (app/providers/<provider>/run.sh) and leaves the results in the workspace
+# for the home machine to pull. Jobs keep running while the home machine is off.
+#
+# Layout under $FLEET_ROOT (default /home/fleet/fleet):
+#   app/                 code synced from the repo's vps/ folder
+#   jobs/inbox/*.json    queued jobs (oldest first)
+#   jobs/running/*.json  claimed jobs
+#   jobs/done/*.json     finished with exit code 0
+#   jobs/failed/*.json   finished non-zero, timed out, cancelled or lost
+#   work/<id>/           workspace: job.json, output/, logs/, result.json, status.json
+#   logs/worker.log      worker log (rotated weekly by logrotate)
+#   .paused              set by `pause`: start no new jobs until `resume`
+#   .limit               the account hit a usage limit: start no new jobs until
+#                        the time in it (an adapter exits 75 and writes
+#                        work/<id>/logs/limit.json; the job goes back in the queue)
+#
+# Commands:
+#   loop                 run forever (what systemd starts)
+#   status [--json]      node summary
+#   jobs [--json] [--state inbox|running|done|failed]
+#   logs <id> [-f] [-n LINES]
+#   cancel <id>          cancel a queued or running job
+#   finished [--json]    finished jobs the home machine has not pulled yet
+#   mark-pulled <id>     mark a finished job as pulled
+#   pause [reason]       start no new jobs (running jobs finish normally)
+#   resume               start queued jobs again (also ends a usage-limit hold early)
+#   gc [--days N]        delete pulled workspaces older than N days (default 7)
+#   recover              requeue or fail jobs whose process is gone
+#   version
+set -euo pipefail
+
+WORKER_VERSION="1.2.0"
+
+for _env in /etc/fleet/worker.env /etc/fleet/worker.local.env; do
+  if [[ -r "$_env" && -z "${FLEET_IGNORE_ENV_FILES:-}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$_env"
+    set +a
+  fi
+done
+
+int_or() { if [[ "$1" =~ ^[0-9]{1,6}$ ]]; then echo "$((10#$1))"; else echo "$2"; fi; }
+
+FLEET_ROOT="${FLEET_ROOT:-$HOME/fleet}"
+FLEET_NODE="${FLEET_NODE:-$(hostname -s)}"
+MAX_PARALLEL="$(int_or "${MAX_PARALLEL:-1}" 1)"
+POLL_SECONDS="$(int_or "${POLL_SECONDS:-5}" 5)"
+DEFAULT_TIMEOUT_MINUTES="$(int_or "${DEFAULT_TIMEOUT_MINUTES:-180}" 180)"
+DEFAULT_MAX_RETRIES="$(int_or "${DEFAULT_MAX_RETRIES:-1}" 1)"
+MIN_FREE_GB="$(int_or "${MIN_FREE_GB:-3}" 3)"
+LIMIT_MARGIN_SECONDS="$(int_or "${LIMIT_MARGIN_SECONDS:-60}" 60)"   # wait this long past a limit's reset time
+MAX_LIMIT_WAITS="$(int_or "${MAX_LIMIT_WAITS:-50}" 50)"             # then give up on the job
+APP_DIR="${FLEET_APP_DIR:-$FLEET_ROOT/app}"
+JOBS="$FLEET_ROOT/jobs"
+WORK="$FLEET_ROOT/work"
+LOGDIR="$FLEET_ROOT/logs"
+LOCK="$FLEET_ROOT/.claim.lock"
+PAUSE_FILE="$FLEET_ROOT/.paused"
+HEARTBEAT="$FLEET_ROOT/.heartbeat"
+HOLD_FILE="$FLEET_ROOT/.hold"         # why the loop is not starting jobs, if it is not
+LIMIT_FILE="$FLEET_ROOT/.limit"       # usage-limit hold: {provider, kind, message, since, until, until_iso, job}
+ID_PATTERN='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+NAME_PATTERN='^[a-z0-9][a-z0-9-]{0,62}$'
+[[ "$MAX_PARALLEL" -ge 1 ]] || MAX_PARALLEL=1
+[[ "$POLL_SECONDS" -ge 1 ]] || POLL_SECONDS=5
+
+export FLEET_ROOT FLEET_NODE
+export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+
+die() { echo "fleet-worker: $*" >&2; exit 1; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+log() { printf '%s [%s] %s\n' "$(now)" "$FLEET_NODE" "$*" >>"$LOGDIR/worker.log"; }
+
+command -v jq >/dev/null 2>&1 || die "jq is required (apt-get install -y jq)"
+
+ensure_dirs() {
+  mkdir -p "$JOBS"/{inbox,running,done,failed} "$WORK" "$LOGDIR"
+}
+
+valid_id() { [[ "$1" =~ $ID_PATTERN ]]; }
+
+# json_write <file> <jq args...>: build a JSON file from scratch, atomically.
+json_write() {
+  local file="$1"; shift
+  local tmp="$file.tmp.$$"
+  jq -n "$@" >"$tmp" && mv -f "$tmp" "$file"
+}
+
+# json_merge <file> <jq args...>: update fields of a JSON file, atomically.
+json_merge() {
+  local file="$1"; shift
+  local tmp="$file.tmp.$$"
+  [[ -s "$file" ]] || echo '{}' >"$file"
+  jq "$@" "$file" >"$tmp" && mv -f "$tmp" "$file"
+}
+
+free_gb_int() { df -Pk "$FLEET_ROOT" | awk 'NR==2{printf "%d", $4/1048576}'; }
+
+# pid_alive_for <pid> <job-id>: the pid is alive AND it is that job's runner.
+pid_alive_for() {
+  local pid="$1" id="$2"
+  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    tr '\0' ' ' <"/proc/$pid/cmdline" | grep -qF -- "_run $id" && return 0
+    return 1
+  fi
+  return 0  # no /proc: trust kill -0
+}
+
+# starting_up <id> <running-file>: claimed under 2 minutes ago and the runner
+# has not written its pid yet (claim_next touches the file when it claims it).
+starting_up() {
+  [[ ! -s "$WORK/$1/pid" ]] && [[ -n "$(find "$2" -newermt '-120 seconds' 2>/dev/null)" ]]
+}
+
+running_count() {
+  local n=0 f id pid
+  for f in "$JOBS"/running/*.json; do
+    [[ -e "$f" ]] || continue
+    id="$(basename "$f" .json)"
+    pid="$(cat "$WORK/$id/pid" 2>/dev/null || true)"
+    if pid_alive_for "$pid" "$id" || starting_up "$id" "$f"; then n=$((n + 1)); fi
+  done
+  echo "$n"
+}
+
+# finish_job <id> <done|failed> <exit_code> <reason>
+finish_job() {
+  local id="$1" state="$2" code="$3" reason="$4" wd="$WORK/$1" tail_txt=""
+  mkdir -p "$wd"
+  if [[ "$state" == "failed" && -f "$wd/logs/provider.log" ]]; then
+    tail_txt="$(grep -v '^[[:space:]]*$' "$wd/logs/provider.log" | tail -n 3 | cut -c1-200 || true)"
+  fi
+  json_merge "$wd/status.json" \
+    --arg s "$state" --arg t "$(now)" --argjson c "$code" --arg r "$reason" \
+    --argjson e "$(date +%s)" --arg lt "$tail_txt" \
+    '.state=$s | .finished_at=$t | .exit_code=$c | .reason=$r
+     | .duration_s=(if .started_epoch then ($e - .started_epoch) else null end)
+     | .log_tail=(if $lt == "" then null else $lt end)'
+  if [[ -f "$JOBS/running/$id.json" ]]; then
+    mv -f "$JOBS/running/$id.json" "$JOBS/$state/$id.json" 2>/dev/null || true
+  fi
+  rm -f "$wd/pid"
+  log "job $id -> $state (exit $code${reason:+, $reason})"
+}
+
+# safe_rel_path <path>: a relative path that stays inside the workspace.
+safe_rel_path() {
+  local p="$1"
+  [[ -n "$p" && "$p" != /* && "$p" != *\\* && "$p" != *:* ]] || return 1
+  case "/$p/" in */../*|*/./*|*//*) return 1 ;; esac
+  return 0
+}
+
+# prepare_workspace <job.json> <workspace>: copy the job's template (from the
+# repo's vps/templates/) and write the files shipped inside the job.
+prepare_workspace() {
+  local job="$1" wd="$2" tpl n i rel enc dest base
+  tpl="$(jq -r '.template // empty' "$job")"
+  if [[ -n "$tpl" ]]; then
+    [[ "$tpl" =~ $NAME_PATTERN ]] || { echo "invalid template name '$tpl'"; return 1; }
+    [[ -d "$APP_DIR/templates/$tpl" ]] || { echo "template '$tpl' is not in vps/templates (run fleet sync)"; return 1; }
+    cp -a "$APP_DIR/templates/$tpl/." "$wd/"
+  fi
+  base="$(realpath -- "$wd")"
+  n="$(jq '(.files // []) | length' "$job")"
+  for ((i = 0; i < n; i++)); do
+    rel="$(jq -r --argjson i "$i" '.files[$i].path // ""' "$job")"
+    enc="$(jq -r --argjson i "$i" '.files[$i].encoding // "utf-8"' "$job")"
+    safe_rel_path "$rel" || { echo "unsafe file path '$rel'"; return 1; }
+    dest="$(realpath -m -- "$wd/$rel")"
+    [[ "$dest" == "$base/"* ]] || { echo "file path '$rel' leaves the workspace"; return 1; }
+    mkdir -p "$(dirname "$dest")"
+    case "$enc" in
+      utf-8) jq -j --argjson i "$i" '.files[$i].content // ""' "$job" >"$dest" ;;
+      base64) jq -j --argjson i "$i" '.files[$i].content // ""' "$job" | base64 -d >"$dest" \
+                || { echo "file '$rel' is not valid base64"; return 1; } ;;
+      *) echo "file '$rel': encoding must be utf-8 or base64"; return 1 ;;
+    esac
+  done
+}
+
+# hold_for_limit <id> <provider>: the provider's account hit a usage limit.
+# Put the job back at the front of the queue (its adapter resumes the session
+# later) and start no new jobs on this node until the limit resets.
+hold_for_limit() {
+  local id="$1" provider="$2" wd="$WORK/$1" lj="$WORK/$1/logs/limit.json"
+  local nowe resets until ui msg kind waits
+  nowe="$(date +%s)"
+  resets="$(jq -r '.resets_at // empty' "$lj" 2>/dev/null || true)"
+  if [[ "$resets" =~ ^[0-9]+$ ]] && (( resets > nowe )); then
+    until=$(( resets + LIMIT_MARGIN_SECONDS ))
+  else
+    until=$(( nowe + 3600 ))   # no reset time given: try again in an hour
+  fi
+  (( until <= nowe + 32 * 86400 )) || until=$(( nowe + 32 * 86400 ))
+  ui="$(date -u -d "@$until" +%Y-%m-%dT%H:%M:%SZ)"
+  msg="$(jq -r '.message // empty' "$lj" 2>/dev/null | head -c 300 || true)"
+  kind="$(jq -r '.kind // empty' "$lj" 2>/dev/null || true)"
+  waits="$(jq -r '.limit_waits // 0' "$wd/status.json" 2>/dev/null || echo 0)"
+  [[ "$waits" =~ ^[0-9]+$ ]] || waits=0
+  waits=$((waits + 1))
+  if (( waits > MAX_LIMIT_WAITS )); then
+    finish_job "$id" failed 75 "stopped by a usage limit $MAX_LIMIT_WAITS times; giving up"
+    return 0
+  fi
+  json_merge "$wd/status.json" --argjson w "$waits" --arg r "usage limit: ${msg:-reached}; continues after $ui" \
+    '.state="waiting" | .attempts=([((.attempts // 1) - 1), 0] | max) | .limit_waits=$w | .reason=$r
+     | del(.finished_at, .exit_code, .duration_s, .log_tail)'
+  # Under the claim lock, so the loop cannot claim the job between the two steps.
+  exec 9>"$LOCK"
+  flock -w 30 9 || true
+  json_write "$LIMIT_FILE" --arg p "$provider" --arg k "${kind:-unknown}" --arg m "${msg:-usage limit reached}" \
+    --argjson s "$nowe" --argjson u "$until" --arg ui "$ui" --arg j "$id" \
+    '{provider:$p, kind:$k, message:$m, since:$s, until:$u, until_iso:$ui, job:$j}'
+  if [[ -f "$JOBS/running/$id.json" ]]; then
+    mv -f "$JOBS/running/$id.json" "$JOBS/inbox/$id.json" 2>/dev/null || true
+    touch -d '@946684800' "$JOBS/inbox/$id.json" 2>/dev/null || true   # oldest, so it starts first
+  fi
+  flock -u 9
+  rm -f "$wd/pid"
+  log "job $id: $provider usage limit (${msg:-no message}); back in the queue, no new jobs until $ui"
+}
+
+# limit_reason: the hold reason while a usage-limit hold is in force. Prints
+# nothing, and removes the hold, once its time has passed.
+limit_reason() {
+  local until
+  until="$(jq -r '.until // empty' "$LIMIT_FILE" 2>/dev/null || true)"
+  if [[ "$until" =~ ^[0-9]+$ ]] && (( until > $(date +%s) )); then
+    jq -r '"usage limit (\(.provider)) until \(.until_iso)"' "$LIMIT_FILE"
+    return 0
+  fi
+  rm -f "$LIMIT_FILE"
+}
+
+# hold_reason: why no new job may start right now; prints nothing when one may.
+hold_reason() {
+  local free
+  if [[ -f "$PAUSE_FILE" ]]; then echo "paused"; return 0; fi
+  free="$(int_or "$(free_gb_int)" 999999)"
+  if (( free < MIN_FREE_GB )); then echo "low disk (under ${MIN_FREE_GB} GB free)"; return 0; fi
+  if [[ -e "$LIMIT_FILE" ]]; then limit_reason; fi
+}
+
+# Internal: runs in its own session (setsid) for one job.
+cmd__run() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker _run <id>"
+  local wd="$WORK/$id" job="$JOBS/running/$id.json"
+  [[ -f "$job" ]] || die "no running job $id"
+  ensure_dirs
+  mkdir -p "$wd/output" "$wd/logs" "$wd/.tmp"
+  cp -f "$job" "$wd/job.json"
+  echo "$$" >"$wd/pid"
+  export FLEET_JOB_ID="$id" FLEET_WORKDIR="$wd" FLEET_OUTPUT_DIR="$wd/output" TMPDIR="$wd/.tmp"
+
+  local provider timeout_min adapter err started
+  provider="$(jq -r '.provider // "claude"' "$job")"
+  timeout_min="$(jq -r '.timeout_minutes // empty' "$job")"
+  if ! [[ "$timeout_min" =~ ^[1-9][0-9]{0,3}$ ]] || (( timeout_min > 1440 )); then
+    timeout_min="$DEFAULT_TIMEOUT_MINUTES"
+  fi
+  started="$(date +%s)"
+  json_merge "$wd/status.json" --arg t "$(now)" --arg p "$provider" --argjson pid "$$" --argjson e "$started" \
+    '.state="running" | .started_at=$t | .started_epoch=$e | .provider=$p | .pid=$pid
+     | .attempts=((.attempts // 0) + 1) | del(.finished_at, .exit_code, .reason, .duration_s, .log_tail)'
+
+  if ! [[ "$provider" =~ $NAME_PATTERN ]]; then
+    finish_job "$id" failed 64 "invalid provider name"
+    return 0
+  fi
+  adapter="$APP_DIR/providers/$provider/run.sh"
+  if [[ ! -f "$adapter" ]]; then
+    echo "provider '$provider' is not available on $FLEET_NODE ($adapter missing)" >>"$wd/logs/provider.log"
+    finish_job "$id" failed 127 "provider $provider not available on $FLEET_NODE"
+    return 0
+  fi
+  # Prepare the workspace once: a job that comes back after a usage limit or a
+  # reboot keeps the files its session already changed.
+  if [[ ! -f "$wd/.prepared" ]]; then
+    if ! err="$(prepare_workspace "$job" "$wd" 2>&1)"; then
+      echo "workspace preparation failed: $err" >>"$wd/logs/provider.log"
+      finish_job "$id" failed 65 "bad job: $err"
+      return 0
+    fi
+    touch "$wd/.prepared"
+  fi
+
+  log "job $id started (provider $provider, timeout ${timeout_min}m)"
+  # A cancel sends SIGTERM to this whole session. Record it, let the provider
+  # exit, and file the job as cancelled rather than lost.
+  trap 'touch "$wd/.cancelled"' TERM
+  local code=0
+  timeout --kill-after=60 "${timeout_min}m" bash "$adapter" "$wd/job.json" "$wd" \
+    >>"$wd/logs/provider.log" 2>&1 </dev/null || code=$?
+  rm -rf "$wd/.tmp"
+
+  local elapsed=$(( $(date +%s) - started ))
+  if [[ -f "$wd/.cancelled" ]]; then
+    finish_job "$id" failed "$code" "cancelled"
+  elif [[ "$code" -eq 0 ]]; then
+    finish_job "$id" "done" 0 ""
+  elif [[ "$code" -eq 124 ]] || { [[ "$code" -eq 137 ]] && (( elapsed >= timeout_min * 60 )); }; then
+    finish_job "$id" failed "$code" "timed out after ${timeout_min}m"
+  elif [[ "$code" -eq 137 ]]; then
+    finish_job "$id" failed "$code" "killed (often out of memory; see fleet status)"
+  elif [[ "$code" -eq 75 ]]; then
+    hold_for_limit "$id" "$provider"
+  elif [[ "$code" -eq 78 ]]; then
+    finish_job "$id" failed 78 "provider $provider has no credentials on $FLEET_NODE"
+  else
+    finish_job "$id" failed "$code" "provider exited $code"
+  fi
+}
+
+# Prints the id of the job it claimed, or nothing. Serialised with flock.
+claim_next() {
+  exec 9>"$LOCK"
+  flock -n 9 || return 0
+  if [[ -e "$LIMIT_FILE" && -n "$(limit_reason)" ]]; then flock -u 9; return 0; fi
+  local f id
+  f="$(find "$JOBS/inbox" -maxdepth 1 -name '*.json' -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -n | head -n1 | cut -d' ' -f2- || true)"
+  if [[ -n "$f" ]]; then
+    id="$(basename "$f" .json)"
+    if valid_id "$id" && jq -e 'type == "object" and (.prompt | type == "string")' "$f" >/dev/null 2>&1; then
+      mkdir -p "$WORK/$id"
+      mv -f "$f" "$JOBS/running/$id.json" || { flock -u 9; return 0; }
+      touch "$JOBS/running/$id.json"   # mtime = claim time (see starting_up)
+      rm -f "$WORK/$id/pid"            # a stale pid from an earlier attempt
+      if [[ ! -f "$WORK/$id/status.json" ]]; then
+        json_write "$WORK/$id/status.json" --arg id "$id" --arg n "$FLEET_NODE" --arg t "$(now)" \
+          '{id:$id, node:$n, state:"claimed", claimed_at:$t, attempts:0}'
+      else
+        json_merge "$WORK/$id/status.json" --arg t "$(now)" '.state="claimed" | .claimed_at=$t'
+      fi
+      echo "$id"
+    else
+      mv -f "$f" "$JOBS/failed/$(basename "$f").invalid"
+      log "rejected invalid job file $(basename "$f")"
+    fi
+  fi
+  flock -u 9
+}
+
+cmd_recover() {
+  ensure_dirs
+  local f id pid attempts retries
+  for f in "$JOBS"/running/*.json; do
+    [[ -e "$f" ]] || continue
+    id="$(basename "$f" .json)"
+    pid="$(cat "$WORK/$id/pid" 2>/dev/null || true)"
+    if pid_alive_for "$pid" "$id"; then continue; fi
+    if [[ -f "$WORK/$id/.cancelled" ]]; then
+      finish_job "$id" failed 130 "cancelled"
+      continue
+    fi
+    if starting_up "$id" "$f"; then continue; fi
+    attempts="$(jq -r '.attempts // 0' "$WORK/$id/status.json" 2>/dev/null || echo 0)"
+    retries="$(jq -r --arg d "$DEFAULT_MAX_RETRIES" '.max_retries // ($d|tonumber)' "$f" 2>/dev/null || echo "$DEFAULT_MAX_RETRIES")"
+    [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
+    [[ "$retries" =~ ^[0-9]+$ ]] || retries="$DEFAULT_MAX_RETRIES"
+    if [[ "$attempts" -le "$retries" ]]; then
+      mv -f "$f" "$JOBS/inbox/$id.json" 2>/dev/null || continue   # another recover got it first
+      json_merge "$WORK/$id/status.json" '.state="requeued"'
+      log "job $id lost its process (reboot or crash); requeued, attempt $attempts of $((retries + 1)) used"
+    else
+      finish_job "$id" failed 1 "lost its process (reboot or crash) and has no retries left"
+    fi
+  done
+}
+
+cmd_loop() {
+  ensure_dirs
+  log "worker $WORKER_VERSION starting (max_parallel=$MAX_PARALLEL, app=$APP_DIR)"
+  rm -f "$HOLD_FILE"
+  cmd_recover
+  local id ticks=0 blocked="" reason
+  trap 'log "worker stopping"; exit 0' TERM INT
+  while true; do
+    date +%s >"$HEARTBEAT"
+    reason="$(hold_reason)"
+    if [[ "$reason" != "$blocked" ]]; then
+      if [[ -n "$reason" ]]; then
+        log "not starting new jobs: $reason"
+        printf '%s\n' "$reason" >"$HOLD_FILE"
+      else
+        log "starting queued jobs again"
+        rm -f "$HOLD_FILE"
+      fi
+      blocked="$reason"
+    fi
+    if [[ -z "$reason" ]]; then
+      while [[ "$(running_count)" -lt "$MAX_PARALLEL" && -z "$(hold_reason)" ]]; do
+        id="$(claim_next)"
+        [[ -n "$id" ]] || break
+        setsid "$0" _run "$id" </dev/null >>"$LOGDIR/worker.log" 2>&1 &
+        sleep 1
+      done
+    fi
+    ticks=$((ticks + 1))
+    if (( ticks % 60 == 0 )); then cmd_recover; fi
+    sleep "$POLL_SECONDS" &
+    wait $! || true
+  done
+}
+
+job_json_line() {
+  # job_json_line <state> <file>
+  local state="$1" f="$2" id status="{}" pulled=false
+  id="$(basename "$f" .json)"
+  [[ -s "$WORK/$id/status.json" ]] && status="$(cat "$WORK/$id/status.json")"
+  [[ -f "$WORK/$id/.pulled" ]] && pulled=true
+  jq -c --arg st "$state" --arg id "$id" --argjson s "$status" --argjson pulled "$pulled" \
+     '{id:$id, state:$st, channel:(.channel // null), title:(.title // null), provider:(.provider // "claude"),
+       submitted_at:(.submitted_at // null), started_at:$s.started_at, finished_at:$s.finished_at,
+       duration_s:$s.duration_s, exit_code:$s.exit_code, reason:$s.reason, log_tail:$s.log_tail,
+       attempts:$s.attempts, limit_waits:$s.limit_waits, pulled:$pulled}' "$f" 2>/dev/null \
+     || jq -nc --arg st "$state" --arg id "$id" '{id:$id, state:$st, invalid:true}'
+}
+
+cmd_jobs() {
+  ensure_dirs
+  local json=0 only="" s f
+  local states=(inbox running "done" failed)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1 ;;
+      --state) only="${2:-}"; shift ;;
+      *) die "unknown option $1" ;;
+    esac
+    shift
+  done
+  if [[ -n "$only" ]]; then
+    case "$only" in inbox|running|"done"|failed) states=("$only") ;; *) die "unknown state $only" ;; esac
+  fi
+  {
+    for s in "${states[@]}"; do
+      for f in "$JOBS/$s"/*.json; do
+        [[ -e "$f" ]] || continue
+        job_json_line "$s" "$f"
+      done
+    done
+  } | if [[ $json -eq 1 ]]; then jq -cs .; else
+      jq -r '[.state, .id, (.channel // "-"), (.reason // "")] | @tsv' \
+        | if command -v column >/dev/null 2>&1; then column -t -s $'\t'; else cat; fi
+    fi
+}
+
+provider_report() {
+  local d p line out=()
+  for d in "$APP_DIR"/providers/*/; do
+    [[ -f "$d/check.sh" ]] || continue
+    p="$(basename "$d")"
+    line="$( { bash "$d/check.sh" --json 2>/dev/null || true; } | tail -n1)"
+    if ! jq -e 'type == "object"' <<<"$line" >/dev/null 2>&1; then
+      line="$(jq -nc --arg p "$p" '{provider:$p, installed:false, ok:false, error:"check.sh failed"}')"
+    fi
+    out+=("$(jq -c . <<<"$line")")
+  done
+  if [[ ${#out[@]} -eq 0 ]]; then echo '[]'; else printf '%s\n' "${out[@]}" | jq -s .; fi
+}
+
+service_state() {
+  command -v systemctl >/dev/null 2>&1 || { echo unknown; return 0; }
+  local loaded
+  loaded="$(systemctl show -p LoadState --value fleet-worker 2>/dev/null || true)"
+  if [[ "$loaded" == "loaded" ]]; then
+    systemctl is-active fleet-worker 2>/dev/null || true
+  else
+    echo unknown
+  fi
+}
+
+cmd_status() {
+  ensure_dirs
+  local json=0
+  [[ "${1:-}" == "--json" ]] && json=1
+  local inbox running ndone nfailed unpulled dfree dpct load mem memtot cpus up service hb_age
+  local paused=false preason="" reboot=false hold=""
+  inbox=$(find "$JOBS/inbox" -maxdepth 1 -name '*.json' -type f | wc -l)
+  running=$(running_count)
+  ndone=$(find "$JOBS/done" -maxdepth 1 -name '*.json' -type f | wc -l)
+  nfailed=$(find "$JOBS/failed" -maxdepth 1 -name '*.json' -type f | wc -l)
+  unpulled=$(cmd_finished | jq 'length')
+  dfree=$(df -Pk "$FLEET_ROOT" | awk 'NR==2{printf "%.1f", $4/1048576}')
+  dpct=$(df -Pk "$FLEET_ROOT" | awk 'NR==2{gsub("%","",$5); print 100-$5}')
+  load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+  mem=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  memtot=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  cpus=$(nproc 2>/dev/null || echo 1)
+  up=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+  service=$(service_state)
+  local hb=""
+  hb_age=-1
+  [[ -s "$HEARTBEAT" ]] && hb="$(head -c 20 "$HEARTBEAT")"
+  if [[ "$hb" =~ ^[0-9]+$ ]]; then hb_age=$(( $(date +%s) - hb )); fi
+  if [[ -f "$PAUSE_FILE" ]]; then paused=true; preason="$(head -c 200 "$PAUSE_FILE" | tr -d '\n')"; fi
+  [[ -f /var/run/reboot-required ]] && reboot=true
+  [[ -s "$HOLD_FILE" ]] && hold="$(head -c 200 "$HOLD_FILE" | tr -d '\n')"
+  local limit="null"
+  if [[ -s "$LIMIT_FILE" ]]; then
+    limit="$(jq -c --argjson now "$(date +%s)" 'if (.until // 0) > $now then . else null end' "$LIMIT_FILE" 2>/dev/null || true)"
+    [[ -n "$limit" ]] || limit="null"
+  fi
+  local report
+  report=$(jq -cn --arg node "$FLEET_NODE" --arg v "$WORKER_VERSION" --arg service "$service" \
+    --argjson max "$MAX_PARALLEL" --argjson inbox "$inbox" --argjson running "$running" \
+    --argjson "done" "$ndone" --argjson failed "$nfailed" --argjson unpulled "$unpulled" \
+    --argjson dfree "${dfree:-0}" --argjson dpct "${dpct:-0}" --argjson minfree "$MIN_FREE_GB" \
+    --arg load "$load" --argjson mem "${mem:-0}" --argjson memtot "${memtot:-0}" --argjson cpus "$cpus" \
+    --argjson up "${up:-0}" --argjson hb "$hb_age" --argjson paused "$paused" --arg preason "$preason" \
+    --argjson reboot "$reboot" --argjson providers "$(provider_report)" --arg t "$(now)" --arg hold "$hold" \
+    --argjson limit "$limit" \
+    '{node:$node, worker_version:$v, service:$service, heartbeat_age_s:$hb, time:$t,
+      max_parallel:$max, paused:$paused, paused_reason:(if $paused then $preason else null end),
+      on_hold:(if $hold == "" then null else $hold end), limit:$limit,
+      queue:{inbox:$inbox, running:$running, done:$done, failed:$failed, unpulled:$unpulled},
+      disk_free_gb:$dfree, disk_free_pct:$dpct, min_free_gb:$minfree,
+      low_disk:(($dfree < $minfree) or ($hold | startswith("low disk"))),
+      load1:($load|tonumber), cpus:$cpus, mem_available_mb:$mem, mem_total_mb:$memtot,
+      uptime_s:$up, reboot_required:$reboot, providers:$providers}')
+  if [[ $json -eq 1 ]]; then
+    echo "$report"
+  else
+    echo "$report" | jq -r '"\(.node)  service=\(.service)\(if .paused then " PAUSED" else "" end)\(if .limit then " LIMIT until \(.limit.until_iso)" else "" end)  inbox=\(.queue.inbox) running=\(.queue.running)/\(.max_parallel) done=\(.queue.done) failed=\(.queue.failed) unpulled=\(.queue.unpulled)  disk=\(.disk_free_gb)GB (\(.disk_free_pct)%) load=\(.load1) mem=\(.mem_available_mb)MB\(if .reboot_required then "  reboot-required" else "" end)",
+      (.providers[] | "  provider \(.provider): \(if .ok then "ok" else "NOT OK" end) \(.version // "") \(.error // "")")'
+  fi
+}
+
+cmd_logs() {
+  local id="" follow=0 lines=200
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f) follow=1 ;;
+      -n) lines="$(int_or "${2:-}" 200)"; shift ;;
+      *) id="$1" ;;
+    esac
+    shift
+  done
+  valid_id "$id" || die "usage: fleet-worker logs <id> [-f] [-n LINES]"
+  local f="$WORK/$id/logs/provider.log"
+  [[ -f "$f" ]] || die "no log for $id yet (queued jobs have none)"
+  if [[ $follow -eq 1 ]]; then tail -n "$lines" -f "$f"; else tail -n "$lines" "$f"; fi
+}
+
+cmd_cancel() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker cancel <id>"
+  ensure_dirs
+  exec 9>"$LOCK"
+  flock -w 30 9 || die "could not lock the queue"
+  if [[ -f "$JOBS/inbox/$id.json" ]]; then
+    mkdir -p "$WORK/$id"
+    mv -f "$JOBS/inbox/$id.json" "$JOBS/running/$id.json"
+    finish_job "$id" failed 130 "cancelled before it started"
+    echo "cancelled queued job $id"
+    return 0
+  fi
+  flock -u 9
+  if [[ -f "$JOBS/running/$id.json" ]]; then
+    local pid
+    pid="$(cat "$WORK/$id/pid" 2>/dev/null || true)"
+    touch "$WORK/$id/.cancelled"
+    if pid_alive_for "$pid" "$id"; then
+      # The job runs in its own session (setsid) and `timeout` makes a new
+      # process group inside it, so signal the whole session.
+      pkill -TERM -s "$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+      echo "sent SIGTERM to job $id (session $pid); it will be filed as cancelled"
+    else
+      finish_job "$id" failed 130 "cancelled"
+      echo "cancelled job $id"
+    fi
+    return 0
+  fi
+  die "job $id is not queued or running"
+}
+
+cmd_finished() {
+  ensure_dirs
+  local f s
+  {
+    for s in "done" failed; do
+      for f in "$JOBS/$s"/*.json; do
+        [[ -e "$f" ]] || continue
+        [[ -f "$WORK/$(basename "$f" .json)/.pulled" ]] && continue
+        job_json_line "$s" "$f"
+      done
+    done
+  } | jq -cs .
+}
+
+cmd_mark_pulled() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker mark-pulled <id>"
+  [[ -d "$WORK/$id" ]] || die "no workspace for $id"
+  now >"$WORK/$id/.pulled"
+}
+
+cmd_pause() {
+  ensure_dirs
+  local reason="${*:-paused from the home machine}"
+  printf '%s\n' "$reason" >"$PAUSE_FILE"
+  log "paused: $reason"
+  echo "$FLEET_NODE paused: no new jobs will start ($(running_count) still running)"
+}
+
+cmd_resume() {
+  ensure_dirs
+  local extra=""
+  [[ -e "$LIMIT_FILE" ]] && extra=" (usage-limit hold ended early; if the limit is still on, the next job brings it back)"
+  rm -f "$PAUSE_FILE" "$LIMIT_FILE"
+  log "resumed$extra"
+  echo "$FLEET_NODE resumed: queued jobs will start again$extra"
+}
+
+cmd_gc() {
+  ensure_dirs
+  local days=7
+  if [[ "${1:-}" == "--days" ]]; then days="${2:-7}"; fi
+  [[ "$days" =~ ^[0-9]+$ ]] || die "--days must be a whole number"
+  local d id n=0
+  for d in "$WORK"/*/; do
+    [[ -d "$d" ]] || continue
+    id="$(basename "$d")"
+    [[ -f "$d/.pulled" ]] || continue
+    if [[ -n "$(find "$d/.pulled" -mtime +"$days" 2>/dev/null)" ]]; then
+      rm -rf -- "$d"
+      rm -f -- "$JOBS/done/$id.json" "$JOBS/failed/$id.json"
+      n=$((n + 1))
+    fi
+  done
+  find "$JOBS/failed" -maxdepth 1 -name '*.invalid' -mtime +"$days" -delete 2>/dev/null || true
+  log "gc removed $n pulled workspaces older than ${days}d"
+  echo "removed $n pulled workspace(s) older than $days day(s)"
+}
+
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    loop) cmd_loop ;;
+    _run) cmd__run "$@" ;;
+    status) cmd_status "$@" ;;
+    jobs) cmd_jobs "$@" ;;
+    logs) cmd_logs "$@" ;;
+    cancel) cmd_cancel "$@" ;;
+    finished) cmd_finished ;;
+    mark-pulled) cmd_mark_pulled "$@" ;;
+    pause) cmd_pause "$@" ;;
+    resume) cmd_resume ;;
+    gc) cmd_gc "$@" ;;
+    recover) cmd_recover ;;
+    version) echo "$WORKER_VERSION" ;;
+    ""|-h|--help|help) usage ;;
+    *) die "unknown command '$cmd' (try: fleet-worker help)" ;;
+  esac
+}
+
+main "$@"

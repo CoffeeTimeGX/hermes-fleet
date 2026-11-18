@@ -1,0 +1,11 @@
+[Unit]
+Description=Delete fleet job workspaces the home machine already pulled
+
+[Service]
+Type=oneshot
+User=fleet
+Group=fleet
+EnvironmentFile=/etc/fleet/worker.env
+EnvironmentFile=-/etc/fleet/worker.local.env
+ExecStart=/bin/bash -c 'exec /home/fleet/fleet/app/worker/fleet-worker gc --days "${GC_DAYS:-7}"'
+NoNewPrivileges=true

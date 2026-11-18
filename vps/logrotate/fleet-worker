@@ -1,0 +1,11 @@
+# Installed by bootstrap.sh as /etc/logrotate.d/fleet-worker
+/home/fleet/fleet/logs/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su fleet fleet
+}

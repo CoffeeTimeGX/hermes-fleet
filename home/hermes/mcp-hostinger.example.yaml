@@ -1,0 +1,41 @@
+# Optional: give the director Hostinger API access, one MCP server per Hostinger
+# account (each account has its own API token). It lets Hermes reboot a VPS that
+# SSH cannot reach, take snapshots and read metrics.
+#
+# 1. Install the server once (needs Node.js):  npm install -g @hostinger/mcp
+# 2. Put the five tokens in Hermes' .env (see env.example).
+# 3. Paste this block into Hermes' config.yaml with `hermes config edit`.
+#    On Windows, if Hermes cannot start the server, replace the command with the
+#    full path that `where hostinger-vps-mcp` prints.
+#
+# `trust: untrusted` makes Hermes ask you before any call that can change
+# something (reboot, OS reinstall, snapshot restore). Keep it that way, and do
+# anything destructive in hPanel yourself. Fill in every token you list here, or
+# delete the servers you do not use: a server without a token falls back to an
+# interactive browser sign-in.
+mcp_servers:
+  hostinger-1:
+    command: "hostinger-vps-mcp"
+    env:
+      HOSTINGER_API_TOKEN: "${HOSTINGER_TOKEN_ACCOUNT_1}"
+    trust: untrusted
+  hostinger-2:
+    command: "hostinger-vps-mcp"
+    env:
+      HOSTINGER_API_TOKEN: "${HOSTINGER_TOKEN_ACCOUNT_2}"
+    trust: untrusted
+  hostinger-3:
+    command: "hostinger-vps-mcp"
+    env:
+      HOSTINGER_API_TOKEN: "${HOSTINGER_TOKEN_ACCOUNT_3}"
+    trust: untrusted
+  hostinger-4:
+    command: "hostinger-vps-mcp"
+    env:
+      HOSTINGER_API_TOKEN: "${HOSTINGER_TOKEN_ACCOUNT_4}"
+    trust: untrusted
+  hostinger-5:
+    command: "hostinger-vps-mcp"
+    env:
+      HOSTINGER_API_TOKEN: "${HOSTINGER_TOKEN_ACCOUNT_5}"
+    trust: untrusted

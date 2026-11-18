@@ -1,0 +1,113 @@
+site_name: Hermes Fleet
+site_description: One Hermes Agent on your home computer directing Claude Code video sessions on five Hostinger VPSs.
+site_url: https://coffeetimegx.github.io/hermes-fleet/
+repo_url: https://github.com/CoffeeTimeGX/hermes-fleet
+repo_name: CoffeeTimeGX/hermes-fleet
+edit_uri: edit/main/docs/
+copyright: Hermes Fleet documentation
+strict: true
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/server-network
+  favicon: assets/favicon.svg
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - How it works: architecture.md
+  - Home machine:
+      - Windows: home/windows.md
+      - Linux and macOS: home/linux-macos.md
+      - Telegram: home/telegram.md
+      - Keep it running: home/always-on.md
+      - Hostinger API (optional): home/hostinger-api.md
+  - Tailscale: tailscale.md
+  - VPSs:
+      - Create the VPSs on Hostinger: vps/hostinger.md
+      - Provision a VPS: vps/provisioning.md
+      - Close public SSH: vps/lockdown.md
+  - Claude:
+      - Claude Code on the VPSs: providers/claude.md
+      - Claude accounts and Anthropic's rules: providers/claude-accounts.md
+      - Add another provider: providers/adding-a-provider.md
+  - Running the fleet:
+      - Everyday use: operations/everyday.md
+      - Job format: operations/job-format.md
+      - Results: operations/results.md
+      - Usage limits: operations/usage-limits.md
+      - Scheduled checks: operations/scheduled-checks.md
+      - Updates: operations/updates.md
+  - Runbooks:
+      - runbooks/index.md
+      - VPS unreachable: runbooks/vps-unreachable.md
+      - Job failures: runbooks/job-failures.md
+      - Disk full: runbooks/disk-full.md
+      - Rotate credentials: runbooks/rotate-credentials.md
+      - Rebuild a VPS: runbooks/rebuild-vps.md
+  - Reference:
+      - fleet command: reference/cli.md
+      - VPS worker: reference/worker.md
+      - Configuration files: reference/config.md
+      - Security: reference/security.md
+  - FAQ: faq.md
+  - Handoff for a future Claude session: handoff.md
