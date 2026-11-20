@@ -9,6 +9,7 @@ import argparse
 import ast
 import contextlib
 import fnmatch
+import http.client
 import importlib.machinery
 import importlib.util
 import io
@@ -16,10 +17,12 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1000,6 +1003,273 @@ class ShimTest(TempDirTest):
         self.assertEqual(link.resolve(), CLI.resolve())
 
 
+# --------------------------------------------------------------------------- studio
+
+def ran(code: int = 0, out: bytes = b"", err: bytes = b"") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=[], returncode=code, stdout=out, stderr=err)
+
+
+def step(*content) -> str:
+    """One assistant message of a Claude Code transcript."""
+    return json.dumps({"type": "assistant", "message": {"content": list(content)}})
+
+
+class FakeStudioServer:
+    def __init__(self, host, port, handler, looked):
+        self.server_address = (host, port)
+        self.handler, self.looked, self.closed = handler, looked, False
+
+    def serve_forever(self, poll_interval=0.5):
+        self.looked.wait(5)  # the first look at the VPSs has happened
+        raise KeyboardInterrupt
+
+    def server_close(self):
+        self.closed = True
+
+
+class FakeTimer:
+    def __init__(self, delay, fn):
+        self.fn, self.daemon = fn, False
+
+    def start(self):
+        self.fn()
+
+
+class StudioTest(TempDirTest):
+    def worker_output(self) -> bytes:
+        jobs = [{"id": "job-a", "state": "running", "channel": "Space Facts"}, {"id": "job-b", "state": "inbox"}]
+        return "\n".join([
+            "Welcome to Ubuntu 24.04 LTS",
+            json.dumps(healthy()),
+            json.dumps(jobs),
+            '{"cut": ',
+            json.dumps({"kind": "tool", "name": "Bash", "detail": "Render the video", "id": "job-a", "mtime": 1}),
+            json.dumps({"kind": "text", "text": "Writing the script", "id": "job-c", "mtime": 2}),
+            json.dumps({"kind": "other", "id": "job-d"}),
+        ]).encode("utf-8") + b"\n"
+
+    def test_parse_studio_keeps_the_json_and_skips_the_rest(self):
+        status, jobs, activity = fleet.parse_studio(self.worker_output())
+        self.assertEqual(status["queue"]["inbox"], 0)
+        self.assertEqual([j["id"] for j in jobs], ["job-a", "job-b"])
+        self.assertEqual(sorted(activity), ["job-a", "job-c"])
+        self.assertEqual(activity["job-a"]["detail"], "Render the video")
+        self.assertEqual(fleet.parse_studio(b""), (None, [], {}))
+
+    def test_studio_node(self):
+        cfg = make_cfg(self.tmp, "vps1", channels="Space Facts, History")
+        n = cfg.nodes["vps1"]
+        with mock.patch.object(fleet, "remote", return_value=ran(0, self.worker_output())):
+            got = fleet.studio_node(cfg, n)
+        self.assertEqual((got["name"], got["channels"], got["sessions"]), ("vps1", ["Space Facts", "History"], 1))
+        self.assertTrue(got["reachable"] and got["status"]["reachable"])
+        self.assertEqual((len(got["jobs"]), sorted(got["activity"])), (2, ["job-a", "job-c"]))
+        timeout = ran(255, err=b"ssh: connect to host vps1 port 22: Connection timed out\n")
+        with mock.patch.object(fleet, "remote", return_value=timeout):
+            got = fleet.studio_node(cfg, n)
+        self.assertFalse(got["reachable"])
+        self.assertIn("Connection timed out", got["error"])
+        with mock.patch.object(fleet, "remote", return_value=ran(0, b"[]\n")):
+            self.assertEqual(fleet.studio_node(cfg, n)["error"], "worker returned no status (run fleet sync)")
+
+    def test_snapshot_lists_every_enabled_vps_in_order(self):
+        cfg = make_cfg(self.tmp, "vps1", "vps2", "vps3")
+        cfg.nodes["vps3"].enabled = False
+
+        def look(cfg_, n):
+            if n.name == "vps2":
+                raise RuntimeError("no route to vps2")
+            return dict(fleet.studio_base(n), reachable=True, status=healthy(), jobs=[], activity={})
+
+        with mock.patch.object(fleet, "studio_node", side_effect=look):
+            snap = fleet.studio_snapshot(cfg, 20)
+        self.assertEqual([x["name"] for x in snap["nodes"]], ["vps1", "vps2"])
+        self.assertEqual((snap["every"], snap["fleet_version"]), (20, fleet.VERSION))
+        self.assertEqual(snap["nodes"][1], dict(fleet.studio_base(cfg.nodes["vps2"]), reachable=False,
+                                                error="no route to vps2"))
+        json.dumps(snap)
+
+    @unittest.skipUnless(POSIX and shutil.which("jq"), "the VPS side runs on Linux, with jq")
+    def test_activity_is_the_last_step_of_the_transcript(self):
+        def last(*lines):
+            r = subprocess.run(["jq", "-cR", fleet.STUDIO_ACTIVITY_JQ], input=("\n".join(lines) + "\n").encode(),
+                               capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            got = [json.loads(x) for x in r.stdout.decode("utf-8").splitlines() if x.strip()]
+            return got[-1] if got else None
+
+        render = {"type": "tool_use", "name": "Bash",
+                  "input": {"command": "ffmpeg -i a.mp4 b.mp4", "description": "Render the video"}}
+        self.assertEqual(last('of a line cut in half"}', json.dumps({"type": "system", "subtype": "init"}),
+                              step({"type": "text", "text": "Planning"}),
+                              step({"type": "text", "text": "Rendering"}, render),
+                              json.dumps({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
+                              json.dumps({"type": "result", "subtype": "success"})),
+                         {"kind": "tool", "name": "Bash", "detail": "Render the video"})
+        self.assertEqual(last(step({"type": "text", "text": "x" * 1000})), {"kind": "text", "text": "x" * 300})
+        write = {"type": "tool_use", "name": "Write", "input": {"file_path": "/w/script.md", "content": "..."}}
+        self.assertEqual(last(step(write))["detail"], "/w/script.md")
+        self.assertIsNone(last(json.dumps({"type": "result"}), step({"type": "thinking", "thinking": "hm"})))
+
+    @unittest.skipUnless(POSIX and shutil.which("bash") and shutil.which("jq"), "needs bash and jq")
+    def test_studio_script_over_the_local_transport(self):
+        cfg = make_cfg(self.tmp, "vps1")
+        n = cfg.nodes["vps1"]
+        root = Path(fleet.root_of(cfg, n))
+        worker = root / "app" / "worker" / "fleet-worker"
+        worker.parent.mkdir(parents=True)
+        worker.write_text("#!/bin/bash\ncase \"$1\" in\n"
+                          f"  status) echo '{json.dumps(healthy())}' ;;\n"
+                          "  jobs) echo '[{\"id\": \"job-a\", \"state\": \"running\"}]' ;;\nesac\n", encoding="utf-8")
+        worker.chmod(0o755)
+        (root / "jobs" / "running").mkdir(parents=True)
+        for job in ("job-a", "job-b"):  # job-b has no transcript yet
+            (root / "jobs" / "running" / f"{job}.json").write_text("{}", encoding="utf-8")
+        logs = root / "work" / "job-a" / "logs"
+        logs.mkdir(parents=True)
+        render = {"type": "tool_use", "name": "Bash", "input": {"command": "ffmpeg", "description": "Render the video"}}
+        (logs / "transcript.jsonl").write_text(json.dumps({"type": "system"}) + "\n" + step(render) + "\n",
+                                               encoding="utf-8")
+        got = fleet.studio_node(cfg, n)
+        self.assertTrue(got["reachable"], got)
+        self.assertEqual(got["jobs"], [{"id": "job-a", "state": "running"}])
+        self.assertEqual(list(got["activity"]), ["job-a"])
+        act = got["activity"]["job-a"]
+        self.assertEqual((act["kind"], act["name"], act["detail"]), ("tool", "Bash", "Render the video"))
+        self.assertIsInstance(act["mtime"], int)
+
+    def test_host_check(self):
+        for host in ("127.0.0.1:8740", "127.0.0.1", "localhost:8740", "LOCALHOST", "[::1]:8740", "::1"):
+            self.assertTrue(fleet.studio_host_ok(host, fleet.LOOPBACK_NAMES), host)
+        for host in ("", "evil.example", "evil.example:8740", "127.0.0.1.evil.example", "[::1", "my-pc:8740"):
+            self.assertFalse(fleet.studio_host_ok(host, fleet.LOOPBACK_NAMES), host)
+        tailnet = {"100.101.102.103", "my-pc.tailnet-name.ts.net", "my-pc"}
+        for host in ("my-pc:8740", "My-PC.tailnet-name.ts.net:8740", "100.101.102.103:8740"):
+            self.assertTrue(fleet.studio_host_ok(host, tailnet), host)
+        self.assertFalse(fleet.studio_host_ok("127.0.0.1:8740", tailnet))
+
+    def serve(self, snapshot) -> int:
+        handler = fleet.studio_handler(b"<p>page</p>", {"snapshot": snapshot}, threading.Lock(), fleet.LOOPBACK_NAMES)
+        srv = fleet.studio_server("127.0.0.1", 0, handler)
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv.server_address[1]
+
+    def get(self, port, path, method="GET", host=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            c.request(method, path, headers={"Host": host} if host else {})
+            r = c.getresponse()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+        finally:
+            c.close()
+
+    def test_server_answers_only_to_this_computer(self):
+        snap = {"generated_at": "2026-01-01T00:00:00Z", "every": 20, "fleet_version": fleet.VERSION, "nodes": []}
+        port = self.serve(snap)
+        code, headers, body = self.get(port, "/")
+        self.assertEqual((code, body), (200, b"<p>page</p>"))
+        self.assertTrue(headers["content-type"].startswith("text/html"))
+        self.assertEqual((headers["cache-control"], headers["x-content-type-options"]), ("no-store", "nosniff"))
+        code, headers, body = self.get(port, "/api/studio?t=1")
+        self.assertEqual((code, headers["content-type"], json.loads(body)), (200, "application/json", snap))
+        self.assertEqual(self.get(port, "/", method="HEAD")[::2], (200, b""))
+        self.assertEqual(self.get(port, "/nope")[0], 404)
+        self.assertEqual(self.get(port, "/", host=f"localhost:{port}")[0], 200)
+        for host in ("evil.example", f"evil.example:{port}", f"127.0.0.1.evil.example:{port}"):
+            code, _, body = self.get(port, "/api/studio", host=host)
+            self.assertEqual(code, 403, host)
+            self.assertNotIn(b"generated_at", body)
+
+    def test_a_busy_port_is_refused(self):
+        handler = fleet.studio_handler(b"", {"snapshot": {}}, threading.Lock(), fleet.LOOPBACK_NAMES)
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen(1)
+            with self.assertRaises(OSError):
+                fleet.studio_server("127.0.0.1", busy.getsockname()[1], handler).server_close()
+        cfg = make_cfg(self.tmp, "vps1")
+        with mock.patch.object(fleet, "studio_server", side_effect=OSError(98, "Address already in use")):
+            with self.assertRaisesRegex(fleet.FleetError, "pick another with --port"):
+                fleet.cmd_studio(cfg, self.args())
+
+    def test_page(self):
+        fragment = fleet.STUDIO_PAGE.read_text(encoding="utf-8")
+        self.assertTrue(fragment.startswith("<title>Hermes Fleet Studio</title>"))
+        self.assertNotRegex(fragment, r"(?i)<!doctype|<(html|head|body)[\s>]")
+        self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?]+)", fragment)),
+                             {"fonts.googleapis.com", "fonts.gstatic.com"})
+        self.assertIn('fetch("api/studio"', fragment)
+        page = fleet.studio_page_html().decode("utf-8")
+        self.assertTrue(page.startswith("<!doctype html>") and page.rstrip().endswith("</html>"))
+        self.assertLess(page.index("window.FLEET_STUDIO_LIVE = true;"), page.index("<title>"))
+
+    def args(self, **kw):
+        return argparse.Namespace(**dict(dict(port=8740, tailnet=False, every=20, no_browser=True, json=False), **kw))
+
+    def test_every_has_a_floor_and_json_prints_one_look(self):
+        cfg = make_cfg(self.tmp, "vps1")
+        with self.assertRaisesRegex(fleet.FleetError, "at least 5"):
+            fleet.cmd_studio(cfg, self.args(every=4))
+        snap = {"generated_at": "x", "every": 30, "fleet_version": fleet.VERSION, "nodes": []}
+        with mock.patch.object(fleet, "studio_snapshot", return_value=snap) as look:
+            rc, out, _ = quietly(fleet.cmd_studio, cfg, self.args(every=30, json=True))
+        self.assertEqual((rc, json.loads(out)), (0, snap))
+        look.assert_called_once_with(cfg, 30)
+
+    def run_studio(self, cfg, **kw):
+        looked, made, browser = threading.Event(), [], mock.Mock()
+
+        def server(host, port, handler):
+            made.append(FakeStudioServer(host, port, handler, looked))
+            return made[-1]
+
+        def snapshot(cfg_, every):
+            looked.set()
+            return {"generated_at": "x", "every": every, "fleet_version": fleet.VERSION, "nodes": []}
+
+        with mock.patch.object(fleet, "studio_server", side_effect=server), \
+                mock.patch.object(fleet, "studio_snapshot", side_effect=snapshot), \
+                mock.patch.object(fleet, "studio_handler", wraps=fleet.studio_handler) as handler, \
+                mock.patch.object(fleet.threading, "Timer", FakeTimer), mock.patch("webbrowser.open", browser):
+            rc, out, _ = quietly(fleet.cmd_studio, cfg, self.args(**kw))
+        self.assertTrue(looked.is_set())
+        return rc, out, made[0], handler.call_args.args[3], browser
+
+    def test_serves_this_computer_only_by_default(self):
+        rc, out, srv, allowed, browser = self.run_studio(make_cfg(self.tmp, "vps1", "vps2"))
+        self.assertEqual((rc, srv.server_address, allowed), (0, ("127.0.0.1", 8740), fleet.LOOPBACK_NAMES))
+        self.assertIn("Fleet studio: http://127.0.0.1:8740/", out)
+        self.assertIn("only watches", out)
+        self.assertIn("Fleet studio stopped.", out)
+        self.assertTrue(srv.closed)
+        browser.assert_not_called()
+
+    def test_tailnet_serves_the_tailscale_address(self):
+        me = ("100.101.102.103", "my-pc.tailnet-name.ts.net")
+        with mock.patch.object(fleet, "tailscale_self", return_value=me):
+            rc, out, srv, allowed, browser = self.run_studio(make_cfg(self.tmp, "vps1"), tailnet=True, port=9000,
+                                                             no_browser=False)
+        self.assertEqual((rc, srv.server_address), (0, ("100.101.102.103", 9000)))
+        self.assertEqual(allowed, {"100.101.102.103", "my-pc.tailnet-name.ts.net", "my-pc"})
+        self.assertIn("Fleet studio: http://my-pc.tailnet-name.ts.net:9000/", out)
+        browser.assert_called_once_with("http://my-pc.tailnet-name.ts.net:9000/")
+
+    def test_tailscale_self(self):
+        status = {"Self": {"TailscaleIPs": ["fd7a:115c:a1e0::1", "100.101.102.103"],
+                           "DNSName": "My-PC.tailnet-name.ts.net."}}
+        with mock.patch.object(fleet, "tailscale_binary", return_value="tailscale"):
+            with mock.patch.object(fleet.subprocess, "run", return_value=ran(0, json.dumps(status).encode())):
+                self.assertEqual(fleet.tailscale_self(), ("100.101.102.103", "my-pc.tailnet-name.ts.net"))
+            with mock.patch.object(fleet.subprocess, "run", return_value=ran(0, b'{"Self": {"TailscaleIPs": []}}')):
+                with self.assertRaisesRegex(fleet.FleetError, "not connected"):
+                    fleet.tailscale_self()
+        with mock.patch.object(fleet, "tailscale_binary", return_value=None):
+            with self.assertRaisesRegex(fleet.FleetError, "not installed"):
+                fleet.tailscale_self()
+
+
 # --------------------------------------------------------------------------- command line
 
 class CommandLineTest(TempDirTest):
@@ -1011,7 +1281,7 @@ class CommandLineTest(TempDirTest):
         self.assertEqual(self.run_cli("--version").stdout.strip(), f"fleet {fleet.VERSION}")
         r = self.run_cli("--help")
         self.assertEqual(r.returncode, 0)
-        for cmd in ("dispatch", "pause", "resume", "retry", "handover", "hermes-cron", "doctor"):
+        for cmd in ("dispatch", "pause", "resume", "retry", "handover", "studio", "hermes-cron", "doctor"):
             self.assertIn(cmd, r.stdout)
 
     def test_missing_config_is_a_clear_error(self):
@@ -1030,6 +1300,9 @@ class CommandLineTest(TempDirTest):
         self.assertEqual((a.from_node, a.to_node, a.job_ids, a.dry_run), ("vps2", "vps4", ["job-a", "job-b"], True))
         self.assertEqual(p.parse_args(["handover", "vps2", "vps4"]).job_ids, [])
         self.assertEqual(p.parse_args(["jobs", "--state", "moved"]).state, "moved")
+        a = p.parse_args(["studio", "--tailnet", "--port", "9000", "--no-browser"])
+        self.assertEqual((a.tailnet, a.port, a.every, a.no_browser, a.json), (True, 9000, 20, True, False))
+        self.assertEqual(p.parse_args(["studio"]).port, fleet.STUDIO_PORT)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             p.parse_args(["jobs", "--state", "weird"])
 

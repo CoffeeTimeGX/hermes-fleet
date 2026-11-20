@@ -3,7 +3,7 @@
 # answers like `claude -p --output-format stream-json` (or `json` for the smoke
 # test), without any network access. Magic words in the prompt:
 #   FAIL      the session reports an error and exits 1
-#   SLEEP     the session takes 2 minutes (for cancel tests)
+#   SLEEP     the session takes 2 minutes (for cancel tests), after one tool call
 #   LIST      the session writes the workspace file list to output/files.txt
 #   LIMIT<n>  the account hits its usage limit, which resets in n seconds
 #             (the way Claude Code 2.1.30x reports it); a --resume run succeeds
@@ -29,7 +29,12 @@ session="${resume:-stub-$(date +%s)-$$}"
 mkdir -p "$HOME/.claude/projects/stub"
 echo '{"type":"user"}' >>"$HOME/.claude/projects/stub/$session.jsonl"
 jq -nc --arg s "$session" '{type:"system", subtype:"init", session_id:$s}'
-if [[ "$prompt" == *SLEEP* ]]; then sleep 120; fi
+if [[ "$prompt" == *SLEEP* ]]; then
+  # what fleet studio shows as the session's latest step
+  jq -nc '{type:"assistant", message:{content:[{type:"text", text:"Rendering"},
+    {type:"tool_use", name:"Bash", input:{command:"sleep 120", description:"Render the test video"}}]}}'
+  sleep 120
+fi
 if [[ "$prompt" == *FAIL* ]]; then
   echo "stub: failing on purpose" >&2
   echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"failed on purpose"}'

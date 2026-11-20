@@ -1,7 +1,7 @@
 ---
 name: fleet-ops
 description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos and triage failures.
-version: 1.4.0
+version: 1.5.0
 metadata:
   hermes:
     tags: [fleet, vps, ssh, video, claude]
@@ -14,7 +14,8 @@ metadata:
 ## When to use
 Any request about the VPS fleet or the videos it makes: "how is the fleet", "make a
 video for <channel>", "queue tomorrow's uploads", "what failed", "collect the finished
-videos", "is vps3 alive", "pause vps2", "move vps2's queue to vps4".
+videos", "is vps3 alive", "pause vps2", "move vps2's queue to vps4", "I want to watch
+the fleet".
 
 ## The fleet
 - 5 Hostinger VPSs, `vps1` to `vps5`, one Hostinger account each. The inventory is
@@ -50,7 +51,9 @@ videos", "is vps3 alive", "pause vps2", "move vps2's queue to vps4".
    - Quick one-off: `fleet dispatch --prompt "..." --channel "<channel>"`.
    - When building many jobs, check them first with `--dry-run`.
 3. **Follow progress.** `fleet jobs` lists everything. `fleet jobs vps2 --state running`
-   narrows it. `fleet logs vps2 <job-id>` shows the last 200 log lines.
+   narrows it. `fleet logs vps2 <job-id>` shows the last 200 log lines. When the owner
+   wants to watch the fleet at work, point them to `fleet studio`, a page they open on
+   this computer (`fleet studio --tailnet` to watch from their phone).
 4. **Collect.** `fleet pull` downloads every finished job not pulled yet and prints each
    summary. Report done and FAILED jobs separately, with the folder path. `MOVED` lines
    are the partial work of jobs that were handed over; the job itself runs elsewhere.
@@ -110,6 +113,9 @@ Only `prompt` is required. Ids are generated when missing. Every field is descri
 
 ## Pitfalls
 - Never run `fleet logs -f` from a scheduled job or a messaging chat: it never exits.
+- Never start the studio (`fleet studio` without `--json`): it is the owner's page and
+  keeps running until stopped. To look at the fleet yourself, use `fleet status` and
+  `fleet jobs`, or `fleet studio --json`, which looks once and exits.
 - Do not edit files under `/home/fleet/fleet/jobs` on a VPS by hand; use the CLI.
 - Never print the contents of `~/.config/fleet/secrets/` or of any Hermes `.env`, your
   own included.

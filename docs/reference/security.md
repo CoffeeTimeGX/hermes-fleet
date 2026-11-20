@@ -103,6 +103,12 @@ checks can use it. Protect the PC accordingly:
 - disk encryption (BitLocker on Windows, FileVault on macOS, LUKS on Linux),
 - updates for the system, Tailscale and Hermes.
 
+The studio (`fleet studio`) is a small web server that runs only while you keep it open.
+It listens on `127.0.0.1`, so only your PC can open it, or with `--tailnet` on your PC's
+Tailscale address, which the fleet's policy lets only your own devices reach. It answers
+only requests addressed to those names, shows what `fleet status` and `fleet jobs` show
+plus each running session's latest step, and has nothing that changes the fleet.
+
 Hermes runs commands in your user account. Its guardrails are its instructions
 (`SOUL.md` and the skills), the approvals it asks for before risky steps, and a deny list
 that `fleet init` sets: no `fleet exec all ... rm -rf`, no reading the secrets folder or

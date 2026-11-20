@@ -17,6 +17,7 @@ Everyday
   fleet handover FROM TO [JOB_ID ...]      move queued jobs to another VPS (only when you ask)
   fleet pull [TARGETS] [--quiet]           download finished jobs into results_dir
   fleet pause|resume TARGETS               stop or restart taking new jobs
+  fleet studio [--tailnet]                 watch every VPS at work in your browser
 
 Setup and maintenance
   fleet init [--no-hermes]                 set up this home machine (installers call it)
@@ -62,7 +63,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -1646,8 +1647,7 @@ def cmd_doctor(cfg_path: Path, a) -> int:
               "winget install --id Git.Git -e")
     exe = find_hermes()
     check(f"hermes: {exe or 'not found'}", exe is not None, "see docs/home for the Hermes install command")
-    ts = shutil.which("tailscale") or (r"C:\Program Files\Tailscale\tailscale.exe"
-                                       if IS_WINDOWS and Path(r"C:\Program Files\Tailscale\tailscale.exe").exists() else None)
+    ts = tailscale_binary()
     if ts:
         r = subprocess.run([ts, "status", "--json"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         state = ""
@@ -1697,6 +1697,234 @@ def cmd_doctor(cfg_path: Path, a) -> int:
               f"run `hermes -p {HERMES_PROFILE} model` to pick a provider and model", warn=True)
     print("\nAll required checks passed." if not fails else f"\n{fails} required check(s) failed.")
     return 1 if fails else 0
+
+
+# --------------------------------------------------------------------------- studio
+
+STUDIO_PAGE = REPO_ROOT / "home" / "studio" / "studio.html"
+STUDIO_PORT = 8740
+LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+# The newest thing a running session did, from the end of its transcript: the last text
+# or tool call of an assistant message, cut short so that a big file write stays small.
+STUDIO_ACTIVITY_JQ = (
+    'fromjson? | select(type == "object" and .type == "assistant") '
+    '| [(.message.content | if type == "array" then .[] else empty end) '
+    '| select(.type == "text" or .type == "tool_use")] | last | select(. != null) '
+    '| if .type == "text" then {kind: "text", text: ((.text // "") | tostring | .[0:300])} '
+    'else {kind: "tool", name: (.name // "tool" | tostring), detail: ((.input.description // .input.command '
+    '// .input.file_path // .input.path // .input.pattern // .input.url // .input.query // .input.prompt // "") '
+    '| tostring | .[0:300])} end')
+
+
+def studio_script(cfg: Config, n: Node) -> str:
+    """One SSH round per VPS: its status, its jobs, and what each running session did last."""
+    return (f"r={shlex.quote(root_of(cfg, n))}\n"
+            f"{worker(cfg, n)} status --json\n"
+            f"{worker(cfg, n)} jobs --json\n"
+            "for f in \"$r\"/jobs/running/*.json; do\n"
+            "  [ -e \"$f\" ] || continue\n"
+            "  id=$(basename \"$f\" .json); t=\"$r/work/$id/logs/transcript.jsonl\"\n"
+            "  [ -s \"$t\" ] || continue\n"
+            "  m=$(stat -c %Y \"$t\" 2>/dev/null || echo 0)\n"
+            f"  tail -c 200000 \"$t\" | jq -cR {shlex.quote(STUDIO_ACTIVITY_JQ)} 2>/dev/null | tail -n 1 \\\n"
+            "    | jq -c --arg id \"$id\" --argjson m \"$m\" '. + {id: $id, mtime: $m}' 2>/dev/null\n"
+            "done\n")
+
+
+def parse_studio(out: bytes):
+    """The status object, the jobs list and the activity lines of a studio_script run.
+    Lines that are not JSON (a login banner, say) are skipped."""
+    status, jobs, activity = None, [], {}
+    for line in text(out).splitlines():
+        line = line.strip()
+        if not line.startswith(("{", "[")):
+            continue
+        try:
+            doc = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(doc, list):
+            jobs = [j for j in doc if isinstance(j, dict)]
+        elif isinstance(doc, dict) and isinstance(doc.get("queue"), dict):
+            status = doc
+        elif isinstance(doc, dict) and isinstance(doc.get("id"), str) and doc.get("kind") in ("text", "tool"):
+            activity[doc["id"]] = doc
+    return status, jobs, activity
+
+
+def studio_base(n: Node) -> dict:
+    return {"name": n.name, "channels": channel_names(n), "sessions": n.sessions}
+
+
+def studio_node(cfg: Config, n: Node) -> dict:
+    r = remote(cfg, n, studio_script(cfg, n), timeout=60)
+    status, jobs, activity = parse_studio(r.stdout)
+    if status is None:
+        why = (text(r.stderr)[-300:] or f"exit {r.returncode}") if r.returncode != 0 else \
+            "worker returned no status (run fleet sync)"
+        return dict(studio_base(n), reachable=False, error=why)
+    status["reachable"] = True
+    return dict(studio_base(n), reachable=True, status=status, jobs=jobs, activity=activity)
+
+
+def studio_snapshot(cfg: Config, every: int) -> dict:
+    nodes = [n for n in cfg.nodes.values() if n.enabled]
+    res = parallel(nodes, lambda n: studio_node(cfg, n))
+    out = [r if isinstance(r, dict) else dict(studio_base(n), reachable=False, error=str(r)[:300])
+           for n, r in ((n, res[n.name]) for n in nodes)]
+    return {"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out}
+
+
+def studio_page_html() -> bytes:
+    """The studio page in a full HTML document, marked live so that it asks this
+    computer for the fleet instead of showing its example lot."""
+    page = STUDIO_PAGE.read_text(encoding="utf-8")
+    head = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
+            '<script>window.FLEET_STUDIO_LIVE = true;</script>\n'
+            '<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);'
+            'padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}'
+            'img{max-width:100%}[hidden]{display:none!important}</style>\n</head>\n<body>\n')
+    return (head + page + "\n</body>\n</html>\n").encode("utf-8")
+
+
+def studio_host_ok(host: str, allowed: set) -> bool:
+    """Answer only requests addressed to this computer by a name we know, so that a web
+    page somewhere else cannot read the studio through DNS rebinding."""
+    h = (host or "").strip().lower()
+    if h.startswith("["):
+        name = h[1:h.find("]")] if "]" in h else ""
+    else:
+        name = h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    return bool(name) and name in allowed
+
+
+def studio_handler(page: bytes, state: dict, lock, allowed: set):
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "fleet-studio"
+
+        def log_message(self, fmt, *args):  # the terminal stays quiet
+            pass
+
+        def send(self, code: int, body: bytes, ctype: str):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def do_GET(self):
+            if not studio_host_ok(self.headers.get("Host", ""), allowed):
+                return self.send(403, b"fleet studio answers only to this computer's own names\n",
+                                 "text/plain; charset=utf-8")
+            path = self.path.split("?", 1)[0]
+            if path in ("/", "/index.html"):
+                return self.send(200, page, "text/html; charset=utf-8")
+            if path == "/api/studio":
+                with lock:
+                    snap = state["snapshot"]
+                return self.send(200, json.dumps(snap, default=str).encode("utf-8"), "application/json")
+            return self.send(404, b"not found\n", "text/plain; charset=utf-8")
+
+        do_HEAD = do_GET
+
+    return Handler
+
+
+def studio_server(host: str, port: int, handler):
+    from http.server import ThreadingHTTPServer
+
+    class StudioServer(ThreadingHTTPServer):
+        # On Windows this option would let a second program open the same port, so a
+        # busy port would be shared instead of refused.
+        allow_reuse_address = not IS_WINDOWS
+        allow_reuse_port = False
+        daemon_threads = True
+
+    return StudioServer((host, port), handler)
+
+
+def tailscale_binary():
+    if shutil.which("tailscale"):
+        return shutil.which("tailscale")
+    win = Path(r"C:\Program Files\Tailscale\tailscale.exe")
+    return str(win) if IS_WINDOWS and win.exists() else None
+
+
+def tailscale_self():
+    """This computer's Tailscale IPv4 address and MagicDNS name."""
+    ts = tailscale_binary()
+    if not ts:
+        raise FleetError("Tailscale is not installed on this computer")
+    try:
+        r = subprocess.run([ts, "status", "--json"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+        me = json.loads(r.stdout or b"{}").get("Self") or {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        me = {}
+    ips = [ip for ip in me.get("TailscaleIPs") or [] if "." in ip]
+    if not ips:
+        raise FleetError("Tailscale is not connected on this computer: open Tailscale and sign in")
+    return ips[0], str(me.get("DNSName") or "").rstrip(".").lower()
+
+
+def cmd_studio(cfg: Config, a) -> int:
+    """Serve the studio page: every VPS as a sound stage, seen from above. It only reads."""
+    if a.every < 5:
+        raise FleetError("--every must be at least 5 seconds")
+    if a.json:
+        print(json.dumps(studio_snapshot(cfg, a.every), indent=2, default=str))
+        return 0
+    if a.tailnet:
+        host, dns = tailscale_self()
+        allowed = {host, dns, dns.split(".")[0]} - {""}
+        shown = dns or host
+    else:
+        host, allowed, shown = "127.0.0.1", LOOPBACK_NAMES, "127.0.0.1"
+    lock, stop = threading.Lock(), threading.Event()
+    state = {"snapshot": {"generated_at": None, "every": a.every, "fleet_version": VERSION,
+                          "nodes": [dict(studio_base(n), pending=True) for n in cfg.nodes.values() if n.enabled]}}
+
+    def look():
+        while not stop.is_set():
+            try:
+                snap = studio_snapshot(cfg, a.every)
+            except Exception as e:  # keep serving the last look
+                with lock:
+                    state["snapshot"] = dict(state["snapshot"], error=str(e)[:300])
+            else:
+                with lock:
+                    state["snapshot"] = snap
+            stop.wait(a.every)
+
+    try:
+        srv = studio_server(host, a.port, studio_handler(studio_page_html(), state, lock, allowed))
+    except OSError as e:
+        raise FleetError(f"cannot open the studio on {host}:{a.port} ({e.strerror or e}). "
+                         f"Another program may use that port: pick another with --port") from None
+    threading.Thread(target=look, daemon=True).start()
+    url = f"http://{shown}:{srv.server_address[1]}/"
+    print(f"Fleet studio: {url}\n"
+          f"It looks at the VPSs every {a.every} seconds and only watches: it changes nothing.\n"
+          "Press Ctrl+C to stop it.", flush=True)
+    if not a.no_browser:
+        import webbrowser
+        opener = threading.Timer(0.5, lambda: webbrowser.open(url))
+        opener.daemon = True
+        opener.start()
+    try:
+        srv.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        print("\nFleet studio stopped.")
+    finally:
+        stop.set()
+        srv.server_close()
+    return 0
 
 
 # --------------------------------------------------------------------------- main
@@ -1755,6 +1983,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("pull", help="download finished jobs")
     s.add_argument("targets", nargs="?")
     s.add_argument("--quiet", action="store_true")
+    s = sp.add_parser("studio", help="watch every VPS at work in your browser (it only watches)")
+    s.add_argument("--port", type=int, default=STUDIO_PORT, help="default: %(default)s")
+    s.add_argument("--tailnet", action="store_true",
+                   help="open it on this computer's Tailscale address, so your phone can watch too")
+    s.add_argument("--every", type=int, default=20, help="seconds between looks at the VPSs (default: %(default)s)")
+    s.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    s.add_argument("--json", action="store_true", help="print one look at the fleet as JSON, and exit")
     s = sp.add_parser("exec", help="run a shell command on nodes",
                       usage="fleet exec TARGETS [--root] [--timeout SECONDS] -- COMMAND...")
     s.add_argument("targets")
@@ -1800,7 +2035,7 @@ COMMANDS = {
     "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
     "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "handover": cmd_handover,
     "pause": cmd_pause,
-    "resume": cmd_resume, "pull": cmd_pull, "exec": cmd_exec,
+    "resume": cmd_resume, "pull": cmd_pull, "studio": cmd_studio, "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
     "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,
     "forget-host": cmd_forget_host, "hermes-cron": cmd_hermes_cron,

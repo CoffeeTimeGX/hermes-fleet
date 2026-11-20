@@ -1,0 +1,883 @@
+<title>Hermes Fleet Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Your video fleet seen from above: one sound stage per VPS, live from your PC.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Saira+Stencil+One&display=swap">
+<style>
+/* Layout: the studio lot seen from above. Your PC is the director's office at the top, a
+   private road (Tailscale) runs below it, and every VPS is a sound stage: its number is
+   painted on the roof, its current take is on a slate, and a lamp burns over its door. */
+:root {
+  --lot: #d5dad7;
+  --lot-joint: #c9cfcb;
+  --road: #363e41;
+  --road-paint: #e7bd44;
+  --road-ink: #e8edeb;
+  --roof: #f2f4f1;
+  --roof-rib: #e2e6e2;
+  --floor: #fbfbf9;
+  --edge: #97a19c;
+  --cast: rgba(30, 38, 35, 0.22);
+  --ink: #1a211f;
+  --ink-soft: #505b57;
+  --slate: #1c2220;
+  --slate-ink: #f1f3f1;
+  --slate-soft: #a7b1ad;
+  --accent: #1d5d82;
+  --rolling: #cf372d;
+  --standby: #2a8656;
+  --hold: #a8720a;
+  --paused: #6c7572;
+  --trouble: #bd5318;
+  --tape-a: #e6b62a;
+  --tape-b: #26261f;
+  --font-stencil: "Saira Stencil One", Impact, "Arial Black", sans-serif;
+  --font-sign: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "Barlow", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lot: #141a1b; --lot-joint: #1a2123; --road: #0b0f10; --road-paint: #cba43d; --road-ink: #c8d1ce;
+    --roof: #1f2729; --roof-rib: #252e30; --floor: #182022; --edge: #364144; --cast: rgba(0, 0, 0, 0.5);
+    --ink: #e3e9e7; --ink-soft: #98a4a0; --slate: #0c100f; --slate-ink: #eef1ef; --slate-soft: #8b9692;
+    --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683;
+    --trouble: #ff8c42; --tape-a: #d9aa27; --tape-b: #121310;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --lot: #141a1b; --lot-joint: #1a2123; --road: #0b0f10; --road-paint: #cba43d; --road-ink: #c8d1ce;
+  --roof: #1f2729; --roof-rib: #252e30; --floor: #182022; --edge: #364144; --cast: rgba(0, 0, 0, 0.5);
+  --ink: #e3e9e7; --ink-soft: #98a4a0; --slate: #0c100f; --slate-ink: #eef1ef; --slate-soft: #8b9692;
+  --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683;
+  --trouble: #ff8c42; --tape-a: #d9aa27; --tape-b: #121310;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--lot);
+  background-image:
+    linear-gradient(var(--lot-joint) 1px, transparent 1px),
+    linear-gradient(90deg, var(--lot-joint) 1px, transparent 1px);
+  background-size: 72px 72px;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.lot-wrap {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+  display: grid;
+  gap: 22px;
+}
+h1, h2, p, dl, dd, ol { margin: 0; }
+.k {
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
+
+/* The director's office: your PC */
+.office {
+  background: var(--roof);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  box-shadow: 12px 14px 0 var(--cast);
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 24px;
+  align-items: end;
+}
+.office .eyebrow { color: var(--ink-soft); }
+.office h1 {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: clamp(30px, 5vw, 44px);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+.office-note { color: var(--ink-soft); max-width: 60ch; margin-top: 6px; }
+.looked { color: var(--ink-soft); text-align: right; font-size: 13px; }
+.board {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tally {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px 5px 9px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background: var(--floor);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.tally b { font-weight: 600; }
+.tally .lamp { width: 10px; height: 10px; }
+
+/* The private road between your PC and the stages */
+.road {
+  position: relative;
+  height: 38px;
+  border-radius: 3px;
+  background-color: var(--road);
+  background-image: linear-gradient(90deg, var(--road-paint) 0 55%, transparent 55% 100%);
+  background-size: 36px 3px;
+  background-repeat: repeat-x;
+  background-position: 0 50%;
+  display: flex;
+  align-items: center;
+}
+.road span {
+  margin-left: 14px;
+  padding: 2px 8px;
+  background: var(--road);
+  color: var(--road-ink);
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.notice {
+  border: 1px dashed var(--edge);
+  background: var(--floor);
+  border-radius: 4px;
+  padding: 10px 14px;
+}
+.notice[data-kind="lost"] { border: 1px solid var(--trouble); }
+
+/* The stages */
+.lot {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+  gap: 30px 26px;
+  align-items: start;
+}
+.stage {
+  --lamp: var(--paused);
+  position: relative;
+  min-width: 0;
+  background: var(--floor);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  box-shadow: 12px 14px 0 var(--cast);
+  display: grid;
+  overflow: hidden;
+}
+.stage[data-state="rolling"] { --lamp: var(--rolling); }
+.stage[data-state="standby"] { --lamp: var(--standby); }
+.stage[data-state="hold"] { --lamp: var(--hold); }
+.stage[data-state="dark"] { --lamp: var(--paused); }
+.stage[data-state="trouble"] { --lamp: var(--trouble); }
+.stage[data-state="offline"], .stage[data-state="pending"] { --lamp: var(--paused); border-style: dashed; box-shadow: 12px 14px 0 transparent; }
+
+.roof {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  background-color: var(--roof);
+  background-image: repeating-linear-gradient(90deg, transparent 0 22px, var(--roof-rib) 22px 24px);
+  border-bottom: 1px solid var(--edge);
+}
+.roof-text { min-width: 0; display: grid; gap: 2px; }
+.stage-label { color: var(--ink-soft); }
+.channel {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 23px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.channel.none { color: var(--ink-soft); font-weight: 600; font-size: 18px; }
+.stage-no {
+  font-family: var(--font-stencil);
+  font-size: 64px;
+  line-height: 0.82;
+  color: var(--ink);
+  opacity: 0.88;
+  font-variant-numeric: tabular-nums;
+}
+.stage[data-state="offline"] .stage-no, .stage[data-state="pending"] .stage-no { opacity: 0.35; }
+
+.set { padding: 14px 16px; display: grid; gap: 12px; min-width: 0; }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.flag {
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--edge);
+  color: var(--ink-soft);
+}
+.flag.warn { border-color: var(--trouble); color: var(--trouble); }
+
+/* The slate of the take in progress */
+.slate {
+  background: var(--slate);
+  color: var(--slate-ink);
+  border-radius: 4px;
+  overflow: hidden;
+  display: grid;
+}
+.clapper {
+  height: 11px;
+  background-image: repeating-linear-gradient(118deg, var(--slate-ink) 0 13px, var(--slate) 13px 26px);
+}
+.slate-body { padding: 10px 12px 12px; display: grid; gap: 8px; min-width: 0; }
+.slate .k { color: var(--slate-soft); display: block; }
+.scene {
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.slate-grid { display: grid; grid-template-columns: auto auto 1fr; gap: 4px 18px; align-items: end; }
+.slate-grid .v { font-variant-numeric: tabular-nums; font-size: 15px; }
+.tc { font-family: var(--font-mono); font-size: 18px; letter-spacing: 0.04em; }
+.now {
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  padding-top: 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.now .when { color: var(--slate-soft); white-space: nowrap; }
+.follow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.follow code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--slate-soft);
+}
+.copy {
+  font: inherit;
+  font-size: 12px;
+  font-family: var(--font-sign);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate-ink);
+  background: transparent;
+  border: 1px solid var(--slate-soft);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.copy:hover { border-color: var(--slate-ink); }
+.copy:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A stage without a take */
+.still { display: grid; gap: 4px; padding: 2px 0; }
+.still-head { font-weight: 600; font-size: 16px; }
+.still p:not(.still-head) { color: var(--ink-soft); overflow-wrap: anywhere; }
+
+/* Jobs waiting at the stage door */
+.queue { display: grid; gap: 6px; }
+.queue .k { color: var(--ink-soft); }
+.queue ol { list-style: none; padding: 0; display: grid; gap: 4px; }
+.queue li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 14px;
+}
+.queue li::before {
+  content: "";
+  flex: none;
+  width: 9px;
+  height: 11px;
+  border: 1px solid var(--edge);
+  border-radius: 1px;
+  background: var(--roof);
+  transform: translateY(1px);
+}
+.queue li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.queue li.more::before { visibility: hidden; }
+.queue li.more { color: var(--ink-soft); }
+.queue .moving { color: var(--ink-soft); white-space: nowrap; }
+
+/* The door, its lamp and the stage's numbers */
+.apron {
+  border-top: 1px solid var(--edge);
+  display: grid;
+}
+.stage[data-state="trouble"] .apron {
+  border-top: 0;
+  background-image: repeating-linear-gradient(135deg, var(--tape-a) 0 9px, var(--tape-b) 9px 18px);
+  background-size: 100% 6px;
+  background-repeat: no-repeat;
+  padding-top: 6px;
+}
+.door {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  min-width: 0;
+}
+.lamp {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lamp, var(--paused));
+}
+.stage[data-state="rolling"] .door .lamp,
+.stage[data-state="standby"] .door .lamp,
+.stage[data-state="hold"] .door .lamp,
+.stage[data-state="trouble"] .door .lamp { box-shadow: 0 0 10px 1px var(--lamp); }
+.stage[data-state="rolling"] .door .lamp { animation: burn 1.8s ease-in-out infinite; }
+.stage[data-state="offline"] .door .lamp,
+.stage[data-state="pending"] .door .lamp,
+.stage[data-state="dark"] .door .lamp { background: transparent; border: 2px solid var(--lamp); }
+@keyframes burn { 50% { opacity: 0.45; } }
+.sign {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lamp);
+  white-space: nowrap;
+}
+.stage[data-state="dark"] .sign, .stage[data-state="offline"] .sign, .stage[data-state="pending"] .sign { color: var(--ink-soft); }
+.sign-note { color: var(--ink-soft); font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--edge);
+}
+.meters div { padding: 8px 16px 10px; display: grid; gap: 1px; min-width: 0; }
+.meters div + div { border-left: 1px solid var(--edge); }
+.meters div:nth-child(4) { border-left: 0; }
+.meters div:nth-child(n + 4) { border-top: 1px solid var(--edge); }
+.meters dt { color: var(--ink-soft); }
+.meters dd { font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The call board: every job on the lot */
+.callboard {
+  background: var(--floor);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  display: grid;
+}
+.cb-head { padding: 16px 18px 12px; display: grid; gap: 4px; }
+.cb-head h2 { font-family: var(--font-sign); font-weight: 700; font-size: 24px; letter-spacing: 0.03em; text-transform: uppercase; }
+.cb-head p { color: var(--ink-soft); }
+.table-scroll { overflow-x: auto; border-top: 1px solid var(--edge); }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 14px; }
+th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--roof-rib); vertical-align: top; }
+th { color: var(--ink-soft); background: var(--roof); position: sticky; top: 0; }
+td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.chip .lamp { width: 9px; height: 9px; }
+.chip[data-s="running"] { --lamp: var(--rolling); }
+.chip[data-s="inbox"], .chip[data-s="outgoing"] { --lamp: var(--hold); }
+.chip[data-s="done"] { --lamp: var(--standby); }
+.chip[data-s="failed"] { --lamp: var(--trouble); }
+.chip[data-s="moved"] { --lamp: var(--paused); }
+.chip[data-s="inbox"] .lamp, .chip[data-s="moved"] .lamp { background: transparent; border: 2px solid var(--lamp); }
+.empty-row td { color: var(--ink-soft); padding-block: 14px; }
+
+/* Legend */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend .lamp.ring { background: transparent; border: 2px solid var(--lamp); }
+.legend .lamp.tape { border-radius: 2px; background-image: repeating-linear-gradient(135deg, var(--tape-a) 0 3px, var(--tape-b) 3px 6px); }
+.footnote { color: var(--ink-soft); font-size: 14px; }
+
+@media (max-width: 640px) {
+  .office { grid-template-columns: minmax(0, 1fr); }
+  .looked { text-align: left; }
+  .stage-no { font-size: 52px; }
+  .meters div { padding-inline: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage[data-state="rolling"] .door .lamp { animation: none; }
+}
+</style>
+
+<div class="lot-wrap">
+  <header class="office">
+    <div>
+      <p class="k eyebrow">Director's office · your PC</p>
+      <h1>Fleet studio</h1>
+      <p class="office-note">Hermes directs from here. Each VPS below is a sound stage that makes the videos of its own channel.</p>
+    </div>
+    <p class="looked" id="looked">Looking at the lot…</p>
+    <div class="board" id="board"></div>
+  </header>
+
+  <div class="road" aria-hidden="true"><span>Private road · Tailscale</span></div>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <main class="lot" id="lot"></main>
+
+  <section class="callboard" aria-labelledby="cb-title">
+    <div class="cb-head">
+      <h2 id="cb-title">Call board</h2>
+      <p>Every job on the lot: what runs now, what waits, and what finished in the last 24 hours.</p>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th class="k">Stage</th><th class="k">Job</th><th class="k">Channel</th><th class="k">State</th><th class="k">When</th><th class="k">Note</th></tr></thead>
+        <tbody id="cb-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="legend" aria-label="What the lamps mean">
+    <span style="--lamp: var(--rolling)"><i class="lamp"></i>Rolling: making a video</span>
+    <span style="--lamp: var(--standby)"><i class="lamp"></i>Standing by: ready for work</span>
+    <span style="--lamp: var(--hold)"><i class="lamp"></i>On hold: waiting for its Claude usage limit</span>
+    <span style="--lamp: var(--paused)"><i class="lamp ring"></i>Dark: paused, or no contact</span>
+    <span><i class="lamp tape"></i>Needs a look</span>
+  </section>
+  <p class="footnote">This page only watches. To change anything, ask the director, or use the <span class="mono">fleet</span> command.</p>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const LIVE = window.FLEET_STUDIO_LIVE === true;
+  const POLL_MS = 5000;
+  const DAY_MS = 24 * 3600 * 1000;
+  let snap = null;
+  let contact = true;
+
+  // ---------------------------------------------------------------- helpers
+  function el(tag, props, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = v;
+      else if (k === "style") n.setAttribute("style", v);
+      else n.setAttribute(k, v === true ? "" : String(v));
+    }
+    for (const kid of kids.flat()) {
+      if (kid === null || kid === undefined || kid === false) continue;
+      n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    }
+    return n;
+  }
+  const lamp = (cls) => el("i", { class: cls ? "lamp " + cls : "lamp", "aria-hidden": "true" });
+  const when = (iso) => { const t = Date.parse(iso || ""); return Number.isNaN(t) ? null : t; };
+  function ago(t) {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 10) return "just now";
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.round(s / 60) + " min ago";
+    if (s < 48 * 3600) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " days ago";
+  }
+  function span(t) {
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + " s";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + " min";
+    return Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min";
+  }
+  function timecode(t) {
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    const p = (x) => String(x).padStart(2, "0");
+    return p(Math.floor(s / 3600)) + ":" + p(Math.floor(s / 60) % 60) + ":" + p(s % 60);
+  }
+  function clock(sec) {
+    const d = new Date(sec * 1000);
+    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return hm;
+    return d.toLocaleDateString([], { weekday: "short" }) + " " + hm;
+  }
+  // The worker writes times as UTC (2026-01-31T21:42:08Z); show them in this computer's time.
+  const localTimes = (txt) => String(txt || "").replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z\b/g,
+    (iso) => { const t = Date.parse(iso); return Number.isNaN(t) ? iso : clock(t / 1000); });
+  const stageNo = (name, i) => { const m = /(\d+)$/.exec(name || ""); return m ? m[1] : String(i + 1); };
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+  const VERBS = { Bash: "Running", Write: "Writing", Edit: "Editing", MultiEdit: "Editing", Read: "Reading",
+    Glob: "Looking for files", Grep: "Searching the files", WebSearch: "Searching the web", WebFetch: "Reading a web page",
+    TodoWrite: "Planning", Task: "Handing a part to a helper", Agent: "Handing a part to a helper" };
+  function activityText(a) {
+    if (!a) return null;
+    if (a.kind === "text") return (a.text || "").replace(/\s+/g, " ").trim() || null;
+    let detail = String(a.detail || "").replace(/\s+/g, " ").trim();
+    if (/^(Write|Edit|MultiEdit|Read)$/.test(a.name) && detail.includes("/")) detail = detail.split("/").pop();
+    const verb = VERBS[a.name] || a.name || "Working";
+    return detail ? verb + ": " + detail : verb;
+  }
+
+  // What a stage is doing, in the words on its door.
+  function stageState(n) {
+    if (n.pending) return { state: "pending", sign: "Checking", note: "looking at it now" };
+    if (!n.reachable) return { state: "offline", sign: "No contact", note: "your PC cannot reach it" };
+    const st = n.status || {};
+    const q = st.queue || {};
+    const running = Number(q.running) || 0;
+    const lim = st.limit && Number(st.limit.until) * 1000 > Date.now() ? st.limit : null;
+    const prov = (st.providers || []).find((p) => p.provider === "claude") || (st.providers || [])[0];
+    const service = st.service || "unknown";
+    if (service !== "active" && service !== "unknown") return { state: "trouble", sign: "Needs a look", note: "its worker is " + service };
+    if (Number(st.heartbeat_age_s) > 180 || Number(st.heartbeat_age_s) < 0) return { state: "trouble", sign: "Needs a look", note: "its worker stopped looking at the queue" };
+    if (running > 0) return { state: "rolling", sign: "Rolling", note: running > 1 ? "making " + running + " videos" : "making a video" };
+    if (st.paused) return { state: "dark", sign: "Dark", note: st.paused_reason ? "paused: " + st.paused_reason : "paused" };
+    if (lim) return { state: "hold", sign: "On hold", note: "until " + clock(Number(lim.until)) };
+    if (st.low_disk) return { state: "trouble", sign: "Needs a look", note: "low on disk, new jobs wait" };
+    if (prov && !prov.ok) return { state: "trouble", sign: "Needs a look", note: "Claude is not ready" + (prov.error ? ": " + prov.error : "") };
+    return { state: "standby", sign: "Standing by", note: "ready for the next job" };
+  }
+
+  // ---------------------------------------------------------------- rendering
+  function renderStage(n, i) {
+    const s = stageState(n);
+    const no = stageNo(n.name, i);
+    const st = n.status || {};
+    const q = st.queue || {};
+    const jobs = Array.isArray(n.jobs) ? n.jobs : [];
+    const chans = Array.isArray(n.channels) ? n.channels : [];
+    const chanText = chans.length === 0 ? "No channel yet" : chans.map((c) => (c.toLowerCase() === "all" ? "Every other channel" : c)).join(" · ");
+
+    const roof = el("div", { class: "roof" },
+      el("div", { class: "roof-text" },
+        el("p", { class: "k stage-label", text: "Stage " + no + " · " + n.name }),
+        el("p", { class: chans.length ? "channel" : "channel none", text: chanText })),
+      el("span", { class: "stage-no", "aria-hidden": "true", text: no }));
+
+    const set = el("div", { class: "set" });
+    const flags = [];
+    const lim = st.limit && Number(st.limit.until) * 1000 > Date.now() ? st.limit : null;
+    if (s.state === "rolling" && st.paused) flags.push(["Paused: no new jobs start", false]);
+    if (s.state === "rolling" && lim) flags.push(["Usage limit until " + clock(Number(lim.until)), false]);
+    if (Number(st.stuck_handovers) > 0) flags.push([plural(Number(st.stuck_handovers), "handover", "handovers") + " stopped halfway", true]);
+    if (st.reboot_required) flags.push(["Needs a reboot for security updates", false]);
+    if (s.state === "rolling" && st.low_disk) flags.push(["Low on disk", true]);
+    if (flags.length) set.append(el("div", { class: "flags" }, flags.map(([t, warn]) => el("span", { class: warn ? "flag warn" : "flag", text: t }))));
+
+    const running = jobs.filter((j) => j.state === "running");
+    if (running.length) {
+      for (const j of running) set.append(renderSlate(n, j));
+    } else {
+      set.append(renderStill(n, s, st));
+    }
+
+    const waiting = jobs.filter((j) => j.state === "inbox" || j.state === "outgoing")
+      .sort((a, b) => (when(a.submitted_at) || 0) - (when(b.submitted_at) || 0));
+    if (n.reachable && !n.pending) {
+      const qbox = el("div", { class: "queue" }, el("p", { class: "k", text: waiting.length ? "Waiting at the door · " + waiting.length : "Nothing waiting" }));
+      if (waiting.length) {
+        const ol = el("ol");
+        for (const j of waiting.slice(0, 3)) {
+          const moving = j.state === "outgoing" ? el("span", { class: "moving", text: localTimes(j.reason) || "being handed over" }) : null;
+          ol.append(el("li", {}, el("span", { text: j.title || j.id }), moving));
+        }
+        if (waiting.length > 3) ol.append(el("li", { class: "more" }, el("span", { text: "and " + (waiting.length - 3) + " more" })));
+        qbox.append(ol);
+      }
+      set.append(qbox);
+    }
+
+    const cutoff = Date.now() - DAY_MS;
+    const recent = jobs.filter((j) => (when(j.finished_at) || 0) >= cutoff);
+    const doneToday = recent.filter((j) => j.state === "done").length;
+    const failedToday = recent.filter((j) => j.state === "failed").length;
+    const prov = (st.providers || []).find((p) => p.provider === "claude") || (st.providers || [])[0];
+    const meters = n.reachable && !n.pending ? el("dl", { class: "meters" },
+      meter("Done today", doneToday),
+      meter("Failed today", failedToday),
+      meter("To collect", Number(q.unpulled) || 0),
+      meter("Sessions", (Number(q.running) || 0) + " of " + (Number(st.max_parallel) || n.sessions || 1)),
+      meter("Disk free", st.disk_free_gb !== undefined ? st.disk_free_gb + " GB" : "-"),
+      meter("Claude", prov ? (prov.ok ? "ready" : "not ready") : "-")) : null;
+
+    const apron = el("div", { class: "apron" },
+      el("div", { class: "door" }, lamp(), el("span", { class: "sign", text: s.sign }), el("span", { class: "sign-note", text: s.note, title: s.note })),
+      meters);
+
+    return el("article", { class: "stage", "data-state": s.state, "aria-label": "Stage " + no + ", " + n.name + ": " + s.sign + ", " + s.note }, roof, set, apron);
+  }
+
+  function meter(label, value) {
+    return el("div", {}, el("dt", { class: "k", text: label }), el("dd", { text: String(value) }));
+  }
+
+  function renderSlate(n, j) {
+    const started = when(j.started_at);
+    const act = n.activity && n.activity[j.id];
+    const said = activityText(act);
+    const cmd = "fleet logs " + n.name + " " + j.id + " -f";
+    const copy = el("button", { class: "copy", type: "button", "aria-label": "Copy the command " + cmd, text: "Copy" });
+    copy.addEventListener("click", () => copyText(cmd, copy));
+    const take = Number(j.attempts) || 1;
+    const waits = Number(j.limit_waits) || 0;
+    return el("div", { class: "slate" },
+      el("div", { class: "clapper", "aria-hidden": "true" }),
+      el("div", { class: "slate-body" },
+        el("div", {}, el("span", { class: "k", text: "Scene" }), el("p", { class: "scene", text: j.title || j.id })),
+        el("div", { class: "slate-grid" },
+          el("div", {}, el("span", { class: "k", text: "Channel" }), el("span", { class: "v", text: j.channel || "-" })),
+          el("div", {}, el("span", { class: "k", text: "Take" }), el("span", { class: "v", text: String(take) + (waits ? " · after " + plural(waits, "limit wait", "limit waits") : "") })),
+          el("div", {}, el("span", { class: "k", text: "Rolling for" }), el("span", { class: "v tc", "data-tc": started || "", text: started ? timecode(started) : "--:--:--" }))),
+        el("p", { class: "now" },
+          el("span", { class: "k", text: "Now" }),
+          said ? said + " " : "Starting up ",
+          act && act.mtime ? el("span", { class: "when", "data-ago": Number(act.mtime) * 1000, text: "· " + ago(Number(act.mtime) * 1000) }) : null),
+        el("div", { class: "follow" }, el("code", { text: cmd }), copy)));
+  }
+
+  function renderStill(n, s, st) {
+    let head = s.sign, body = s.note;
+    if (s.state === "pending") { head = "Checking this stage"; body = "The first look at each VPS takes a few seconds."; }
+    else if (s.state === "offline") { head = "No contact"; body = n.error || "Your PC cannot reach this VPS. Its queue keeps running if the VPS itself is up."; }
+    else if (s.state === "standby") { head = "Standing by"; body = "Ready. The next job for its channel starts here at once."; }
+    else if (s.state === "dark") { head = "Dark"; body = (st.paused_reason ? "Paused: " + st.paused_reason + ". " : "Paused. ") + "New jobs wait in its queue until it is resumed."; }
+    else if (s.state === "hold") {
+      const lim = st.limit || {};
+      head = "On hold until " + clock(Number(lim.until));
+      body = "Its Claude account reached a usage limit" + (lim.message ? " (" + lim.message + ")" : "") + ". The queue continues by itself after the reset.";
+    } else if (s.state === "trouble") { head = "Needs a look"; body = s.note.charAt(0).toUpperCase() + s.note.slice(1) + ". Ask the director, or run fleet health."; }
+    return el("div", { class: "still" }, el("p", { class: "still-head", text: head }), el("p", { text: body }));
+  }
+
+  function renderBoard(nodes) {
+    const counts = { rolling: 0, standby: 0, hold: 0, dark: 0, trouble: 0, offline: 0, pending: 0 };
+    let waiting = 0, collect = 0, doneToday = 0;
+    const cutoff = Date.now() - DAY_MS;
+    for (const n of nodes) {
+      counts[stageState(n).state] += 1;
+      const jobs = Array.isArray(n.jobs) ? n.jobs : [];
+      waiting += jobs.filter((j) => j.state === "inbox" || j.state === "outgoing").length;
+      doneToday += jobs.filter((j) => j.state === "done" && (when(j.finished_at) || 0) >= cutoff).length;
+      collect += Number(((n.status || {}).queue || {}).unpulled) || 0;
+    }
+    const items = [
+      ["rolling", "rolling", "var(--rolling)", ""], ["standby", "standing by", "var(--standby)", ""],
+      ["hold", "on hold", "var(--hold)", ""], ["dark", "dark", "var(--paused)", "ring"],
+      ["trouble", "need a look", "var(--trouble)", ""], ["offline", "no contact", "var(--paused)", "ring"],
+      ["pending", "checking", "var(--paused)", "ring"],
+    ];
+    const board = document.getElementById("board");
+    board.replaceChildren(
+      ...items.filter(([k]) => counts[k] > 0).map(([k, label, color, cls]) =>
+        el("span", { class: "tally", style: "--lamp: " + color }, lamp(cls), el("b", { text: String(counts[k]) }), " " + label)),
+      el("span", { class: "tally" }, el("b", { text: String(waiting) }), " waiting"),
+      el("span", { class: "tally" }, el("b", { text: String(doneToday) }), " done today"),
+      el("span", { class: "tally" }, el("b", { text: String(collect) }), " to collect"));
+  }
+
+  function renderCallboard(nodes) {
+    const rows = [];
+    const cutoff = Date.now() - DAY_MS;
+    nodes.forEach((n, i) => {
+      for (const j of Array.isArray(n.jobs) ? n.jobs : []) {
+        const fin = when(j.finished_at);
+        if (j.state === "running") rows.push({ n, i, j, rank: 0, t: when(j.started_at) || 0 });
+        else if (j.state === "inbox" || j.state === "outgoing") rows.push({ n, i, j, rank: 1, t: when(j.submitted_at) || 0 });
+        else if (fin && fin >= cutoff) rows.push({ n, i, j, rank: 2, t: fin });
+      }
+    });
+    rows.sort((a, b) => a.rank - b.rank || (a.rank === 2 ? b.t - a.t : a.t - b.t));
+    const label = { running: "Running", inbox: "Waiting", outgoing: "Moving", done: "Done", failed: "Failed", moved: "Moved" };
+    const body = document.getElementById("cb-rows");
+    if (!rows.length) {
+      body.replaceChildren(el("tr", { class: "empty-row" }, el("td", { colspan: "6", text: snap && snap.nodes && snap.nodes.some((n) => n.pending) ? "Looking at the lot…" : "No jobs right now, and none finished in the last 24 hours." })));
+      return;
+    }
+    body.replaceChildren(...rows.slice(0, 60).map(({ n, i, j, rank, t }) => {
+      let whenText = "-", data = {};
+      if (rank === 0 && t) { whenText = "for " + span(t); data = { "data-for": t }; }
+      else if (rank === 1 && t) { whenText = "queued " + ago(t); data = { "data-queued": t }; }
+      else if (rank === 2 && t) { whenText = ago(t); data = { "data-ago": t }; }
+      let note = localTimes(j.reason);
+      if (rank === 2 && j.state !== "failed") note = (note ? note + " · " : "") + (j.pulled ? "collected" : "waiting to be collected");
+      return el("tr", {},
+        el("td", { text: "Stage " + stageNo(n.name, i) + " · " + n.name }),
+        el("td", {}, j.title ? j.title : null, el("span", { class: "id", text: j.id })),
+        el("td", { text: j.channel || "-" }),
+        el("td", {}, el("span", { class: "chip", "data-s": j.state }, lamp(), label[j.state] || j.state)),
+        el("td", Object.assign({ class: "when", text: whenText }, data)),
+        el("td", { text: note }));
+    }));
+  }
+
+  function render() {
+    const nodes = (snap && Array.isArray(snap.nodes)) ? snap.nodes : [];
+    document.getElementById("lot").replaceChildren(...nodes.map(renderStage));
+    renderBoard(nodes);
+    renderCallboard(nodes);
+    renderNotice();
+    tick();
+  }
+
+  function renderNotice() {
+    const box = document.getElementById("notice");
+    let msg = null, kind = "";
+    if (!LIVE) {
+      msg = "This is an example lot with made-up jobs. On your PC, run fleet studio to watch your own fleet live.";
+    } else if (!contact) {
+      msg = "Lost contact with fleet studio on your PC. If you closed it, start it again with fleet studio.";
+      kind = "lost";
+    } else if (snap && snap.error) {
+      msg = "The last look at the lot did not work: " + snap.error;
+      kind = "lost";
+    }
+    box.hidden = !msg;
+    box.textContent = msg || "";
+    if (kind) box.dataset.kind = kind; else delete box.dataset.kind;
+  }
+
+  // Clocks and "ago" labels move every second, between two looks at the lot.
+  function tick() {
+    for (const e of document.querySelectorAll("[data-tc]")) { const t = Number(e.dataset.tc); if (t) e.textContent = timecode(t); }
+    for (const e of document.querySelectorAll("[data-for]")) e.textContent = "for " + span(Number(e.dataset.for));
+    for (const e of document.querySelectorAll("[data-queued]")) e.textContent = "queued " + ago(Number(e.dataset.queued));
+    for (const e of document.querySelectorAll(".now [data-ago]")) e.textContent = "· " + ago(Number(e.dataset.ago));
+    for (const e of document.querySelectorAll("td[data-ago]")) e.textContent = ago(Number(e.dataset.ago));
+    const looked = document.getElementById("looked");
+    const t = snap && when(snap.generated_at);
+    if (!snap || !t) looked.textContent = "Looking at the lot…";
+    else {
+      const every = Number(snap.every) || 20;
+      looked.textContent = (snap.demo ? "Example · " : "") + "Last look " + ago(t) + (LIVE ? " · every " + every + " s" : "");
+    }
+  }
+
+  function copyText(text, button) {
+    const done = () => { button.textContent = "Copied"; setTimeout(() => { button.textContent = "Copy"; }, 1600); };
+    const fallback = () => {
+      const code = button.previousElementSibling;
+      const r = document.createRange();
+      r.selectNodeContents(code);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      button.textContent = "Press Ctrl+C";
+      setTimeout(() => { button.textContent = "Copy"; }, 2400);
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+      else fallback();
+    } catch (e) { fallback(); }
+  }
+
+  // ---------------------------------------------------------------- data
+  async function poll() {
+    try {
+      const r = await fetch("api/studio", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      snap = await r.json();
+      contact = true;
+    } catch (e) {
+      contact = false;
+    }
+    render();
+  }
+
+  // The example lot for the preview: five stages, made-up jobs, times relative to now.
+  function exampleLot() {
+    const now = Date.now(), min = 60000, hr = 3600000;
+    const iso = (back) => new Date(now - back).toISOString();
+    const job = (o) => Object.assign({ provider: "claude", attempts: 1, limit_waits: 0, pulled: false }, o);
+    const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token" }];
+    const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
+      disk_free_gb: 71.3, disk_free_pct: 74, load1: 0.4, cpus: 2, max_parallel: 1, stuck_handovers: 0, reboot_required: false,
+      providers: claude, queue: { inbox: 0, running: 0, done: 0, failed: 0, unpulled: 0 } }, o);
+    return {
+      demo: true, generated_at: iso(6000), every: 20,
+      nodes: [
+        { name: "vps1", channels: ["Space Facts"], sessions: 1, reachable: true,
+          status: status({ load1: 1.9, queue: { inbox: 2, running: 1, done: 14, failed: 1, unpulled: 1 } }),
+          jobs: [
+            job({ id: "20261120-141502-space-facts-7fq2m", state: "running", channel: "Space Facts", title: "Saturn's rings in 60 seconds", submitted_at: iso(31 * min), started_at: iso(12 * min + 41000) }),
+            job({ id: "20261120-141503-space-facts-k3x9p", state: "inbox", channel: "Space Facts", title: "Europa's hidden ocean", submitted_at: iso(31 * min) }),
+            job({ id: "20261120-141504-space-facts-p81mz", state: "inbox", channel: "Space Facts", title: "The Kuiper belt", submitted_at: iso(31 * min) }),
+            job({ id: "20261120-121502-space-facts-a81kd", state: "done", channel: "Space Facts", title: "Why Mars is red", started_at: iso(2 * hr), finished_at: iso(70 * min) }),
+            job({ id: "20261120-091502-space-facts-q2w8e", state: "done", channel: "Space Facts", title: "How big is the Sun?", started_at: iso(5 * hr), finished_at: iso(4 * hr), pulled: true }),
+          ],
+          activity: { "20261120-141502-space-facts-7fq2m": { kind: "tool", name: "Bash", detail: "Render the 1080x1920 video with ffmpeg", mtime: (now - 9000) / 1000 } } },
+        { name: "vps2", channels: ["History"], sessions: 1, reachable: true,
+          status: status({ load1: 1.7, disk_free_gb: 68, queue: { inbox: 1, running: 1, done: 9, failed: 0, unpulled: 0 } }),
+          jobs: [
+            job({ id: "20261120-133010-history-p02xs", state: "running", channel: "History", title: "The Library of Alexandria", submitted_at: iso(52 * min), started_at: iso(47 * min + 5000), attempts: 2, limit_waits: 1 }),
+            job({ id: "20261120-133011-history-m4n7b", state: "inbox", channel: "History", title: "Who built the pyramids?", submitted_at: iso(52 * min) }),
+            job({ id: "20261120-101145-history-x9k2l", state: "done", channel: "History", title: "The first postal service", started_at: iso(6 * hr), finished_at: iso(5 * hr), pulled: true }),
+          ],
+          activity: { "20261120-133010-history-p02xs": { kind: "text", text: "The narration is recorded. Next come the captions and the map animation.", mtime: (now - 41000) / 1000 } } },
+        { name: "vps3", channels: ["Cooking"], sessions: 1, reachable: true,
+          status: status({ limit: { provider: "claude", kind: "weekly", message: "You've hit your weekly limit", since: (now - 2 * hr) / 1000, until: (now + 38 * hr) / 1000 },
+            queue: { inbox: 2, running: 0, done: 21, failed: 0, unpulled: 0 } }),
+          jobs: [
+            job({ id: "20261120-110000-cooking-b7v1c", state: "inbox", channel: "Cooking", title: "Bread in three ingredients", submitted_at: iso(3 * hr), started_at: iso(2 * hr + 20 * min), limit_waits: 1, reason: "usage limit: You've hit your weekly limit; continues after the reset" }),
+            job({ id: "20261120-110001-cooking-r5t6y", state: "inbox", channel: "Cooking", title: "The perfect boiled egg", submitted_at: iso(3 * hr) }),
+            job({ id: "20261120-080000-cooking-h3j4k", state: "failed", channel: "Cooking", title: "Knife skills for beginners", started_at: iso(8 * hr), finished_at: iso(5 * hr), reason: "timed out after 180m", pulled: true }),
+          ],
+          activity: {} },
+        { name: "vps4", channels: ["Nature"], sessions: 1, reachable: true,
+          status: status({ disk_free_gb: 74.9, queue: { inbox: 0, running: 0, done: 7, failed: 0, unpulled: 1 } }),
+          jobs: [
+            job({ id: "20261120-130000-nature-w1e2r", state: "done", channel: "Nature", title: "How octopuses change colour", started_at: iso(2 * hr), finished_at: iso(25 * min) }),
+          ],
+          activity: {} },
+        { name: "vps5", channels: ["Mysteries"], sessions: 1, reachable: false, error: "ssh: connect to host vps5 port 22: Connection timed out" },
+      ],
+    };
+  }
+
+  if (LIVE) {
+    poll();
+    setInterval(poll, POLL_MS);
+  } else {
+    snap = exampleLot();
+    render();
+    // The example takes a fresh look every 20 seconds too, so its clocks stay believable.
+    setInterval(() => { snap.generated_at = new Date().toISOString(); render(); }, 20000);
+  }
+  setInterval(tick, 1000);
+})();
+</script>

@@ -191,6 +191,25 @@ fleet resume TARGETS
 the queue again, and also ends a usage-limit wait early. Both need `TARGETS`; use `all`
 for every VPS.
 
+### fleet studio
+
+```
+fleet studio [--tailnet] [--port PORT] [--every SECONDS] [--no-browser] [--json]
+```
+
+Opens a page in your browser that shows every VPS at work, like a film lot seen from
+above: what each Claude session is doing now, what waits and what finished today. It
+looks at the VPSs every 20 seconds, only watches, and runs until you press Ctrl+C. See
+[The studio](../operations/studio.md).
+
+| Option | Meaning |
+| --- | --- |
+| `--tailnet` | Open it on your PC's Tailscale address instead of `127.0.0.1`, so that your phone and your other devices can watch too. |
+| `--port PORT` | The port on your PC. Default 8740. |
+| `--every SECONDS` | How often it looks at the VPSs. Default 20, at least 5. |
+| `--no-browser` | Do not open the browser. |
+| `--json` | Look once, print what it saw as JSON, and exit. |
+
 ## Setup and maintenance
 
 ### fleet init

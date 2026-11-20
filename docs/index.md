@@ -34,6 +34,9 @@ flowchart LR
 - **Usage limits are handled.** When a Claude account reaches its 5-hour or weekly
   limit, that VPS waits for the reset and then continues the same Claude session.
   New jobs for its channel wait there too, unless you move them.
+- **Watch it work.** `fleet studio` opens a page that shows the whole fleet like a film
+  lot seen from above: every VPS is a sound stage, with what its Claude session is
+  doing right now. See [The studio](operations/studio.md).
 
 ## Where to start
 
@@ -52,7 +55,7 @@ flowchart LR
 
 | Folder | What it holds |
 | --- | --- |
-| `home/` | Everything that runs on your PC: the `fleet` command, the installers for Windows and for Linux or macOS, Hermes' personality (`SOUL.md`) and its two fleet skills, and templates for your settings and secrets. |
+| `home/` | Everything that runs on your PC: the `fleet` command, the studio page, the installers for Windows and for Linux or macOS, Hermes' personality (`SOUL.md`) and its two fleet skills, and templates for your settings and secrets. |
 | `vps/` | Everything that runs on a VPS: the first-time setup script, the lockdown script, the job worker and the Claude Code provider. The `fleet` command copies this folder to each VPS. |
 | `jobs/examples/` | Sample job files. |
 | `docs/` | This site. |

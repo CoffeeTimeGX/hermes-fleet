@@ -92,6 +92,7 @@ nav:
       - Add another provider: providers/adding-a-provider.md
   - Running the fleet:
       - Everyday use: operations/everyday.md
+      - The studio: operations/studio.md
       - Job format: operations/job-format.md
       - Results: operations/results.md
       - Usage limits: operations/usage-limits.md

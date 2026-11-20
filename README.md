@@ -24,6 +24,8 @@ flowchart LR
   (`fleet handover`).
 - **Usage limits are handled.** A VPS that reaches its Claude limit waits for the reset,
   then continues the same session. New jobs for its channel wait there too.
+- **Watch it work.** `fleet studio` opens a page that shows every VPS at work, like a
+  film lot seen from above.
 
 ## Quick start
 
@@ -47,7 +49,7 @@ Hermes' model and Telegram, Tailscale, the five VPSs, and a first test job on ea
 
 | Folder | What it holds |
 | --- | --- |
-| `home/` | What runs on your PC: the `fleet` command, the installers, Hermes' `SOUL.md` and its two fleet skills, and templates for your settings and secrets. |
+| `home/` | What runs on your PC: the `fleet` command, the studio page, the installers, Hermes' `SOUL.md` and its two fleet skills, and templates for your settings and secrets. |
 | `vps/` | What runs on a VPS: the setup and lockdown scripts, the job worker and the Claude Code provider. `fleet` copies this folder to each VPS. |
 | `jobs/examples/` | Example jobs. |
 | `docs/` | The documentation site. |

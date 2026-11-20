@@ -26,8 +26,7 @@ reach the PC or each other.
 | The `fleet` CLI, the VPS worker, the Claude provider, the bootstrap and lockdown scripts, the Windows and Linux/macOS installers, Hermes' `SOUL.md` and two skills | Running the installer on the owner's PC |
 | Tests: unit, local end to end, and a fake Hostinger VPS over real SSH | Tailscale set-up and provisioning the five real VPSs |
 | This documentation site, with runbooks | The channel templates: `CLAUDE.md` files and Claude Code skills per channel in `vps/templates/`. The owner keeps this for a later step. |
-| | Optional: the Hostinger API MCP servers for Hermes |
-| | The studio view: a private page where the owner watches every VPS at work, from above |
+| The studio (`fleet studio`): a page on the owner's PC that shows every VPS at work, from above | Optional: the Hostinger API MCP servers for Hermes |
 
 When you help with the set-up, follow [Getting started](getting-started.md) in order. The
 owner can give you their PC through Remote Control; the VPSs are reached only through
@@ -38,6 +37,7 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 | Path | What it is |
 | --- | --- |
 | `home/bin/fleet` | The CLI. One Python file, standard library only, Python 3.9+, Windows, Linux and macOS. |
+| `home/studio/studio.html` | The studio page. `fleet studio` serves it from the PC with live data. Opened as a plain file, it shows an example lot. |
 | `home/install.ps1`, `home/install.sh` | The PC installers: Git (Windows), Python, Tailscale, Hermes, then `fleet init`. |
 | `home/hermes/SOUL.md`, `home/hermes/skills/fleet/*/SKILL.md` | Hermes' personality and its `fleet-ops` and `fleet-provision` skills. |
 | `home/fleet.ini.example`, `home/secrets.example/`, `home/hermes/env.example` | Templates with empty values. The real files live outside the repository. |
@@ -82,6 +82,10 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 - **One Claude account per VPS, used openly.** Never add anything that hides the link
   between the accounts or rotates accounts to get around limits. See
   [Claude accounts](providers/claude-accounts.md).
+- **The studio only reads.** `fleet studio` listens on `127.0.0.1`, or on the PC's
+  Tailscale address with `--tailnet`, answers only requests addressed to those names,
+  and has nothing that changes the fleet. Actions go through `fleet` commands and the
+  director.
 - **The scheduled checks stay quiet when all is well.** `fleet health --changes-only` and
   `fleet pull --quiet` print nothing then; Hermes delivers only what they print.
 - **Hermes asks before anything irreversible**: lockdown, rebuilds, reboots with jobs,

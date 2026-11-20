@@ -149,6 +149,16 @@ The log shows the Claude Code version, how the session signed in, and how it end
 The full record of what the session did is `logs/transcript.jsonl`, which comes with
 the results.
 
+To watch the whole fleet at once, open the studio:
+
+```
+fleet studio
+```
+
+Your browser shows every VPS as a sound stage, with what each session is doing right
+now, and it refreshes by itself. `fleet studio --tailnet` lets your phone watch too. See
+[The studio](studio.md).
+
 ## Collect the results
 
 ```
@@ -218,6 +228,7 @@ jobs for its channel wait there too, unless you move them with `fleet handover`.
 
 ## Where to go next
 
+- [The studio](studio.md): watch every VPS at work in your browser.
 - [Job format](job-format.md): every setting a job can have.
 - [Scheduled checks](scheduled-checks.md): what Hermes checks and when it messages you.
 - [Runbooks](../runbooks/index.md): what to do when something goes wrong.

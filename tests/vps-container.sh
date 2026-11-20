@@ -70,6 +70,7 @@ VX() { docker exec "$NAME" "$@"; }                    # run on the fake VPS as r
 # grep stops reading before docker exec has written everything.
 VO() { VX "$@" 2>/dev/null || true; }
 J() { F jobs vps1 --json | jq -e "$@"; }
+S() { F studio --json | jq -e "$@"; }   # S '<jq filter over one look of fleet studio>'
 
 echo "== home machine: fleet init"
 F init --no-hermes >"$T/init.txt"
@@ -92,7 +93,7 @@ wait_for 20 F ping vps1 && fail "ping as fleet works before bootstrap" || pass "
 echo "== bootstrap over the public address"
 F bootstrap vps1 --public --skip-upgrade >"$T/bootstrap.txt" 2>&1 || { tail -n 60 "$T/bootstrap.txt"; fail "bootstrap"; }
 pass "fleet bootstrap vps1 --public finished"
-grep -q "worker: *active (version 1.3.0)" "$T/bootstrap.txt" && pass "bootstrap starts the worker" || fail "worker not active"
+grep -q "worker: *active (version 1.4.0)" "$T/bootstrap.txt" && pass "bootstrap starts the worker" || fail "worker not active"
 F ping vps1 >/dev/null && pass "the fleet user logs in with the key" || fail "ping"
 [[ "$(VX cat /etc/hostname)" == vps1 ]] && pass "hostname set" || fail "hostname"
 [[ "$(VO grep -c '^127\.0\.1\.1 vps1$' /etc/hosts)" == 1 ]] && pass "/etc/hosts names the node" || fail "/etc/hosts"
@@ -148,10 +149,15 @@ id3="$(F dispatch --prompt "episode three" --channel History --json | jq -r '.[0
 wait_for 60 J --arg c "$id3" '.[] | select(.id == $c) | .state == "done"' || fail "job 3"
 FLEET_PULL_METHOD=tar F pull >/dev/null && [[ -s "$T/results/vps1/$id3/output/SUMMARY.txt" ]] \
   && pass "pull (tar, as on Windows) works too" || fail "tar pull"
+id4="$(F dispatch --prompt "SLEEP while the studio looks" --channel "Space Facts" --json | jq -r '.[0].id')"
+wait_for 60 S --arg id "$id4" '.nodes[0].reachable and .nodes[0].activity[$id].detail == "Render the test video"' \
+  && pass "studio over SSH shows what a running session does" || { F studio --json; fail "studio"; }
+has "SIGTERM" F cancel vps1 "$id4" || fail "cancel the studio job"
+wait_for 30 J --arg d "$id4" '.[] | select(.id == $d) | .state == "failed"' || fail "the studio job did not stop"
 
 echo "== maintenance"
 pid_before="$(VX cat /run/fleet-worker.pid)"
-has "synced worker 1.3.0" F sync vps1 && pass "sync pushes the code" || fail "sync"
+has "synced worker 1.4.0" F sync vps1 && pass "sync pushes the code" || fail "sync"
 wait_for 10 bash -c "[[ \"\$(docker exec $NAME cat /run/fleet-worker.pid)\" != $pid_before ]]" \
   && pass "sync restarts the worker" || fail "worker not restarted"
 [[ "$(F exec vps1 --root -- id -u | sed -n 2p)" == 0 ]] && pass "exec --root works" || fail "exec --root"
