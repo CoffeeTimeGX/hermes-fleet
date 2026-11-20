@@ -1,10 +1,10 @@
 # Hermes Fleet
 
 One [Hermes Agent](https://hermes-agent.nousresearch.com/) on your home PC runs a fleet
-of five Hostinger VPSs. Each VPS runs Claude Code sessions that make videos for all of
-your channels. You talk to Hermes in the terminal or on Telegram; it queues the work,
-spreads it over the VPSs, watches them, collects the finished videos and tells you what
-happened.
+of five Hostinger VPSs. Each VPS runs Claude Code sessions that make the videos of its
+own channel. You talk to Hermes in the terminal or on Telegram; it queues each video on
+its channel's VPS, watches the VPSs, collects the finished videos and tells you what
+happened. Hermes runs on a model you choose from another provider, not on Claude.
 
 **Documentation: <https://coffeetimegx.github.io/hermes-fleet/>**
 
@@ -20,8 +20,10 @@ flowchart LR
 - **Work continues while your PC is off.** Each VPS keeps its own queue and results.
 - **Nothing is open to the internet.** SSH reaches the VPSs only over your private
   Tailscale network, and the VPSs cannot reach your PC or each other.
+- **One channel per VPS.** Work moves to another VPS only when you say so
+  (`fleet handover`).
 - **Usage limits are handled.** A VPS that reaches its Claude limit waits for the reset,
-  then continues the same session, while the other VPSs take the new work.
+  then continues the same session. New jobs for its channel wait there too.
 
 ## Quick start
 
@@ -39,7 +41,7 @@ cd ~/hermes-fleet && ./home/install.sh
 ```
 
 Then follow [Getting started](https://coffeetimegx.github.io/hermes-fleet/getting-started/):
-Hermes' API key and Telegram, Tailscale, the five VPSs, and a first test job on each.
+Hermes' model and Telegram, Tailscale, the five VPSs, and a first test job on each.
 
 ## What is in the repository
 

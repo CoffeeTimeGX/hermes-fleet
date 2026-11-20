@@ -10,7 +10,7 @@ once and never overwrites them.
 | `~/.config/fleet/secrets/` | Credentials for the VPSs: Claude, Tailscale. |
 | `~/.ssh/fleet_ed25519` and `.pub` | The fleet SSH key. |
 | `~/.ssh/config.d/fleet` | SSH settings, so `ssh vps1` works. |
-| Hermes' folder | Hermes' settings, its `.env` with its own secrets, `SOUL.md`, scripts. |
+| The director's folder in Hermes | The director's settings, its `.env` with its own secrets, `SOUL.md`, scripts. |
 | `~/.config/fleet/state/health.json` | What the scheduled health check last reported. |
 
 On Windows, `~` is your user folder, `C:\Users\<you>`.
@@ -34,7 +34,7 @@ public_ip = 203.0.113.10
 hostinger_account = hostinger-account-1
 providers = claude
 sessions = 1
-channels = all
+channels = Space Facts
 enabled = true
 ```
 
@@ -60,14 +60,15 @@ letters, digits and dashes, such as `vps1`.
 | `hostinger_account` | empty | A label to remember which Hostinger account owns the VPS. |
 | `providers` | `claude` | The tools this VPS runs, comma-separated. `fleet dispatch` only sends a job to VPSs that list its provider. |
 | `sessions` | `1` | How many jobs run at the same time. After a change, run `fleet bootstrap <vps> --skip-upgrade`. |
-| `channels` | `all` | A note of which channels this VPS mostly serves. Informational. |
+| `channels` | `all` when the line is missing | The channels this VPS makes videos for, comma-separated, such as `Space Facts, History`. `fleet dispatch` sends a channel's jobs only to the VPS that names it (capitals, spaces and `-` do not matter), and they wait there when it is busy, paused or at its usage limit. When several VPSs name a channel, the least busy one gets each job. `all` takes every channel that no other VPS names. Empty: only jobs sent to it with `--to`. Work moves to another VPS only with `fleet handover` or `--to`. |
 | `enabled` | `true` | `false` takes the VPS out of `all` and out of dispatching, without deleting anything. Commands that name it still work. |
 
 Text after `;` or `#` is a comment.
 
 ### Add a sixth VPS
 
-1. Add a `[vps6]` section, copied from another one, with the new public IP.
+1. Add a `[vps6]` section, copied from another one, with the new public IP and the
+   channel it makes videos for.
 2. Run `fleet init` again: it creates `secrets/vps6/claude.env` and leaves everything
    else as it is.
 3. Create the VPS and provision it as for the first five: [Create the VPSs](../vps/hostinger.md),
@@ -130,30 +131,34 @@ leaves any other setting you add there alone:
 ## Hermes
 
 Hermes keeps its files in `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` on Linux and
-macOS.
+macOS. The director is a Hermes profile with a folder of its own in there,
+`profiles/director` (`hermes profile show director` prints the full path). Everything
+below is in the director's folder: your default Hermes is left alone.
 
-`fleet init` applies the director's settings with `hermes config set`, after a backup of
-`config.yaml` (`config.yaml.bak-<date>`). Lists are extended, never replaced:
+`fleet init` creates the profile when it is missing, then applies the director's
+settings with `hermes -p director config set`, after a backup of `config.yaml`
+(`config.yaml.bak-<date>`). Lists are extended, never replaced. It leaves the model
+alone: you choose the director's provider and model with `hermes -p director model`,
+which sets `model.provider` and `model.default`.
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| `model.provider`, `model.default` | `anthropic`, `claude-opus-5-5` | The director's model. Skipped with `fleet init --keep-model`. |
 | `terminal.cwd` | the repository folder | Hermes runs `fleet` and reads the runbooks from there. |
 | `terminal.timeout` | at least 900 | Some fleet commands, such as a bootstrap, take minutes. |
 | `skills.external_dirs` | adds `home/hermes/skills` | Hermes finds the `fleet-ops` and `fleet-provision` skills. |
 | `skills.auto_load` | adds `fleet-ops` | The everyday skill is always at hand. |
-| `approvals.deny` | adds three patterns | Hermes may never run `fleet exec all ... rm -rf`, nor read the secrets folder or its own `.env`. |
+| `approvals.deny` | adds four patterns | Hermes may never run `fleet exec all ... rm -rf`, nor read the secrets folder or a Hermes `.env`, the director's own included. |
 
-It also copies `home/hermes/SOUL.md` into Hermes' folder (keeping a backup of a
+It also copies `home/hermes/SOUL.md` into the director's folder (keeping a backup of a
 different one) and writes the two scheduled-check scripts into its `scripts/` folder.
 
-**Hermes' `.env`** holds Hermes' own secrets. Set each one with
-`hermes config set NAME value`:
+**The director's `.env`** holds its own secrets. Set each one with
+`hermes -p director config set NAME value`:
 
 | Variable | Meaning |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | The director's Console API key. |
-| `TELEGRAM_BOT_TOKEN` | Your bot's token from @BotFather. |
+| Your model provider's key, such as `OPENROUTER_API_KEY` | The key the director's model runs on, if your provider uses one. `hermes -p director model` writes it under the provider's own name. |
+| `TELEGRAM_BOT_TOKEN` | Your bot's token from @BotFather. A token works in one profile only. |
 | `TELEGRAM_ALLOWED_USERS` | Your numeric Telegram user id: the only person the bot answers. |
 | `TELEGRAM_HOME_CHANNEL` | Where scheduled messages go; `/sethome` sets it. |
 | `HOSTINGER_TOKEN_ACCOUNT_1` to `_5` | Optional Hostinger API tokens, one per account. See [Hostinger API](../home/hostinger-api.md). |

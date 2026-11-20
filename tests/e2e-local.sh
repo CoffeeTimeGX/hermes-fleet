@@ -62,7 +62,7 @@ start_worker() {
 
 echo "== inventory, code and credentials"
 check "list shows the inventory" bash -c "python3 '$REPO/home/bin/fleet' --config '$T/fleet.ini' list | grep -q vps3"
-[[ "$(F sync | grep -c 'synced worker 1.2.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
+[[ "$(F sync | grep -c 'synced worker 1.3.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
 for n in vps1 vps2 vps3; do printf 'ANTHROPIC_API_KEY=sk-test\n# CLAUDE_CODE_OAUTH_TOKEN=\n' >"$T/secrets/$n/claude.env"; done
 chmod 600 "$T"/secrets/*/claude.env
 chmod 644 "$T/secrets/vps1/claude.env"
@@ -191,6 +191,76 @@ lim2="$(F dispatch --prompt "LIMIT2 short job" --channel Limits --to vps2 --json
 wait_for 30 J --arg id "$lim2" '.[] | select(.id == $id) | .state == "done" and .limit_waits == 1' \
   && pass "the hold ends by itself when the limit resets" || fail "limit expiry"
 check "no hold is left behind" test ! -e "$T/nodes/vps2/.limit"
+
+echo "== one channel per VPS, and handover"
+cat >"$T/fleet-ch.ini" <<EOF
+[defaults]
+transport = local
+remote_root = $T/nodes/{node}
+results_dir = $T/results
+secrets_dir = $T/secrets
+ssh_key = $T/no-key
+[vps1]
+host = vps1
+channels = Space Facts
+[vps2]
+host = vps2
+channels = History, all
+[vps3]
+host = vps3
+channels =
+EOF
+FC() { python3 "$REPO/home/bin/fleet" --config "$T/fleet-ch.ini" "$@"; }
+W1="$T/nodes/vps1" W2="$T/nodes/vps2"
+has " on vps1 " FC dispatch --prompt "own channel" --channel "space facts" \
+  && pass "a channel's job goes to its own VPS (names match loosely)" || fail "channel dispatch"
+has " on vps2 " FC dispatch --prompt "shared" --channel Cooking \
+  && pass "a channel without a VPS of its own goes to one with channels = all" || fail "channels = all"
+F pause vps1 >/dev/null
+sf_id="$(FC dispatch --prompt "waits for its VPS" --channel "Space Facts" --json 2>"$T/warn.txt" | jq -r '.[0].id')"
+check "a channel's job is queued on its own VPS even when it is paused" grep -q "vps1: paused" "$T/warn.txt"
+[[ "$(state_of "$sf_id")" == "inbox" ]] && pass "and nothing moves it to another VPS" || fail "the job moved by itself"
+mkdir -p "$W1/work/half1/output"
+echo "half a video" >"$W1/work/half1/output/part.txt"
+echo '{"id": "half1", "state": "waiting", "attempts": 0, "limit_waits": 1}' >"$W1/work/half1/status.json"
+echo '{"prompt": "half done", "channel": "Space Facts"}' >"$W1/jobs/inbox/half1.json"
+out="$(FC handover vps1 vps2 --dry-run)"
+grep -q "would move $sf_id" <<<"$out" && grep -q "would move half1" <<<"$out" && [[ -f "$W1/jobs/inbox/half1.json" ]] \
+  && pass "handover --dry-run lists the queued jobs and moves nothing" || fail "dry run: $out"
+out="$(FC handover vps1 vps2 2>&1)"
+grep -q "moved $sf_id (channel Space Facts) from vps1 to vps2" <<<"$out" && pass "handover moves the queued jobs" || fail "handover: $out"
+grep -q "it had started on vps1, so it starts over on vps2" <<<"$out" && pass "handover says when a job starts over" || fail "$out"
+grep -q "note: only these jobs moved" <<<"$out" && pass "handover says the channel keeps its VPS" || fail "$out"
+wait_for 30 J --arg id "$sf_id" '.[] | select(.id == $id) | .node == "vps2" and .state == "done"' \
+  && pass "a handed-over job runs on the new VPS" || fail "handed-over job"
+check "nothing of it is left on the old VPS" bash -c "! ls '$W1'/jobs/*/'$sf_id'.json"
+check "the job says where it came from" jq -e '.handed_over_from == "vps1" and .node == "vps2"' "$W2/jobs/done/$sf_id.json"
+check "a job that had started is filed as moved on the old VPS" \
+  J '.[] | select(.id == "half1" and .node == "vps1") | .state == "moved" and (.reason | test("handed over to vps2"))'
+wait_for 30 J '.[] | select(.id == "half1" and .node == "vps2") | .state == "done"' \
+  && pass "and it starts over on the new one" || fail "half1 on vps2"
+out="$(F pull)"
+grep -q "\[MOVED\] vps1/half1" <<<"$out" && [[ -s "$T/results/vps1/half1/output/part.txt" ]] \
+  && pass "pull brings home what a job made before it moved" || fail "pull after handover: $out"
+bh="$(F dispatch --prompt "broken handover" --channel "Space Facts" --to vps1 --json 2>/dev/null | jq -r '.[0].id')"
+env FLEET_ROOT="$W1" FLEET_NODE=vps1 "$W1/app/worker/fleet-worker" release "$bh" vps2 >"$T/bh.json"
+check "a handover that stopped halfway shows in fleet jobs" \
+  J --arg id "$bh" '.[] | select(.id == $id) | .state == "outgoing" and .reason == "being handed over to vps2"'
+touch -d '-11 minutes' "$W1/jobs/outgoing/$bh.json"
+has "1 job(s) stopped halfway through a handover" F health && pass "health reports it" || fail "stuck handover in health"
+has "halfway through a handover to vps2" FC handover vps1 vps3 "$bh" \
+  && pass "meanwhile it cannot be handed to a third VPS" || fail "third VPS"
+jq -c '. + {node: "vps2", handed_over_from: "vps1", handed_over_at: .handover.at} | del(.handover)' "$T/bh.json" \
+  >"$W2/jobs/inbox/$bh.json"
+has "moved $bh" FC handover vps1 vps2 "$bh" && pass "running the same handover again finishes it" || fail "finish handover"
+[[ "$(find "$T/nodes" -path '*/jobs/*' -name "$bh.json" | wc -l)" == 1 ]] && pass "without a second copy" || fail "two copies"
+F pause vps2 >/dev/null
+dup="$(F dispatch --prompt "name clash" --channel History --to vps2 --json 2>/dev/null | jq -r '.[0].id')"
+mkdir -p "$W1/work/$dup" && echo '{"prompt": "an older job with the same id"}' >"$W1/jobs/done/$dup.json"
+has "as $dup-h1" FC handover vps2 vps1 "$dup" && pass "a job whose id is taken on the new VPS gets a new one" || fail "rename"
+check "the renamed job waits there" J --arg id "$dup-h1" '.[] | select(.id == $id) | .node == "vps1" and .state == "inbox"'
+F resume vps1,vps2 >/dev/null
+wait_for 30 J --arg id "$dup-h1" '.[] | select(.id == $id) | .state == "done"' && pass "and runs once resumed" || fail "renamed job"
 
 echo "== recovery after a crash or reboot"
 W1="$T/nodes/vps1"

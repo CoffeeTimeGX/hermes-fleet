@@ -18,9 +18,11 @@ nothing on this page happens. See [Claude accounts](../providers/claude-accounts
    `usage limit: ... continues after <time>`. It does not count as a failed attempt.
 4. **The VPS holds its queue.** It starts no job at all until one minute after the
    reset. Jobs that are already running on a VPS with several sessions carry on.
-5. **Your other VPSs take the new work.** `fleet dispatch` skips a VPS that waits for
-   its limit, as long as another VPS can start the job. If every VPS waits, it queues the
-   job on the one whose limit ends first.
+5. **New jobs for its channel wait there too.** Each VPS makes its own channel's videos,
+   so `fleet dispatch` still queues them on that VPS, and they start after the reset.
+   Work never moves to another VPS by itself. When the wait is long, for example at a
+   weekly limit, you can move the queue yourself with `fleet handover` (see
+   [Move work to another VPS](everyday.md#move-work-to-another-vps)).
 6. **After the reset, the job continues.** The VPS starts it again, and the adapter
    resumes the same Claude session (`claude --resume`) with the instruction to check
    what it already made and finish the rest. The files from before the limit are still
@@ -55,10 +57,12 @@ messages you only about a wait longer than 6 hours, which means a weekly limit:
 
 ```
 Fleet health: 1 open problem(s)
-NEW  vps3: claude usage limit reached (You've hit your weekly limit); its queue waits until Fri 20 Nov 09:00 and then continues by itself (fleet dispatch sends new jobs to other VPSs meanwhile)
+NEW  vps3: claude usage limit reached (You've hit your weekly limit); its queue waits until Fri 20 Nov 09:00 and then continues by itself (new History jobs wait there too, unless you move them with fleet handover)
 ```
 
-When the wait ends, you get a `Resolved` message.
+When the wait ends, you get a `Resolved` message. To move vps3's queue to vps4 in the
+meantime, tell the director *"Move vps3's waiting jobs to vps4"*, or run
+`fleet handover vps3 vps4` yourself.
 
 ## End a wait early
 
@@ -72,12 +76,13 @@ there, the next job meets it again and the wait comes back by itself.
 
 ## Make the limits hurt less
 
-- **Spread the work.** Leave the choice of VPS to `fleet dispatch`. Five accounts with a
-  share each go further than one account doing everything.
+- **Share the channels out.** Each VPS makes the videos of the channels its `channels`
+  line names. Give a busy channel a VPS of its own, and put quieter channels together on
+  one VPS, so that each account carries a fair share.
 - **Watch the heavy settings.** Higher `effort` levels and bigger models use up a limit
   faster. Keep them for the jobs that need them (see [Job format](job-format.md)).
-- **Split long jobs.** A job that stops at a limit continues later, but several shorter
-  jobs spread more evenly over the five accounts.
+- **Split long jobs.** A job that stops at a limit continues later, but shorter jobs are
+  cut off halfway less often.
 - **Move a busy VPS to an API key** when one account is not enough. See
   [Switch a VPS to an API key](../providers/claude-accounts.md#switch-a-vps-to-an-api-key).
 

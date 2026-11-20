@@ -85,25 +85,29 @@ Checks each job and queues it. Wildcards such as `jobs/*.json` work in every she
 
 | Option | Meaning |
 | --- | --- |
-| `--to auto` | The default: the least busy VPS that can start the job now. If every VPS waits for a usage limit, the one whose limit ends first. |
+| `--to auto` | The default: the VPS that makes videos for the job's channel (`channels` in your inventory), or the least busy of them when several do. The job waits there when that VPS is busy, paused or at its usage limit. A channel that no VPS names goes to the least busy ready VPS with `channels = all`. |
 | `--to all` | One copy on every reachable VPS that offers the job's provider. Each copy's id ends in the VPS's name. |
-| `--to vps2` or `--to vps2,vps4` | The least busy of these VPSs. When none of them is ready, the job is queued anyway, with a warning. |
+| `--to vps2` or `--to vps2,vps4` | The least busy of these VPSs, whatever channels they make (you get a note when the VPS does not make the job's channel). When none of them is ready, the job is queued anyway, with a warning. |
 | `--channel C`, `--provider P` | Replace that field in every job of this command. |
 | `--prompt "TEXT"` | Make a job from this text instead of a file. |
 | `--dry-run` | Print each job as it would be queued, without contacting any VPS. |
 | `--json` | Print the queued jobs as JSON: node, id and channel. |
 
-A VPS can take a job when it is reachable, its worker is active, it is not paused, low
-on disk or waiting for a usage limit, and the job's provider is installed and working
-on it. See [Job format](../operations/job-format.md) for the file.
+Work never moves to another VPS by itself: only `--to`, `fleet retry --to` and
+`fleet handover` move it. A job is refused, with the reason, when no VPS makes its
+channel, when its channel's VPS is unreachable, or when the job's provider is not
+installed or has no credentials there, because the job would only fail. See
+[Job format](../operations/job-format.md) for the file.
 
 ### fleet jobs
 
 ```
-fleet jobs [TARGETS] [--state inbox|running|done|failed] [--json]
+fleet jobs [TARGETS] [--state inbox|outgoing|running|done|failed|moved] [--json]
 ```
 
 Every job on the VPSs, with its state, times (UTC) and the reason a job failed or waits.
+`outgoing` is a job that `fleet handover` is moving to another VPS, and `moved` is what a
+job made on a VPS before it was handed over (it waits for the pull).
 `(pulled)` marks jobs your PC already has. `--json` adds every field, including
 `duration_s`, `exit_code`, `attempts`, `limit_waits` and the last lines of a failed job's
 log (`log_tail`).
@@ -123,8 +127,8 @@ Ctrl+C. A job that is still waiting in the queue has no log yet.
 fleet cancel NODE JOB_ID
 ```
 
-Removes a waiting job from the queue, or stops a running one. Either way it is filed as
-`failed` with the reason `cancelled`.
+Removes a waiting job from the queue (also one that is `outgoing`), or stops a running
+one. Either way it is filed as `failed` with the reason `cancelled`.
 
 ### fleet retry
 
@@ -134,9 +138,36 @@ fleet retry NODE JOB_ID [--to TARGET]
 
 Queues a fresh copy of a finished or failed job, from the `job.json` in its workspace.
 The copy's id ends in `-r1` (`-r2` for a retry of a retry), and it records `retry_of`.
-It goes to the same VPS unless `--to` says otherwise (`--to auto` lets the least busy
-one take it). The workspace must still be on the VPS: it is deleted 7 days after the job
-was pulled.
+It goes to the same VPS unless `--to` says otherwise (`--to auto` sends it to the VPS
+that makes its channel). The workspace must still be on the VPS: it is deleted 7 days
+after the job was pulled.
+
+### fleet handover
+
+```
+fleet handover FROM TO [JOB_ID ...] [--dry-run]
+```
+
+Moves queued jobs from one VPS to another. Use it only when you want another VPS to make
+them: nothing else moves work between VPSs. Without job ids, it moves every job that
+waits in FROM's queue. `--dry-run` shows what would move, and moves nothing.
+
+- The jobs keep their ids and wait in TO's queue. When TO already has a job with the
+  same id, the moved one gets `-h1` at the end (then `-h2`, and so on).
+- Running jobs stay on FROM. To move one anyway: `fleet cancel FROM JOB_ID`, then
+  `fleet retry FROM JOB_ID --to TO`.
+- A job that had already started on FROM, for example one that waits for a usage limit,
+  starts over on TO. What it made on FROM is filed as `moved` and comes home with the
+  next `fleet pull`, marked `[MOVED]`.
+- Both VPSs must answer. A job stays on FROM when TO does not offer its provider, or when
+  that provider is not installed or has no credentials on TO.
+- New jobs for the channel still go to the VPS that your inventory names for it. To give
+  a channel to another VPS for good, change `channels` (see
+  [Configuration](config.md#fleetini)).
+- If a move breaks halfway, for example when the connection drops, the job shows as
+  `outgoing` on FROM and does not run there. Run the same `fleet handover` again: it
+  finishes the move and never makes a second copy. `fleet health` reports a job that
+  stays `outgoing` for more than 10 minutes.
 
 ### fleet pull
 
@@ -165,7 +196,7 @@ for every VPS.
 ### fleet init
 
 ```
-fleet init [--keep-model] [--no-hermes]
+fleet init [--no-hermes]
 ```
 
 Sets up your PC; the installers run it. It never overwrites a file you already have:
@@ -176,11 +207,13 @@ Sets up your PC; the installers run it. It never overwrites a file you already h
 - creates the fleet SSH key (`~/.ssh/fleet_ed25519`, no passphrase) and an SSH config,
   so `ssh vps1` works,
 - installs the `fleet` command in `~/.local/bin`,
-- sets up Hermes: copies `SOUL.md`, writes the two scheduled-check scripts, and applies
-  the director's settings. See [Configuration](config.md#hermes).
+- sets up Hermes: creates the Hermes profile `director` if it is missing, then copies
+  `SOUL.md` into it, writes the two scheduled-check scripts, and applies the director's
+  settings. See [Configuration](config.md#hermes).
 
-`--keep-model` leaves Hermes' model setting alone. `--no-hermes` skips the Hermes part.
-Running `fleet init` again is safe.
+It leaves the director's model alone (choose it with `hermes -p director model`) and
+prints the one it uses. `--no-hermes` skips the Hermes part. Running `fleet init` again
+is safe.
 
 ### fleet doctor
 
@@ -188,10 +221,11 @@ Running `fleet init` again is safe.
 fleet doctor
 ```
 
-Checks your PC: Python, the SSH client, Git (and Git Bash on Windows), Hermes, Tailscale,
-`~/.local/bin` on your PATH, the inventory, the SSH key, the secrets files, whether each
-VPS name resolves, and Hermes' working folder. Exits with 1 when a required check fails;
-warnings do not fail it.
+Checks your PC: Python, the SSH client, Git (and Git Bash on Windows), Hermes and its
+`director` profile, the director's working folder and model, Tailscale, `~/.local/bin`
+on your PATH, the inventory, the channel of each VPS, the SSH key, the secrets files and
+whether each VPS name resolves. Exits with 1 when a required check fails; warnings do
+not fail it.
 
 ### fleet hermes-cron
 
@@ -199,9 +233,9 @@ warnings do not fail it.
 fleet hermes-cron [--deliver TARGET]
 ```
 
-Creates the three scheduled Hermes jobs, unless they already exist. `--deliver` says
-where their messages go; the default is `telegram`. See
-[Scheduled checks](../operations/scheduled-checks.md).
+Creates the three scheduled Hermes jobs in the `director` profile, unless they already
+exist (`hermes -p director cron list` shows them). `--deliver` says where their messages
+go; the default is `telegram`. See [Scheduled checks](../operations/scheduled-checks.md).
 
 ### fleet list
 
@@ -338,5 +372,5 @@ IP). Use it after a rebuild, when SSH warns that the host identification has cha
 | `FLEET_STATE_DIR` | Where `fleet health --changes-only` keeps its memory. Default `~/.config/fleet/state`. |
 | `FLEET_TZ` | The default for `fleet bootstrap --tz`. |
 | `FLEET_PULL_METHOD` | `tar` makes `fleet pull` use a compressed archive over SSH instead of rsync. |
-| `HERMES_HOME` | Hermes' folder, if it is not in the default place. |
+| `HERMES_HOME` | Hermes' main folder (its default profile), if it is not in the default place. |
 | `FLEET_TRANSPORT` | `local` runs every command on this computer instead of over SSH. For the tests only. |

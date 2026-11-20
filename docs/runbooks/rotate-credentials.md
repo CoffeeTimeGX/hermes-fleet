@@ -9,10 +9,10 @@ included.
 | --- | --- | --- |
 | Claude subscription token of a VPS | `~/.config/fleet/secrets/<vps>/claude.env` | Once a year (`fleet health` warns a month before), or if it leaked |
 | Claude API key of a VPS | the same file | If it leaked, or when you stop using it |
-| Hermes' own API key | Hermes' `.env` | If it leaked |
+| The director's model provider key | The director's `.env` | If it leaked |
 | Tailscale auth key | `~/.config/fleet/secrets/tailscale.env` | When it expires and you need to set up a VPS |
-| Telegram bot token | Hermes' `.env` | If it leaked |
-| Hostinger API tokens | Hermes' `.env` | When they expire, or if one leaked |
+| Telegram bot token | The director's `.env` | If it leaked |
+| Hostinger API tokens | The director's `.env` | When they expire, or if one leaked |
 | The fleet SSH key | `~/.ssh/fleet_ed25519` | If your PC was lost, or the key leaked |
 
 ## A VPS's Claude subscription token
@@ -60,17 +60,17 @@ the old one until it ends; if you revoked that one first, the job fails and you 
 3. `fleet secrets push claude vps3`, then `fleet provider check claude vps3 --smoke`.
 4. Delete the old key in the Console.
 
-## Hermes' own API key
+## The director's model provider key
 
-1. Create a new key at [platform.claude.com](https://platform.claude.com).
-2. Give it to Hermes and restart the gateway:
+1. Create a new key with the provider the director runs on.
+2. Give it to the director with the model wizard, then restart the gateway:
 
     ```
-    hermes config set ANTHROPIC_API_KEY sk-ant-api03-...
+    hermes -p director model
     hermes gateway restart
     ```
 
-3. Ask Hermes something, then delete the old key in the Console.
+3. Ask the director something, then delete the old key at the provider.
 
 ## The Tailscale auth key
 
@@ -86,16 +86,17 @@ in it, so an expired auth key affects nothing until you set up or rejoin a VPS.
 
 1. In Telegram, send `/revoke` to **@BotFather** and choose your bot. It gives you a new
    token and the old one stops working.
-2. Run `hermes gateway setup` and enter the new token, then `hermes gateway restart`.
+2. Run `hermes -p director gateway setup` and enter the new token, then
+   `hermes gateway restart`.
 
 ## The Hostinger API tokens
 
 1. In the hPanel of the Hostinger account, open the **API** page, **API tokens** tab, and
    create a new token.
-2. Give it to Hermes, for example for the third account, and restart the gateway:
+2. Give it to the director, for example for the third account, and restart the gateway:
 
     ```
-    hermes config set HOSTINGER_TOKEN_ACCOUNT_3 <new token>
+    hermes -p director config set HOSTINGER_TOKEN_ACCOUNT_3 <new token>
     hermes gateway restart
     ```
 

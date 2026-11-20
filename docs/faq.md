@@ -23,9 +23,20 @@ sessions on one VPS reach its usage limits sooner.
 Yes. Add a section to your inventory and provision it like the others. See
 [Add a sixth VPS](reference/config.md#add-a-sixth-vps).
 
+**Which VPS makes a video?**
+The one that makes videos for the job's channel: the `channels` line of each VPS in your
+inventory. Work never moves to another VPS by itself, not even when that VPS is busy or
+at its usage limit. See [Queue work](operations/everyday.md#queue-work).
+
+**Can I move work to another VPS?**
+Yes, when you say so. Ask the director (*"Move vps2's waiting jobs to vps4"*) or run
+`fleet handover vps2 vps4`. To give a channel to another VPS for good, change `channels`
+in your inventory. See [Move work to another VPS](operations/everyday.md#move-work-to-another-vps).
+
 **What happens when a Claude account reaches its usage limit?**
 That VPS waits for the reset, then continues the interrupted job where it stopped. New
-work goes to the other VPSs meanwhile. See [Usage limits](operations/usage-limits.md).
+jobs for its channel wait there too, unless you move them with `fleet handover`. See
+[Usage limits](operations/usage-limits.md).
 
 **Where are my videos?**
 In `fleet-results/<vps>/<job-id>/output/` in your home folder, once they are pulled.
@@ -56,13 +67,16 @@ a minute. See [Claude accounts](providers/claude-accounts.md#the-two-ways-a-vps-
 
 **What does the fleet cost to run?**
 Five Hostinger VPS plans, the five Claude subscriptions (or the API usage of the VPSs
-that use keys), and Hermes' own API usage on your PC. Hermes' usage is small: the
-scheduled health checks and pulls do not use its model, only your conversations and the
-daily report do.
+that use keys), and the use of Hermes' model with the provider you chose. Hermes' usage
+is small: the scheduled health checks and pulls do not use its model, only your
+conversations and the daily report do.
 
-**Why does Hermes need an API key when the VPSs use subscriptions?**
-Anthropic does not allow third-party agents such as Hermes to sign in with a Claude
-subscription. The VPSs run Claude Code itself, which may.
+**Which model does Hermes use?**
+One you choose, from any provider Hermes supports, such as Nous Portal, OpenRouter,
+OpenAI or Google Gemini. Hermes does not use Claude. The VPSs run Claude Code with your
+Claude subscriptions, and Hermes hands them the video work through the `fleet` command.
+Choose the model with `hermes -p director model`. See
+[Windows step 4](home/windows.md#4-choose-the-directors-model).
 
 ## Making videos
 
@@ -70,6 +84,12 @@ subscription. The VPSs run Claude Code itself, which may.
 Through job templates: a folder per channel with a `CLAUDE.md` and Claude Code skills,
 copied into every job for that channel. The fleet supports them now; writing them for
 your channels is the next step. See [Templates](operations/job-format.md#templates).
+
+**Can the sessions use my Claude Projects?**
+Not directly. Claude Projects are used in the Claude apps, and Claude Code on the command
+line cannot open them. The command-line version of a project is a template folder: put
+the project's instructions in the template's `CLAUDE.md` and its reference files next to
+it. See [Templates](operations/job-format.md#templates).
 
 **Can a job use files I give it?**
 Small files go inside the job (`files`). Large assets that many jobs share, such as
@@ -94,7 +114,8 @@ See [Updates](operations/updates.md).
 
 **How do I remove the fleet?**
 On each Hostinger account, cancel or delete the VPS. In the Tailscale admin console,
-remove the VPS machines. On your PC, run `hermes cron remove` for the three fleet jobs,
-then delete the repository folder, `~/.config/fleet`, `~/fleet-results` (once you have
-kept what you want), the fleet key `~/.ssh/fleet_ed25519*` and `~/.ssh/config.d/fleet`.
-To remove Hermes too: `hermes uninstall`.
+remove the VPS machines. On your PC, delete the director with
+`hermes profile delete director` (its settings, Telegram bot settings and scheduled jobs
+go with it). Then delete the repository folder, `~/.config/fleet`, `~/fleet-results`
+(once you have kept what you want), the fleet key `~/.ssh/fleet_ed25519*` and
+`~/.ssh/config.d/fleet`. To remove Hermes too: `hermes uninstall`.

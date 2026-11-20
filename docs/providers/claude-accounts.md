@@ -22,8 +22,10 @@ keeps you on the right side of them.
 A VPS can switch from one to the other in about a minute (see
 [Switch a VPS to an API key](#switch-a-vps-to-an-api-key)).
 
-The Hermes director on your PC always uses an API key: Anthropic does not allow
-third-party agents such as Hermes to sign in with a subscription.
+The Hermes director on your PC does not use Claude at all: it runs on a model from
+another provider that you choose (see [Windows step 4](../home/windows.md#4-choose-the-directors-model)).
+Anthropic does not allow third-party agents such as Hermes to sign in with a Claude
+subscription, and this way Hermes never needs to.
 
 ## What the rules say
 
@@ -39,7 +41,8 @@ and opening new accounts to get around a ban.
 sign-ins are "designed to support ordinary use of Claude Code and other native Anthropic
 applications", and that developers building products should use API keys. The fleet's
 VPSs run the unmodified Claude Code program, signed in with your own subscription, which
-is the use that page allows. Only Hermes, a third-party agent, needs an API key.
+is the use that page allows. Hermes, a third-party agent, runs on another provider's
+model, so it never signs in to Claude.
 
 **Business use is a grey area.** The same page says the advertised limits of Pro and Max
 "assume ordinary, individual usage of Claude Code and the Agent SDK". In February 2026
@@ -140,10 +143,13 @@ then repeat these steps (see [Rotate credentials](../runbooks/rotate-credentials
 ## If an account is banned
 
 1. That VPS's jobs start failing, and `fleet health` reports `claude not ok`. The other
-   VPSs keep working, and `fleet dispatch` stops sending work to the broken one.
+   VPSs keep working. `fleet dispatch` refuses new jobs for that VPS's channel and says
+   why, because they would only fail.
 2. Appeal through Anthropic support from the account's email address. Do not open a new
    account to replace it while the ban stands.
 3. Meanwhile, switch that VPS to an API key (below), or pause it with `fleet pause vps3`.
+   To keep its channel going on another VPS, move its queue with `fleet handover vps3 vps4`
+   and give the channel to vps4 in your inventory (see [Configuration](../reference/config.md#fleetini)).
 
 ## Switch a VPS to an API key
 

@@ -41,8 +41,9 @@ makes little difference to them; one near you makes SSH a little snappier.
 
 ## Write it into your inventory
 
-Open your inventory, `~/.config/fleet/fleet.ini`, and fill in `public_ip` for the node.
-Use `hostinger_account` as a reminder of which Hostinger login owns it:
+Open your inventory, `~/.config/fleet/fleet.ini`, and fill in `public_ip` for the node,
+and in `channels` the channel this VPS makes videos for. Use `hostinger_account` as a
+reminder of which Hostinger login owns it:
 
 ```ini
 [vps1]
@@ -51,12 +52,15 @@ public_ip = 203.0.113.10
 hostinger_account = hostinger-account-1
 providers = claude
 sessions = 1
-channels = all
+channels = Space Facts
 enabled = true
 ```
 
 Keep a fixed pairing: Hostinger account 1 holds `vps1`, account 2 holds `vps2`, and so
-on, and each VPS gets its own Claude account as well. Your inventory stays on your PC; it
-is never part of the repository.
+on, and each VPS gets its own Claude account as well. `fleet dispatch` sends a channel's
+jobs only to the VPS that names it. One VPS can make several channels
+(`channels = Space Facts, History`), and `channels = all` takes every channel that no
+other VPS names. See [Configuration](../reference/config.md#fleetini). Your inventory
+stays on your PC; it is never part of the repository.
 
 Next: [Provision a VPS](provisioning.md).

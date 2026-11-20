@@ -27,7 +27,7 @@ would be queued, or says exactly which field is wrong.
 | --- | --- | --- |
 | `prompt` | The instructions for the session. Required, unless `prompt_file` is given. | |
 | `prompt_file` | A text or Markdown file whose content becomes the prompt. The path is relative to the job file. `fleet dispatch` reads it on your PC, so the VPS receives an ordinary `prompt`. | |
-| `channel` | Which of your channels the job is for, up to 200 characters. It goes into the job id, the session's instructions and every report. | `general` |
+| `channel` | Which of your channels the job is for, up to 200 characters. It decides which VPS makes the video: the one whose `channels` names it (capitals, spaces and `-` do not matter, so `Space Facts` and `space-facts` are the same channel). It also goes into the job id, the session's instructions and every report. | `general` |
 | `title` | A short title for reports, up to 200 characters. | none |
 | `id` | The job's id: letters, digits, `.`, `_` and `-`, up to 128 characters, starting with a letter or a digit. It must not exist yet on the VPS. | made up, for example `20261118-142233-space-facts-k3x9p` (UTC time, channel, random letters) |
 | `template` | A folder from `vps/templates/` that is copied into the job's workspace before the session starts. See [Templates](#templates). | none |
@@ -43,8 +43,10 @@ would be queued, or says exactly which field is wrong.
 | `provider` | Which tool runs the job. Only VPSs that list this provider in your inventory receive it. | `claude` |
 
 `fleet dispatch` adds `node` (the VPS) and `submitted_at` (UTC), and `fleet retry` adds
-`retry_of`. Fields the fleet does not know are kept in the job's `job.json` and otherwise
-ignored, so Hermes can store its own notes in a job, such as a planned upload date.
+`retry_of`. `fleet handover` adds `handed_over_from` (the VPS the job came from) and
+`handed_over_at` (UTC). Fields the fleet does not know are kept in the job's `job.json`
+and otherwise ignored, so Hermes can store its own notes in a job, such as a planned
+upload date.
 
 ### Defaults for one VPS
 
@@ -67,7 +69,8 @@ the VPS (see [Worker reference](../reference/worker.md#settings)).
 - `--channel "Space Facts"` and `--provider claude` replace that field in every job you
   send in that command.
 - `--prompt "..."` makes a job from one line of text, without a file.
-- `--to` chooses the VPS: see [Everyday use](everyday.md#queue-work).
+- The job goes to the VPS that makes its channel. `--to` names another VPS instead: see
+  [Everyday use](everyday.md#queue-work).
 
 ## The prompt
 
@@ -185,6 +188,8 @@ already.
 - `--to all` sends one copy per VPS and adds the VPS to each id
   (`...-k3x9p-vps1`, `...-k3x9p-vps2` and so on).
 - `fleet retry` adds `-r1`, then `-r2` for a retry of the retry, and so on.
+- `fleet handover` keeps the id. When the other VPS already has a job with that id, the
+  moved job gets `-h1` at the end (or `-h2`, and so on).
 - An id must be new on its VPS. Sending a job with an id that VPS already has fails
   with `job id ... already exists`.
 

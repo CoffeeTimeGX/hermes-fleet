@@ -1,7 +1,7 @@
 ---
 name: fleet-provision
-description: Set up, repair or extend fleet VPSs. Bootstrap a fresh Hostinger VPS, join it to Tailscale, close public SSH, install or update Claude Code, push credentials and sync worker code.
-version: 1.2.0
+description: Set up, repair or extend fleet VPSs. Bootstrap a fresh Hostinger VPS, join it to Tailscale, close public SSH, install or update Claude Code, push credentials, sync worker code and set which channel each VPS makes.
+version: 1.3.0
 metadata:
   hermes:
     tags: [fleet, provisioning, hostinger, tailscale, claude-code]
@@ -13,7 +13,8 @@ metadata:
 
 ## When to use
 "Set up vps3", "I rebuilt vps2 on Hostinger", "install Claude on the VPSs", "update
-Claude Code everywhere", "new API key for vps4", "add a sixth VPS".
+Claude Code everywhere", "new API key for vps4", "add a sixth VPS", "vps3 makes the
+History channel now".
 
 ## New or rebuilt VPS
 Follow `docs/vps/provisioning.md` in the fleet repository. In short:
@@ -29,6 +30,18 @@ Follow `docs/vps/provisioning.md` in the fleet repository. In short:
    must already be filled in by the owner; if it is not, ask them to do it.
 8. `fleet provider check claude <vps> --smoke` must print `smoke: ok`.
 9. `fleet status <vps>` must show the service active and `claude:ok`.
+10. Ask the owner which channel the VPS makes, and set its `channels` line (see
+    "Channels").
+
+## Channels
+Each VPS section in `~/.config/fleet/fleet.ini` has a `channels` line: the channel or
+channels (comma separated) whose jobs go to that VPS. `all` takes any channel that no
+other VPS names. Empty means jobs reach it only with `--to`.
+- When the owner assigns a channel, edit only that line, then run `fleet list` and
+  `fleet doctor` to check it.
+- Names match loosely: "Space Facts", "space-facts" and "SPACE FACTS" are one channel.
+- Changing `channels` affects new jobs only. Queued jobs stay where they are unless the
+  owner asks for `fleet handover`.
 
 ## Updates
 - Worker or adapter code changed in the repository: `git pull` in the repo, then

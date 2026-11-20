@@ -40,10 +40,9 @@ time with `type $HOME\.ssh\fleet_ed25519.pub`.
 
     ```powershell
     cd $HOME\hermes-fleet
-    powershell -ExecutionPolicy Bypass -File .\home\install.ps1 -KeepModel
+    powershell -ExecutionPolicy Bypass -File .\home\install.ps1 -SkipTailscale
     ```
 
-    - `-KeepModel` leaves Hermes' model setting as it is.
     - `-SkipHermes` does not install Hermes (`fleet init` still configures it if present).
     - `-SkipTailscale` does not install Tailscale.
     - `-RepoDir D:\path` keeps the repository somewhere else.
@@ -57,7 +56,8 @@ time with `type $HOME\.ssh\fleet_ed25519.pub`.
     | Secrets (only your user can read them) | `%USERPROFILE%\.config\fleet\secrets\` |
     | Fleet SSH key | `%USERPROFILE%\.ssh\fleet_ed25519` and `fleet_ed25519.pub` |
     | Finished jobs | `%USERPROFILE%\fleet-results\` |
-    | Hermes' data (`config.yaml`, `.env`, `SOUL.md`, `scripts\`) | `%LOCALAPPDATA%\hermes\` |
+    | Hermes | `%LOCALAPPDATA%\hermes\` |
+    | The director, Hermes' `director` profile (`config.yaml`, `.env`, `SOUL.md`, `scripts\`) | `hermes profile show director` prints its folder |
 
     Elsewhere in these docs, `~` means your home folder, `%USERPROFILE%` on Windows.
 
@@ -73,45 +73,56 @@ Every line should say `ok` or `warn`. At this stage, warnings about Tailscale, C
 credentials and node names that do not resolve yet are expected: those come later.
 A `FAIL` line says what to install or run.
 
-## 4. Give Hermes its API key
+## 4. Choose the director's model
 
-Hermes itself runs on Claude through the Claude API. Anthropic requires third-party
-agents such as Hermes to use an API key, not a Claude subscription login.
+Hermes directs the fleet from its own profile, `director`, which `fleet init` created. A
+profile is a separate Hermes with its own settings, model, memory and Telegram bot, so the
+fleet work stays apart from anything else you use Hermes for. Commands for the director
+have `-p director` in them.
 
-1. Sign in at [platform.claude.com](https://platform.claude.com), add a payment method,
-   and create an API key (name it `hermes-director`). Set a monthly spend limit for
-   your organization in the Console's limits settings, so a runaway conversation cannot
-   surprise you.
-2. Give it to Hermes:
+The director runs on a model you choose from any provider Hermes supports. It does not
+use Claude: the Claude sessions run on the VPSs, signed in with their own Claude
+accounts, and the director hands them the work through the `fleet` command.
+
+1. Pick a provider and create an account there. Nous Portal is the one Hermes
+   recommends; OpenRouter, OpenAI, Google Gemini, DeepSeek, Kimi and GLM work too, and
+   the [Hermes providers page](https://hermes-agent.nousresearch.com/docs/integrations/providers) lists every one. Set a monthly spend limit
+   with the provider if it offers one.
+2. Run the model wizard for the director and answer its questions:
 
     ```powershell
-    hermes config set ANTHROPIC_API_KEY sk-ant-api03-...
+    hermes -p director model
     ```
 
-    Hermes stores it in `%LOCALAPPDATA%\hermes\.env`. Never paste it into a chat.
+    It signs you in to the provider or asks for its API key, and keeps the key in the
+    director's own `.env` file. Choose a model with at least 64,000 tokens of context
+    that is good at tool calls: the director spends its day running commands. Never
+    paste the key into a chat.
 
-3. Try it: run `hermes` and ask *"run fleet list and tell me what you see"*. Hermes runs
-   the command in its terminal and describes your five VPSs.
+3. Try it: run `hermes -p director` and ask *"run fleet list and tell me what you
+   see"*. The director runs the command in its terminal and describes your five VPSs.
 
-`fleet init` sets Hermes' model to `claude-opus-5-5`, Anthropic's most capable model,
-because the director makes the decisions while the VPS sessions do the heavy work. To
-use another model: `hermes config set model.default <model id>`.
+`fleet doctor` shows the director's model. Run `hermes -p director model` again to change
+it. `fleet init` also made the shortcut `director`, which does the same as
+`hermes -p director`.
 
 ## 5. Connect Telegram
 
-With Telegram, you can talk to Hermes from your phone and receive its reports. The short
-version (details on the [Telegram page](telegram.md)):
+With Telegram, you can talk to the director from your phone and receive its reports. The
+short version (details on the [Telegram page](telegram.md)):
 
 1. In Telegram, open **@BotFather**, send `/newbot`, pick a name and a username ending in
    `bot`, and copy the token it gives you.
 2. Send any message to **@userinfobot** to get your numeric user id.
-3. Run the setup wizard, choose Telegram, and paste the token and your user id:
+3. Run the setup wizard for the director, choose Telegram, and paste the token and your
+   user id:
 
     ```powershell
-    hermes gateway setup
+    hermes -p director gateway setup
     ```
 
-4. Keep the gateway running whenever you are logged in to Windows, and start it now:
+4. Keep Hermes' gateway running whenever you are logged in to Windows, and start it
+   now. One gateway serves every profile, so these commands have no `-p director`:
 
     ```powershell
     hermes gateway install
@@ -131,8 +142,8 @@ version (details on the [Telegram page](telegram.md)):
 fleet hermes-cron
 ```
 
-This creates three Hermes cron jobs: a health check every 10 minutes that messages you
-only when something changes, a pull of finished jobs every 30 minutes, and a short
+This gives the director three cron jobs: a health check every 10 minutes that messages
+you only when something changes, a pull of finished jobs every 30 minutes, and a short
 daily report at 9 am. See [Scheduled checks](../operations/scheduled-checks.md).
 
 ## 7. Next
@@ -150,8 +161,10 @@ daily report at 9 am. See [Scheduled checks](../operations/scheduled-checks.md).
 - **Downloads.** Windows has no rsync, so `fleet pull` downloads each job as a
   compressed archive over SSH. It works the same way, it just cannot resume a broken
   download halfway.
-- **What init changed in Hermes.** It copied `SOUL.md` into Hermes' folder (keeping a
-  backup of yours), added the repository's skills folder, set the terminal's working
-  folder to the repository, raised the terminal timeout to 15 minutes, and added a few
-  commands to Hermes' deny list (anything that reads the secrets folder or Hermes' `.env`,
-  and `fleet exec all ... rm -rf`). It backs up `config.yaml` before every change.
+- **What init changed in Hermes.** It created the `director` profile, without Hermes'
+  bundled skills, so it does only fleet work. Into that profile it copied `SOUL.md`,
+  added the repository's skills folder, set the terminal's working folder to the
+  repository, raised the terminal timeout to 15 minutes, and added a few commands to the
+  deny list (anything that reads the secrets folder or a Hermes `.env`, and
+  `fleet exec all ... rm -rf`). It backs up the profile's `config.yaml` before every
+  change. Hermes' default profile is left as it was.

@@ -1,17 +1,18 @@
 # Everyday use
 
-Most days you only talk to Hermes, in the terminal (`hermes`) or on Telegram. It turns
-what you ask into `fleet` commands, runs them and reports back. This page shows what to
-ask and the commands behind it, so you can also run them yourself.
+Most days you only talk to the director (Hermes' `director` profile), in the terminal
+(`hermes -p director`) or on Telegram. It turns what you ask into `fleet` commands,
+runs them and reports back. This page shows what to ask and the commands behind it, so
+you can also run them yourself.
 
 Run `fleet` commands from any terminal: PowerShell, cmd or Git Bash on Windows, any
 shell on Linux and macOS.
 
 ## A normal day
 
-1. **Queue the work.** Tell Hermes what to make: *"Make three shorts for Space Facts:
-   Saturn's rings, Europa's ocean and the Kuiper belt."* Hermes writes one job per video
-   and spreads them over the VPSs.
+1. **Queue the work.** Tell the director what to make: *"Make three shorts for Space
+   Facts: Saturn's rings, Europa's ocean and the Kuiper belt."* It writes one job per
+   video and queues them on the VPS that makes Space Facts.
 2. **Do something else.** Each VPS works through its queue on its own, also while your
    PC is off.
 3. **Get the results.** Every 30 minutes Hermes downloads what finished and sends you a
@@ -33,12 +34,13 @@ shell on Linux and macOS.
 | *"Show me what vps3 is doing."* | `fleet logs vps3 <job-id>` |
 | *"Collect the finished videos."* | `fleet pull` |
 | *"Stop that job."* | `fleet cancel vps3 <job-id>` |
-| *"Try that one again on another VPS."* | `fleet retry vps3 <job-id> --to auto` |
+| *"Try that one again on vps4."* | `fleet retry vps3 <job-id> --to vps4` |
+| *"Move vps2's waiting jobs to vps4."* | `fleet handover vps2 vps4` |
 | *"Pause vps2, I want to update it."* | `fleet pause vps2` |
 | *"Start vps2 again."* | `fleet resume vps2` |
 
-For anything that changes a server (closing SSH, rebooting, deleting), Hermes says what
-it will run and waits for your yes.
+For anything that changes a server (closing SSH, rebooting, deleting) or moves work to
+another VPS, the director says what it will run and waits for your yes.
 
 ## Check the fleet
 
@@ -97,12 +99,17 @@ fleet dispatch ~/fleet-jobs/saturn-rings.json
 queued 20261118-142233-space-facts-k3x9p on vps2 (channel Space Facts, provider claude)
 ```
 
-`fleet dispatch` asks every VPS for its status and puts the job on the least busy one
-that can start it now. A VPS is skipped while it is unreachable, paused, low on disk,
-waiting for a usage limit, or when Claude is not working on it. Other choices:
+`fleet dispatch` puts the job on the VPS that makes videos for its channel: the
+`channels` line of each VPS in your inventory (see [Configuration](../reference/config.md#fleetini)).
+If that VPS is busy, paused or waiting for a usage limit, the job waits in its queue
+there, and the command says so. If the VPS does not answer, or Claude is not set up on
+it, the command refuses the job and says why. Work never moves to another VPS by
+itself. When several VPSs make the same channel, the least busy one that can start the
+job gets it. A channel that no VPS names goes to a VPS with `channels = all` if you have
+one; otherwise `fleet dispatch` refuses the job and says why. Other choices:
 
-- `--to vps2` puts it on vps2, even if vps2 is busy (you get a warning if vps2 cannot
-  start it soon).
+- `--to vps2` puts it on vps2, whatever its channel (you get a note, and a warning if
+  vps2 cannot start it soon).
 - `--to vps2,vps4` picks the least busy of the two.
 - `--to all` puts a copy on every VPS (the copies get `-vps1`, `-vps2` and so on at the
   end of their ids).
@@ -127,8 +134,9 @@ vps3  failed   20261118-093010-history-p02xs      History      2026-11-18T09:30:
 ```
 
 Job times are in UTC (the `Z` at the end). Narrow the list with a VPS name or a state:
-`fleet jobs vps2 --state failed`. States are `inbox` (waiting), `running`, `done` and
-`failed`.
+`fleet jobs vps2 --state failed`. States are `inbox` (waiting), `running`, `done`,
+`failed`, `outgoing` (being handed over to another VPS) and `moved` (handed over after
+it had started; what it made waits for the pull).
 
 To watch a job, show the last lines of its log:
 
@@ -165,10 +173,37 @@ are in `output/` inside each job's folder. See [Results](results.md).
 - **Stop it:** `fleet cancel vps1 <job-id>`. A waiting job is removed from the queue; a
   running one is stopped and filed as `failed` with the note `cancelled`.
 - **Run it again:** `fleet retry vps3 <job-id>` queues a fresh copy on the same VPS,
-  with `-r1` added to the id (then `-r2` and so on). Add `--to auto` to let the least
-  busy VPS take it.
+  with `-r1` added to the id (then `-r2` and so on). Add `--to vps4` to run it on vps4
+  instead.
 - **Find out why it failed:** the `NOTE` column of `fleet jobs` and the pull message
   give the reason. [Job failures](../runbooks/job-failures.md) explains each one.
+
+## Move work to another VPS
+
+Work stays on its channel's VPS unless you move it. When a VPS will be stuck for a
+while, for example at its weekly usage limit, move its waiting jobs yourself, or ask the
+director to: *"Move vps2's waiting jobs to vps4."*
+
+```
+fleet handover vps2 vps4 --dry-run     # show what would move
+fleet handover vps2 vps4               # move every waiting job
+fleet handover vps2 vps4 <job-id>      # move only this one
+```
+
+```
+moved 20261118-142233-space-facts-k3x9p (channel Space Facts) from vps2 to vps4
+note: only these jobs moved. New Space Facts jobs still go to the VPS that fleet.ini names for that channel.
+```
+
+- The jobs keep their ids and wait in vps4's queue. If vps4 already has a job with the
+  same id, the moved one gets `-h1` at the end.
+- Running jobs stay where they are. To move one anyway, stop it and run it again on the
+  other VPS: `fleet cancel vps2 <job-id>`, then `fleet retry vps2 <job-id> --to vps4`.
+- A job that had already started on vps2, for example one that hit the usage limit
+  halfway, starts over on vps4. What it made on vps2 comes home with the next pull,
+  marked `[MOVED]`.
+- New jobs for vps2's channel still go to vps2. To give the channel to another VPS for
+  good, change `channels` in your inventory.
 
 ## Pause a VPS
 
@@ -177,9 +212,9 @@ fleet pause vps2 --reason "updating"
 fleet resume vps2
 ```
 
-A paused VPS starts no new jobs. Running jobs finish normally and the queue waits.
-`fleet dispatch` sends new work to the other VPSs meanwhile. `fleet resume` also ends a
-usage-limit wait early (see [Usage limits](usage-limits.md)).
+A paused VPS starts no new jobs. Running jobs finish normally and the queue waits. New
+jobs for its channel wait there too, unless you move them with `fleet handover`.
+`fleet resume` also ends a usage-limit wait early (see [Usage limits](usage-limits.md)).
 
 ## Where to go next
 

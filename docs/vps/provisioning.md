@@ -8,7 +8,7 @@ the smoke check."* Hermes follows the same steps and asks before closing public 
 Before you start, have:
 
 - the VPS created with Ubuntu 24.04 ([Create the VPSs](hostinger.md)),
-- its `public_ip` in `~/.config/fleet/fleet.ini`,
+- its `public_ip` and its channel (`channels`) in `~/.config/fleet/fleet.ini`,
 - `TS_AUTHKEY` in `~/.config/fleet/secrets/tailscale.env` ([Tailscale](../tailscale.md)),
 - the Claude credential for this VPS ([Claude accounts](../providers/claude-accounts.md#get-a-token-for-each-vps)).
 
@@ -79,7 +79,7 @@ It ends with a summary like this:
 ```
 node:          vps1
 tailscale:     100.101.102.103 (Running)
-worker:        active (version 1.2.0)
+worker:        active (version 1.3.0)
 parallel jobs: 1
 public ssh:    open, keys only and rate limited, until fleet lockdown
 reboot needed: no
@@ -147,6 +147,9 @@ fleet status vps1
 The `SERVICE` column must say `active` and `PROVIDERS` must say `claude:ok`. `fleet health`
 should list no problem for `vps1`.
 
+`fleet list` shows the channel each VPS makes videos for. Once the node is ready,
+`fleet dispatch` sends that channel's jobs to it.
+
 Repeat for `vps2` to `vps5`. Steps 5 to 8 also accept `all` (or a list such as
 `vps2,vps3`) once those VPSs are bootstrapped.
 
@@ -154,5 +157,8 @@ Repeat for `vps2` to `vps5`. Steps 5 to 8 also accept `all` (or a list such as
 
 - **More sessions on a VPS:** change `sessions` for it in `fleet.ini`, then run
   `fleet bootstrap vps1 --skip-upgrade` (over Tailscale, without `--public`).
+- **Another channel for a VPS:** change `channels` for it in `fleet.ini`. It applies to
+  the next `fleet dispatch`; jobs already queued stay where they are (`fleet handover`
+  moves them).
 - **A rebuilt VPS:** see [Rebuild a VPS](../runbooks/rebuild-vps.md).
 - **New code from the repository:** see [Updates](../operations/updates.md).

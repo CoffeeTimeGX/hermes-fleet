@@ -29,7 +29,7 @@ come back to.
 
 ## 2. Save the queue
 
-Copy the jobs that wait in the VPS's queue to your PC, so another VPS can run them:
+Copy the jobs that wait in the VPS's queue to your PC, so that they survive the rebuild:
 
 ```
 mkdir requeue
@@ -38,6 +38,9 @@ scp "vps3:/home/fleet/fleet/jobs/inbox/*.json" requeue/
 
 If the VPS is not reachable, Hermes can tell you which jobs were queued there from its
 own conversation, or you can write them again.
+
+If another VPS should make them while vps3 is rebuilt, move them there instead, while
+vps3 still answers: `fleet handover vps3 vps4`. Then skip step 6.
 
 ## 3. Reinstall the system in hPanel
 
@@ -76,8 +79,8 @@ If your Tailscale auth key has expired since the first setup, make a new one fir
 fleet dispatch requeue/*.json
 ```
 
-They keep their ids and go to the least busy VPS, which can be the rebuilt one. Delete
-the `requeue` folder afterwards.
+They keep their ids and go back to the VPS that makes their channel, the rebuilt one.
+Delete the `requeue` folder afterwards.
 
 ## 7. Check
 

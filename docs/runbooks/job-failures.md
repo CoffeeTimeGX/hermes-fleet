@@ -97,7 +97,7 @@ If the video is not what you wanted:
 
 ```
 fleet retry vps3 20261118-093010-history-p02xs            # on the same VPS
-fleet retry vps3 20261118-093010-history-p02xs --to auto  # on the least busy VPS
+fleet retry vps3 20261118-093010-history-p02xs --to vps4  # on vps4 instead
 ```
 
 The copy gets a new id ending in `-r1` and starts in a fresh workspace. `fleet retry`

@@ -1,8 +1,9 @@
 # Telegram
 
-Telegram lets you talk to Hermes from your phone, and it is where the scheduled health
-alerts and daily reports arrive. Hermes' gateway runs on your home PC and connects out
-to Telegram, so nothing on your PC is opened to the internet.
+Telegram lets you talk to the director, Hermes' `director` profile, from your phone,
+and it is where the scheduled health alerts and daily reports arrive. Hermes' gateway
+runs on your home PC and connects out to Telegram, so nothing on your PC is opened to
+the internet.
 
 ## 1. Create the bot
 
@@ -18,24 +19,30 @@ Send any message to **@userinfobot**. It answers with your numeric user id, for 
 `123456789`. This is a number, not your @username. Only the ids you list can talk to
 the bot.
 
-## 3. Connect Hermes
+## 3. Connect the director
 
-Run the setup wizard and choose Telegram:
-
-```
-hermes gateway setup
-```
-
-It asks for the bot token and the allowed user ids, and saves them in Hermes' `.env`
-file as `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS` (several ids are separated by
-commas). You can also set them directly:
+Run the setup wizard for the director and choose Telegram:
 
 ```
-hermes config set TELEGRAM_BOT_TOKEN 7123456789:AAF...
-hermes config set TELEGRAM_ALLOWED_USERS 123456789
+hermes -p director gateway setup
 ```
+
+It asks for the bot token and the allowed user ids, and saves them in the director's
+`.env` file as `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS` (several ids are
+separated by commas). You can also set them directly:
+
+```
+hermes -p director config set TELEGRAM_BOT_TOKEN 7123456789:AAF...
+hermes -p director config set TELEGRAM_ALLOWED_USERS 123456789
+```
+
+A bot token belongs to one profile. Do not put the same token in Hermes' default
+profile too.
 
 ## 4. Keep the gateway running
+
+One Hermes gateway serves every profile, the director included, so these commands have
+no `-p director`:
 
 ```
 hermes gateway install
@@ -68,13 +75,14 @@ Talk to it in plain language. A few examples:
 - *"Collect the finished videos."*
 - *"Pause vps2, I want to update it."*
 
-Hermes answers briefly on Telegram and leads with the result. For anything that changes
-a server (closing SSH, rebooting, wiping), it says what it will do and asks first.
+The director answers briefly on Telegram and leads with the result. For anything that
+changes a server (closing SSH, rebooting, wiping) or moves work to another VPS, it says
+what it will do and asks first.
 
 ## Keep the bot private
 
 - Keep `TELEGRAM_ALLOWED_USERS` to your own id. Do not add the bot to groups.
-- If the token leaks, send `/revoke` to @BotFather, then run `hermes gateway setup` again
-  with the new token.
+- If the token leaks, send `/revoke` to @BotFather, then run
+  `hermes -p director gateway setup` again with the new token.
 - Never paste API keys or tokens into the chat. Hermes will not ask for them: secrets
   go into files on your PC (see [Rotate credentials](../runbooks/rotate-credentials.md)).

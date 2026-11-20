@@ -1,10 +1,10 @@
 # Instructions for coding agents
 
 Hermes Fleet: a Hermes Agent on the owner's home PC directs five Hostinger VPSs that run
-headless Claude Code sessions to make videos. The PC side is `home/` (the `fleet` CLI,
-installers, Hermes' `SOUL.md` and skills); the VPS side is `vps/` (bootstrap, lockdown,
-the `fleet-worker` job runner, provider adapters). Read `docs/handoff.md` for the full
-picture before a larger change.
+headless Claude Code sessions to make videos, one channel per VPS. The PC side is `home/`
+(the `fleet` CLI, installers, Hermes' `SOUL.md` and skills); the VPS side is `vps/`
+(bootstrap, lockdown, the `fleet-worker` job runner, provider adapters). Read
+`docs/handoff.md` for the full picture before a larger change.
 
 ## Commands
 
@@ -33,6 +33,12 @@ lockdown, worker, provider scripts or the CLI's SSH paths change.
 - Nothing unpulled is ever deleted on a VPS.
 - Provider adapters follow `vps/providers/README.md`: exit 0, 75 (usage limit, with
   `logs/limit.json`), 78 (no credentials), anything else is a failure.
+- Hermes runs on a model the owner picks with `hermes -p director model`, never on Claude:
+  `fleet init` does not set Hermes' model. Every Hermes command the fleet runs targets the
+  `director` profile (`hermes -p director`).
+- Each VPS makes the videos of its own channels (`channels` in `fleet.ini`). Work moves to
+  another VPS only when the owner asks: `fleet handover`, `--to` or `fleet retry --to`.
+  Nothing moves it automatically.
 - One Claude account per VPS, used openly. Do not add anything that hides the link
   between accounts or switches accounts to get around usage limits.
 - Bump `VERSION` in `home/bin/fleet` and `WORKER_VERSION` in `vps/worker/fleet-worker`

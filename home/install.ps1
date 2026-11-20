@@ -22,15 +22,11 @@
 
 .PARAMETER SkipTailscale
   Do not install Tailscale.
-
-.PARAMETER KeepModel
-  Leave Hermes' model setting alone instead of setting the director model.
 #>
 param(
   [string]$RepoDir = "",
   [switch]$SkipHermes,
-  [switch]$SkipTailscale,
-  [switch]$KeepModel
+  [switch]$SkipTailscale
 )
 
 $ErrorActionPreference = 'Stop'
@@ -182,7 +178,6 @@ Update-SessionPath
 # ---------------------------------------------------------------- fleet init
 Write-Step "fleet init"
 $initArgs = @($fleetCli, 'init')
-if ($KeepModel) { $initArgs += '--keep-model' }
 if (-not $hermes) { $initArgs += '--no-hermes' }
 & $python @initArgs
 if ($LASTEXITCODE -ne 0) { throw "fleet init failed (exit code $LASTEXITCODE)." }
@@ -191,9 +186,9 @@ Write-Step "Done. Next steps"
 Write-Host @"
   1. Open a NEW PowerShell window (so the PATH change applies), then check:
        fleet doctor
-  2. Give Hermes its API key and connect Telegram (docs/home/windows.md, steps 4 and 5):
-       hermes config set ANTHROPIC_API_KEY <your Claude Console key>
-       hermes gateway setup
+  2. Choose the director's model and connect Telegram (docs/home/windows.md, steps 4 and 5):
+       hermes -p director model
+       hermes -p director gateway setup
        hermes gateway install
        hermes gateway start
   3. Create the scheduled checks:

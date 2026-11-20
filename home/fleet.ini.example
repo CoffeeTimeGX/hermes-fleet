@@ -10,7 +10,11 @@
 ; providers which LLM tools this VPS runs (comma separated). Today: claude.
 ; sessions  how many Claude sessions run at the same time on this VPS. Start with 1;
 ;           video work is heavy (KVM 2: 1, KVM 4: 2, KVM 8: 3 or 4).
-; channels  informational: which of your channels this VPS mostly serves.
+; channels  the channel this VPS makes videos for, such as Space Facts. `fleet dispatch`
+;           sends a channel's jobs only to its VPS, and they wait there when it is
+;           busy or at its usage limit (`fleet handover` moves them when you say so).
+;           Several channels: Space Facts, History. `all`: any channel that no other
+;           VPS names. Empty: only jobs sent with --to.
 ; enabled   false takes the VPS out of dispatching without deleting it.
 
 [defaults]
@@ -27,7 +31,7 @@ public_ip =
 hostinger_account = hostinger-account-1
 providers = claude
 sessions = 1
-channels = all
+channels =
 enabled = true
 
 [vps2]
@@ -36,7 +40,7 @@ public_ip =
 hostinger_account = hostinger-account-2
 providers = claude
 sessions = 1
-channels = all
+channels =
 enabled = true
 
 [vps3]
@@ -45,7 +49,7 @@ public_ip =
 hostinger_account = hostinger-account-3
 providers = claude
 sessions = 1
-channels = all
+channels =
 enabled = true
 
 [vps4]
@@ -54,7 +58,7 @@ public_ip =
 hostinger_account = hostinger-account-4
 providers = claude
 sessions = 1
-channels = all
+channels =
 enabled = true
 
 [vps5]
@@ -63,5 +67,5 @@ public_ip =
 hostinger_account = hostinger-account-5
 providers = claude
 sessions = 1
-channels = all
+channels =
 enabled = true

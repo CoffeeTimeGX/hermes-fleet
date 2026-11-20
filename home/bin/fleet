@@ -8,17 +8,18 @@ Standard library only; runs on Windows, Linux and macOS with Python 3.9+.
 Everyday
   fleet status [TARGETS] [--json]          worker, queue, disk and provider state
   fleet health [--quiet|--changes-only]    problems only (scheduled checks use this)
-  fleet dispatch JOB.json [...] [--to T]   queue jobs (least busy VPS by default)
+  fleet dispatch JOB.json [...] [--to T]   queue jobs on their channel's VPS
   fleet dispatch --prompt "..." --channel C [--to T]
   fleet jobs [TARGETS] [--state S] [--json]
   fleet logs NODE JOB_ID [-f]              a job's provider log
   fleet cancel NODE JOB_ID                 cancel a queued or running job
   fleet retry NODE JOB_ID [--to T]         queue a copy of a finished or failed job
+  fleet handover FROM TO [JOB_ID ...]      move queued jobs to another VPS (only when you ask)
   fleet pull [TARGETS] [--quiet]           download finished jobs into results_dir
   fleet pause|resume TARGETS               stop or restart taking new jobs
 
 Setup and maintenance
-  fleet init [--keep-model] [--no-hermes]  set up this home machine (installers call it)
+  fleet init [--no-hermes]                 set up this home machine (installers call it)
   fleet hermes-cron [--deliver telegram]   create the scheduled Hermes jobs
   fleet doctor                             check this home machine
   fleet list | ping [TARGETS] | ssh-config
@@ -61,7 +62,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -75,8 +76,8 @@ ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 EFFORTS = {"", "low", "medium", "high", "xhigh", "max", "ultracode"}
 PERMISSION_MODES = {"", "bypassPermissions", "dontAsk", "acceptEdits"}
 TOKEN_WARN_DAYS = 330  # `claude setup-token` tokens last one year
+HERMES_PROFILE = "director"  # the Hermes profile that directs the fleet: `hermes -p director`
 LIMIT_ALERT_HOURS = 6  # usage-limit holds longer than this (weekly limits) are health problems
-DIRECTOR_MODEL = "claude-opus-5-5"
 
 
 class FleetError(Exception):
@@ -168,6 +169,36 @@ def resolve_targets(cfg: Config, spec, include_disabled: bool = False) -> list:
             raise FleetError(f"unknown node '{name}' (known: {', '.join(cfg.nodes) or 'none'})")
         out.append(cfg.nodes[name])
     return out
+
+
+def channel_key(name) -> str:
+    """How channel names are compared: "Space Facts", "space-facts" and "SPACE_FACTS" are one channel."""
+    s = str(name).strip().casefold()
+    return re.sub(r"[\W_]+", "-", s).strip("-") or s
+
+
+def channel_names(n: Node) -> list:
+    """The channels a VPS makes videos for, as fleet.ini lists them. "all" means any channel."""
+    return [c.strip() for c in n.channels.split(",") if c.strip()]
+
+
+def serves(n: Node, channel: str) -> bool:
+    keys = {channel_key(c) for c in channel_names(n)}
+    return channel_key(channel) in keys or "all" in keys
+
+
+def channel_home(pool: list, channel: str):
+    """Where a channel's jobs go, as (nodes, dedicated): the VPSs whose `channels` list
+    names it (dedicated), else the VPSs with `channels = all`."""
+    key = channel_key(channel)
+    own = [n for n in pool if key in {channel_key(c) for c in channel_names(n)}]
+    if own:
+        return own, True
+    return [n for n in pool if "all" in {channel_key(c) for c in channel_names(n)}], False
+
+
+def dedicated_channels(n: Node) -> list:
+    return [c for c in channel_names(n) if channel_key(c) != "all"]
 
 
 # --------------------------------------------------------------------------- transport
@@ -430,10 +461,17 @@ def health_problems(cfg: Config, a) -> dict:
             problems[f"{name}:reboot"] = f"{name}: security updates need a reboot (fleet reboot {name} when idle)"
         lim = active_limit(st)
         if lim and number(lim.get("until"), 0) - number(lim.get("since"), 0) > LIMIT_ALERT_HOURS * 3600:
+            own = dedicated_channels(cfg.nodes[name])
+            meanwhile = (f"new {', '.join(own)} jobs wait there too, unless you move them with fleet handover"
+                         if own else "fleet dispatch sends new jobs to other VPSs meanwhile")
             problems[f"{name}:limit"] = (
                 f"{name}: {lim.get('provider', 'provider')} usage limit reached ({lim.get('message', '')}); "
-                f"its queue waits until {short_time(lim.get('until'))} and then continues by itself "
-                f"(fleet dispatch sends new jobs to other VPSs meanwhile)")
+                f"its queue waits until {short_time(lim.get('until'))} and then continues by itself ({meanwhile})")
+        stuck = int(number(st.get("stuck_handovers"), 0))
+        if stuck:
+            problems[f"{name}:handover"] = (
+                f"{name}: {stuck} job(s) stopped halfway through a handover; run the same fleet handover "
+                f"again to finish it (fleet jobs {name} --state outgoing shows where they were going)")
     return problems
 
 
@@ -610,10 +648,21 @@ def node_readiness(st, provider: str):
     return None
 
 
+def provider_broken(why, provider: str) -> bool:
+    """True when node_readiness says the provider itself cannot run jobs there: such a
+    job would not wait in the queue, it would fail."""
+    return bool(why) and why.startswith(f"{provider} is not")
+
+
 def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bool) -> int:
-    """auto: the least busy ready VPS. all: a copy on every VPS. A node list:
-    the least busy ready node in the list (or, if none is ready, it still queues
-    there and warns, because you asked for those nodes)."""
+    """auto: the VPS that makes videos for the job's channel (`channels` in
+    fleet.ini; the least busy one when several do). The job waits there when that
+    VPS is busy, paused or at its usage limit: work never moves to another VPS by
+    itself, only with `fleet handover`. It is refused when the provider there is not
+    installed or has no credentials, because it would only fail. A channel that no
+    VPS names goes to the least busy ready VPS with `channels = all`. all: a copy on
+    every VPS. A node list: the least busy ready node in the list (or, if none is
+    ready, it still queues there and warns, because you asked for those nodes)."""
     explicit = spec not in ("auto", "all")
     pool = resolve_targets(cfg, spec if explicit else None)
     status = {} if dry_run else parallel(pool, lambda n: fetch_status(cfg, n))
@@ -626,14 +675,22 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
             loads[n.name] = [busy, max(1, int(number(st.get("max_parallel"), n.sessions)))]
     queued, rc = [], 0
     for job in jobs:
-        prov = job["provider"]
-        label = job.get("id") or job.get("title") or job["channel"]
-        candidates = [n for n in pool if prov in n.providers]
-        if not candidates:
-            print(f"fleet: {label}: no enabled node in the inventory offers provider '{prov}'", file=sys.stderr)
+        prov, ch = job["provider"], job["channel"]
+        label = job.get("id") or job.get("title") or ch
+        home, dedicated = (pool, False) if spec != "auto" else channel_home(pool, ch)
+        if not home:
+            print(f"fleet: {label}: no VPS makes videos for channel '{ch}'. Add the channel to `channels` of "
+                  f"its VPS in {cfg.path}, or name a VPS with --to", file=sys.stderr)
             rc = 1
             continue
-        base_id = job.get("id") or make_job_id(job["channel"])
+        candidates = [n for n in home if prov in n.providers]
+        if not candidates:
+            where = (f"channel '{ch}' is made on {', '.join(n.name for n in home)}, which does not offer"
+                     if dedicated else "no enabled node in the inventory offers")
+            print(f"fleet: {label}: {where} provider '{prov}'", file=sys.stderr)
+            rc = 1
+            continue
+        base_id = job.get("id") or make_job_id(ch)
         if dry_run:
             targets = candidates if spec == "all" else candidates[:1]
         elif spec == "all":
@@ -645,9 +702,12 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
         else:
             reachable = [n for n in candidates if n.name in loads]
             ready = [n for n in reachable if node_readiness(status.get(n.name), prov) is None]
-            pickable = ready or (reachable if explicit else [])
+            # A channel's own VPS keeps the channel's jobs while it is busy, paused or at its
+            # limit. A job sent to a VPS whose provider is broken would only fail.
+            waits = [n for n in reachable if not provider_broken(node_readiness(status.get(n.name), prov), prov)]
+            pickable = ready or (reachable if explicit else waits if dedicated else [])
             if not pickable:
-                # Every account is at its usage limit: queue where the limit ends first.
+                # Every shared account is at its usage limit: queue where the limit ends first.
                 waiting = [n for n in reachable
                            if (node_readiness(status.get(n.name), prov) or "").startswith(LIMIT_WORDS)]
                 if waiting:
@@ -655,7 +715,8 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
                     pickable = [first]
             if not pickable:
                 why = "; ".join(f"{n.name} {node_readiness(status.get(n.name), prov)}" for n in candidates)
-                print(f"fleet: {label}: no VPS can take a {prov} job right now ({why}). Run `fleet health`.",
+                whose = f"channel '{ch}' is made on {', '.join(n.name for n in candidates)}, and " if dedicated else ""
+                print(f"fleet: {label}: {whose}no VPS can take a {prov} job right now ({why}). Run `fleet health`.",
                       file=sys.stderr)
                 rc = 1
                 continue
@@ -669,8 +730,15 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
                 print(json.dumps(j, indent=2))
                 continue
             why = node_readiness(status.get(n.name), prov)
-            if why:
-                print(f"warning: {n.name}: {why}; {j['id']} waits in its queue until that is fixed", file=sys.stderr)
+            if provider_broken(why, prov):
+                print(f"warning: {n.name}: {why}; {j['id']} fails if that is not fixed before it starts",
+                      file=sys.stderr)
+            elif why:
+                until = "the limit resets" if why.startswith(LIMIT_WORDS) else "that is fixed"
+                print(f"warning: {n.name}: {why}; {j['id']} waits in its queue until {until}", file=sys.stderr)
+            if explicit and not serves(n, ch):
+                print(f"note: {n.name} does not make videos for channel '{ch}' (its channels: "
+                      f"{n.channels or 'none'}); the job goes there because you named it", file=sys.stderr)
             try:
                 upload_job(cfg, n, j)
             except FleetError as e:
@@ -754,7 +822,152 @@ def cmd_retry(cfg: Config, a) -> int:
     base, k = (m.group(1), int(m.group(2)) + 1) if m else (a.job_id, 1)
     job["id"] = f"{base[:120]}-r{k}"
     job["retry_of"] = a.job_id
+    for key in ("handed_over_from", "handed_over_at", "handover"):
+        job.pop(key, None)
     return dispatch_jobs(cfg, [validate_job(job, a.job_id)], a.to or n.name, False, False)
+
+
+def receive_handover(cfg: Config, n: Node, job: dict) -> str:
+    """Queue a handed-over job on n. Answers "queued", "already" when an earlier try
+    that broke halfway delivered it, or "taken" when n has another job with that id."""
+    root, jid = shlex.quote(root_of(cfg, n)), job["id"]
+    frm, token = shlex.quote(job["handed_over_from"]), shlex.quote(job["handed_over_at"])
+    cmd = (f"set -e; r={root}; id={jid}\n"
+           f"for f in \"$r\"/jobs/*/\"$id\".json; do\n"
+           f"  [ -e \"$f\" ] || continue\n"
+           f"  if jq -e --arg f {frm} --arg t {token} '.handed_over_from == $f and .handed_over_at == $t' \"$f\" "
+           f">/dev/null 2>&1; then echo already; else echo taken; fi\n"
+           f"  exit 0\n"
+           f"done\n"
+           f"if [ -e \"$r/work/$id\" ]; then echo taken; exit 0; fi\n"
+           f"mkdir -p \"$r/jobs/inbox\"\n"
+           f"cat > \"$r/jobs/inbox/.$id.tmp\"\n"
+           f"mv \"$r/jobs/inbox/.$id.tmp\" \"$r/jobs/inbox/$id.json\"\n"
+           f"echo queued\n")
+    r = remote(cfg, n, cmd, stdin=json.dumps(job, indent=2).encode("utf-8"), timeout=60)
+    said = (text(r.stdout).splitlines() or [""])[-1].strip()
+    if r.returncode != 0 or said not in ("queued", "already", "taken"):
+        raise FleetError(text(r.stderr)[-300:] or f"exit {r.returncode}")
+    return said
+
+
+def hand_over(cfg: Config, frm: Node, to: Node, jid: str) -> str:
+    """Move one queued job from frm to to and say what happened. It keeps its id
+    unless to already has a job by that name. Raises FleetError when the job stays."""
+    w = worker(cfg, frm)
+    r = remote(cfg, frm, f"{w} release {jid} {to.name}", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"{jid} stays on {frm.name}: {text(r.stderr) or 'exit ' + str(r.returncode)}")
+    try:
+        job = last_json(r.stdout)
+        ho = job.pop("handover")
+        token = str(ho["at"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        remote(cfg, frm, f"{w} unrelease {jid}", timeout=60)
+        raise FleetError(f"{jid} stays on {frm.name}: its job file could not be read") from None
+    j = dict(job, node=to.name, handed_over_from=frm.name, handed_over_at=token)
+    base = re.sub(r"-h\d+$", "", jid)[:120]
+    try:
+        for k in range(10):
+            j["id"] = jid if k == 0 else f"{base}-h{k}"
+            said = receive_handover(cfg, to, j)
+            if said != "taken":
+                break
+        else:
+            raise FleetError(f"it already has jobs called {jid} and {base}-h1 to -h9")
+    except FleetError as e:
+        u = remote(cfg, frm, f"{w} unrelease {jid}", timeout=60)
+        back = "" if u.returncode == 0 else (f". {frm.name} could not put it back in its queue either: run the same "
+                                             f"fleet handover again (fleet health reminds you)")
+        raise FleetError(f"{jid} stays on {frm.name}: could not queue it on {to.name}: {e}{back}") from None
+    renamed = f" as {j['id']} ({to.name} already had a job called {jid})" if j["id"] != jid else ""
+    line = f"moved {jid} (channel {j.get('channel')}) from {frm.name} to {to.name}{renamed}"
+    if ho.get("started"):
+        line += (f"\n    it had started on {frm.name}, so it starts over on {to.name}; "
+                 f"what it made on {frm.name} comes home with the next fleet pull")
+    r = remote(cfg, frm, f"{w} released {jid}", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"{jid} is queued on {to.name}{renamed}, but {frm.name} did not confirm. Run the same "
+                         f"fleet handover again to finish (the job cannot run twice meanwhile)")
+    return line
+
+
+def cmd_handover(cfg: Config, a) -> int:
+    """Move queued jobs from one VPS to another. Only the owner decides this: nothing
+    else ever moves work between VPSs."""
+    frm, to = one_node(cfg, a.from_node), one_node(cfg, a.to_node)
+    if frm.name == to.name:
+        raise FleetError("FROM and TO are the same VPS")
+    for jid in a.job_ids:
+        if not ID_RE.match(jid):
+            raise FleetError(f"invalid job id {jid!r}")
+    r = remote(cfg, frm, f"{worker(cfg, frm)} jobs --json", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(f"{frm.name} is unreachable, so nothing was moved: {text(r.stderr)[-200:]}")
+    jobs = {j.get("id"): j for j in last_json(r.stdout, []) if isinstance(j, dict) and ID_RE.match(str(j.get("id")))}
+    queued = [i for i, j in jobs.items() if j.get("state") in ("inbox", "outgoing")]
+    rc, movable = 0, []
+    for jid in a.job_ids or queued:
+        j = jobs.get(jid)
+        state = (j or {}).get("state")
+        if state in ("inbox", "outgoing"):
+            if (j.get("provider") or "claude") in to.providers:
+                movable.append(j)
+                continue
+            print(f"fleet: {jid} stays on {frm.name}: {to.name} does not offer provider '{j.get('provider')}'",
+                  file=sys.stderr)
+        elif state == "running":
+            print(f"fleet: {jid} is running on {frm.name}, so it stays there. To run it on {to.name} instead: "
+                  f"fleet cancel {frm.name} {jid}, then fleet retry {frm.name} {jid} --to {to.name}", file=sys.stderr)
+        elif state:
+            print(f"fleet: {jid} is not queued on {frm.name} (it is {state}); "
+                  f"fleet retry {frm.name} {jid} --to {to.name} runs a copy there", file=sys.stderr)
+        else:
+            print(f"fleet: {frm.name} has no job {jid}", file=sys.stderr)
+        rc = 1
+    if not a.job_ids:
+        running = [i for i, j in jobs.items() if j.get("state") == "running"]
+        if running:
+            print(f"note: running jobs stay on {frm.name}: {', '.join(running)}", file=sys.stderr)
+    if not movable:
+        if not a.job_ids:
+            print(f"nothing to hand over: {frm.name} has no queued jobs")
+        return rc
+    if a.dry_run:
+        for j in movable:
+            print(f"would move {j['id']} (channel {j.get('channel')}) from {frm.name} to {to.name}")
+        return rc
+    st = fetch_status(cfg, to)
+    if not st.get("reachable"):
+        raise FleetError(f"{to.name} is unreachable, so nothing was moved ({str(st.get('error', ''))[:200]})")
+    broken = {}
+    for prov in sorted({j.get("provider") or "claude" for j in movable}):
+        why = node_readiness(st, prov)
+        if provider_broken(why, prov):
+            broken[prov] = why
+        elif why:
+            print(f"warning: {to.name}: {why}; the jobs wait in its queue there", file=sys.stderr)
+    moved = []
+    for j in movable:
+        why = broken.get(j.get("provider") or "claude")
+        if why:
+            print(f"fleet: {j['id']} stays on {frm.name}: on {to.name}, {why}, so it would fail there. "
+                  f"Fix that first (fleet health)", file=sys.stderr)
+            rc = 1
+            continue
+        try:
+            print(hand_over(cfg, frm, to, j["id"]))
+            moved.append(j)
+        except FleetError as e:
+            print(f"fleet: {e}", file=sys.stderr)
+            rc = 1
+    enabled = [n for n in cfg.nodes.values() if n.enabled]
+    other = sorted({j["channel"] for j in moved if isinstance(j.get("channel"), str)
+                    and to.name not in [n.name for n in channel_home(enabled, j["channel"])[0]]})
+    if other:
+        print(f"note: only these jobs moved. New {', '.join(other)} jobs still go to the VPS that fleet.ini "
+              f"names for {'that channel' if len(other) == 1 else 'those channels'}.")
+    return rc
 
 
 def cmd_pause(cfg: Config, a, resume: bool = False) -> int:
@@ -845,7 +1058,7 @@ def cmd_pull(cfg: Config, a) -> int:
             errors.append(f"{name}: {r}")
             continue
         for j in r:
-            status = "FAILED" if j.get("state") == "failed" else "done"
+            status = {"failed": "FAILED", "moved": "MOVED"}.get(j.get("state"), "done")
             reason = f" ({j['reason']})" if j.get("reason") else ""
             err = f"\n    could not download: {j['pull_error']}" if j.get("pull_error") else ""
             summary = " ".join(j.get("summary", "").split())[:300]
@@ -1168,9 +1381,47 @@ except SystemExit as exc:
 '''
 
 
-def hermes_cmd(exe: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+def hermes_cmd(exe: str, *args: str, profile: str = HERMES_PROFILE, timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run a Hermes command for the director profile (profile="" for Hermes' default profile)."""
     env = dict(os.environ, HERMES_NONINTERACTIVE="1")
-    return subprocess.run([exe, *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, env=env)
+    argv = [exe, *(["-p", profile] if profile else []), *args]
+    return subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, env=env)
+
+
+def director_home(exe: str):
+    """The director profile's folder, or None while the profile does not exist."""
+    r = hermes_cmd(exe, "profile", "show", HERMES_PROFILE, profile="")
+    if r.returncode != 0:
+        return None
+    m = re.search(r"(?im)^\s*path:\s*(\S.*?)\s*$", text(r.stdout))
+    home = Path(os.path.expanduser(m.group(1))) if m else hermes_home() / "profiles" / HERMES_PROFILE
+    return home if home.is_dir() else None
+
+
+def ensure_director(exe: str):
+    """Create the director profile when it is missing: (its folder or None, report lines).
+    It starts without Hermes' bundled skills, so it does only fleet work, with the
+    fleet skills from this repository."""
+    home = director_home(exe)
+    if home:
+        return home, [f"  = profile {HERMES_PROFILE}: {home}"]
+    r = hermes_cmd(exe, "profile", "create", HERMES_PROFILE, "--no-skills", "--description",
+                   "Fleet director: plans the videos and runs the VPS fleet with the fleet command", profile="")
+    home = director_home(exe)
+    if not home:
+        why = (text(r.stderr) or text(r.stdout))[-300:] or f"exit {r.returncode}"
+        return None, [f"  !! could not create the Hermes profile '{HERMES_PROFILE}': {why}",
+                      "     Update Hermes (`hermes update`), then run `fleet init` again."]
+    return home, [f"  + profile {HERMES_PROFILE}: {home}"]
+
+
+def hermes_model(exe: str) -> str:
+    """Hermes' chosen provider and model as "provider / model", or "" when none is set."""
+    model = hermes_get(exe, "model.default")
+    if not model or not isinstance(model, str):
+        return ""
+    provider = hermes_get(exe, "model.provider")
+    return f"{provider} / {model}" if provider and isinstance(provider, str) else model
 
 
 def hermes_get(exe: str, key: str):
@@ -1183,19 +1434,19 @@ def hermes_get(exe: str, key: str):
         return text(r.stdout) or None
 
 
-def apply_hermes_settings(exe: str, repo: str, keep_model: bool) -> list:
-    """Apply the director's settings through `hermes config set`, so Hermes
-    validates and writes them itself. Lists are merged, never replaced."""
+def apply_hermes_settings(exe: str, repo: str) -> list:
+    """Apply the director's settings through `hermes -p director config set`, so
+    Hermes validates and writes them itself. Lists are merged, never replaced. The
+    model is left alone: the owner picks it with `hermes -p director model`."""
     skills_dir = (REPO_ROOT / "home" / "hermes" / "skills").as_posix()
     wanted = [
         ("terminal.cwd", repo, "set"),
         ("terminal.timeout", 900, "min"),
         ("skills.external_dirs", [skills_dir], "union"),
         ("skills.auto_load", ["fleet-ops"], "union"),
-        ("approvals.deny", ["fleet exec all*rm -rf*", "*.config?fleet?secrets*", "*hermes?.env*"], "union"),
+        ("approvals.deny", ["fleet exec all*rm -rf*", "*.config?fleet?secrets*", "*hermes?.env*",
+                            f"*{HERMES_PROFILE}?.env*"], "union"),
     ]
-    if not keep_model:
-        wanted = [("model.provider", "anthropic", "set"), ("model.default", DIRECTOR_MODEL, "set")] + wanted
     report = []
     for key, value, mode in wanted:
         cur = hermes_get(exe, key)
@@ -1303,12 +1554,14 @@ def cmd_init(cfg_path: Path, a) -> int:
         print("==> Hermes: skipped (--no-hermes)")
     else:
         exe = find_hermes()
-        hh = hermes_home()
+        hh = None
         if not exe:
             print("==> Hermes: not found yet. Install it, then run `fleet init` again.")
         else:
-            print(f"==> Hermes ({exe}, data in {hh})")
-            hh.mkdir(parents=True, exist_ok=True)
+            print(f"==> Hermes ({exe}): the '{HERMES_PROFILE}' profile directs the fleet")
+            hh, lines = ensure_director(exe)
+            print("\n".join(lines))
+        if hh:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             if (hh / "config.yaml").exists():
                 shutil.copy2(hh / "config.yaml", hh / f"config.yaml.bak-{stamp}")
@@ -1324,12 +1577,19 @@ def cmd_init(cfg_path: Path, a) -> int:
             for name, args in (("fleet_health.py", ["health", "--changes-only"]), ("fleet_pull.py", ["pull", "--quiet"])):
                 write_file(scripts / name, CRON_SCRIPT.format(config=str(cfg_path), args=args, cli=cli))
                 print(f"  + {scripts / name}")
-            for line in apply_hermes_settings(exe, REPO_ROOT.as_posix(), a.keep_model):
+            for line in apply_hermes_settings(exe, REPO_ROOT.as_posix()):
                 print(line)
+            model = hermes_model(exe)
+            print(f"  = model: {model}  (change it with `hermes -p {HERMES_PROFILE} model`)" if model else
+                  f"  !! no model chosen yet: run `hermes -p {HERMES_PROFILE} model` to pick a provider and model")
+            if (hermes_home() / "scripts" / "fleet_health.py").exists():
+                print("  !! An older fleet setup used Hermes' default profile. See \"Upgrading to the director\n"
+                      "     profile\" in docs/operations/updates.md, so reports do not come twice.")
     print("\n==> Your fleet public key (add it in hPanel > VPS > Settings > SSH keys on each Hostinger account):")
     print(f"  {pub}")
-    print("\nNext: give Hermes its API key and connect Telegram (steps 4 and 5 of docs/home/windows.md or\n"
-          "docs/home/linux-macos.md). The secrets files are filled in later, while you set up Tailscale and the VPSs.")
+    print(f"\nNext: choose the director's model with `hermes -p {HERMES_PROFILE} model` and connect Telegram (steps\n"
+          "4 and 5 of docs/home/windows.md or docs/home/linux-macos.md). The secrets files are filled in later,\n"
+          "while you set up Tailscale and the VPSs.")
     return 0
 
 
@@ -1337,6 +1597,8 @@ def cmd_hermes_cron(cfg: Config, a) -> int:
     exe = find_hermes()
     if not exe:
         raise FleetError("hermes not found")
+    if not director_home(exe):
+        raise FleetError(f"the Hermes profile '{HERMES_PROFILE}' does not exist yet: run `fleet init` first")
     listing = text(hermes_cmd(exe, "cron", "list").stdout)
     jobs = [
         ("fleet-health", ["every 10m", "--no-agent", "--script", "fleet_health.py"]),
@@ -1356,7 +1618,8 @@ def cmd_hermes_cron(cfg: Config, a) -> int:
         r = hermes_cmd(exe, "cron", "create", *args, "--deliver", a.deliver, "--name", name)
         print(f"{'+' if r.returncode == 0 else '!!'} {name}" + ("" if r.returncode == 0 else f": {text(r.stderr)[-300:]}"))
         rc = rc or r.returncode
-    print("Cron runs inside the Hermes gateway: keep it running (hermes gateway status).")
+    print(f"These jobs belong to the '{HERMES_PROFILE}' profile (hermes -p {HERMES_PROFILE} cron list). They run inside\n"
+          "the Hermes gateway: keep it running (hermes gateway status).")
     return rc
 
 
@@ -1406,6 +1669,10 @@ def cmd_doctor(cfg_path: Path, a) -> int:
         for n in cfg.nodes.values():
             if not n.enabled:
                 continue
+            made = ", ".join("any channel" if channel_key(c) == "all" else c for c in channel_names(n))
+            check(f"{n.name}: makes videos for {made or 'no channel yet'}", bool(made),
+                  f"set `channels` for [{n.name}] in {cfg_path}: fleet dispatch sends a channel's jobs only "
+                  f"to its VPS", warn=True)
             for prov in n.providers:
                 p = cfg.secrets_dir / n.name / f"{prov}.env"
                 filled = p.exists() and any(read_env_file(p).values())
@@ -1419,8 +1686,15 @@ def cmd_doctor(cfg_path: Path, a) -> int:
         check("Tailscale auth key filled in (needed to bootstrap)", tsf.exists() and bool(read_env_file(tsf).get("TS_AUTHKEY")),
               f"edit {tsf}", warn=True)
     if exe:
+        home = director_home(exe)
+        check(f"Hermes profile {HERMES_PROFILE}: {home or 'missing'}", home is not None, "run `fleet init`")
+    if exe and home:
         cwd = hermes_get(exe, "terminal.cwd")
-        check("Hermes terminal.cwd points at this repo", str(cwd) == REPO_ROOT.as_posix(), "run `fleet init`", warn=True)
+        check("the director's terminal.cwd points at this repo", str(cwd) == REPO_ROOT.as_posix(), "run `fleet init`",
+              warn=True)
+        model = hermes_model(exe)
+        check(f"the director's model: {model or 'not chosen yet'}", bool(model),
+              f"run `hermes -p {HERMES_PROFILE} model` to pick a provider and model", warn=True)
     print("\nAll required checks passed." if not fails else f"\n{fails} required check(s) failed.")
     return 1 if fails else 0
 
@@ -1450,12 +1724,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--prompt")
     s.add_argument("--channel")
     s.add_argument("--provider")
-    s.add_argument("--to", help="auto (default, least busy), all (a copy on every VPS), or node name(s)")
+    s.add_argument("--to", help="auto (default: the channel's VPS), all (a copy on every VPS), or node name(s)")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--json", action="store_true")
     s = sp.add_parser("jobs", help="list jobs")
     s.add_argument("targets", nargs="?")
-    s.add_argument("--state", choices=["inbox", "running", "done", "failed"])
+    s.add_argument("--state", choices=["inbox", "outgoing", "running", "done", "failed", "moved"])
     s.add_argument("--json", action="store_true")
     s = sp.add_parser("logs", help="show a job's log")
     s.add_argument("node")
@@ -1468,6 +1742,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("node")
     s.add_argument("job_id")
     s.add_argument("--to", help="where to run the copy (default: the same node)")
+    s = sp.add_parser("handover", help="move queued jobs to another VPS (only when you ask)")
+    s.add_argument("from_node", metavar="FROM")
+    s.add_argument("to_node", metavar="TO")
+    s.add_argument("job_ids", nargs="*", metavar="JOB_ID", help="the jobs to move (default: every queued job on FROM)")
+    s.add_argument("--dry-run", action="store_true", help="show what would move, move nothing")
     s = sp.add_parser("pause", help="stop starting new jobs on nodes")
     s.add_argument("targets")
     s.add_argument("--reason", default="")
@@ -1510,7 +1789,6 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("forget-host", help="drop a rebuilt VPS's old host key")
     s.add_argument("node")
     s = sp.add_parser("init", help="set up this home machine")
-    s.add_argument("--keep-model", action="store_true", help="leave Hermes' model setting alone")
     s.add_argument("--no-hermes", action="store_true", help="do not touch Hermes")
     s = sp.add_parser("hermes-cron", help="create the scheduled Hermes jobs")
     s.add_argument("--deliver", default="telegram", help="where reports go (default: telegram)")
@@ -1520,7 +1798,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = {
     "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
-    "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "pause": cmd_pause,
+    "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "handover": cmd_handover,
+    "pause": cmd_pause,
     "resume": cmd_resume, "pull": cmd_pull, "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
     "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,

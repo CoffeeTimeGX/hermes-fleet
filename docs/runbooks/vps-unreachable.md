@@ -5,8 +5,10 @@
 
 **What it means for the work:** usually less than it seems. Only your PC's connection is
 broken. If the VPS itself is up, it keeps running its queue, and everything it finishes
-waits there for the next pull. `fleet dispatch` sends new jobs to the other VPSs
-meanwhile.
+waits there for the next pull. Meanwhile `fleet dispatch` refuses new jobs for its
+channel and says why. To have another VPS make them, name it:
+`fleet dispatch <file> --to vps4`. The jobs already queued on vps3 stay there, because
+`fleet handover` needs both VPSs to answer.
 
 ## 1. Is it your PC, or that VPS?
 

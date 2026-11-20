@@ -13,6 +13,9 @@
 #   jobs/running/*.json  claimed jobs
 #   jobs/done/*.json     finished with exit code 0
 #   jobs/failed/*.json   finished non-zero, timed out, cancelled or lost
+#   jobs/outgoing/*.json being handed over to another VPS (`fleet handover`)
+#   jobs/moved/*.json    handed over after it had started here: the workspace
+#                        keeps what it made, for the home machine to pull
 #   work/<id>/           workspace: job.json, output/, logs/, result.json, status.json
 #   logs/worker.log      worker log (rotated weekly by logrotate)
 #   .paused              set by `pause`: start no new jobs until `resume`
@@ -23,7 +26,7 @@
 # Commands:
 #   loop                 run forever (what systemd starts)
 #   status [--json]      node summary
-#   jobs [--json] [--state inbox|running|done|failed]
+#   jobs [--json] [--state inbox|outgoing|running|done|failed|moved]
 #   logs <id> [-f] [-n LINES]
 #   cancel <id>          cancel a queued or running job
 #   finished [--json]    finished jobs the home machine has not pulled yet
@@ -32,10 +35,15 @@
 #   resume               start queued jobs again (also ends a usage-limit hold early)
 #   gc [--days N]        delete pulled workspaces older than N days (default 7)
 #   recover              requeue or fail jobs whose process is gone
+#   release <id> <node>  take a queued job out of the queue to hand it over to
+#                        another VPS, and print it (`fleet handover` runs this)
+#   released <id>        the other VPS has the job: forget it here, or file it as
+#                        moved when it had started here
+#   unrelease <id>       the handover did not happen: put the job back in the queue
 #   version
 set -euo pipefail
 
-WORKER_VERSION="1.2.0"
+WORKER_VERSION="1.3.0"
 
 for _env in /etc/fleet/worker.env /etc/fleet/worker.local.env; do
   if [[ -r "$_env" && -z "${FLEET_IGNORE_ENV_FILES:-}" ]]; then
@@ -81,7 +89,7 @@ log() { printf '%s [%s] %s\n' "$(now)" "$FLEET_NODE" "$*" >>"$LOGDIR/worker.log"
 command -v jq >/dev/null 2>&1 || die "jq is required (apt-get install -y jq)"
 
 ensure_dirs() {
-  mkdir -p "$JOBS"/{inbox,running,done,failed} "$WORK" "$LOGDIR"
+  mkdir -p "$JOBS"/{inbox,outgoing,running,done,failed,moved} "$WORK" "$LOGDIR"
 }
 
 valid_id() { [[ "$1" =~ $ID_PATTERN ]]; }
@@ -423,7 +431,8 @@ job_json_line() {
   jq -c --arg st "$state" --arg id "$id" --argjson s "$status" --argjson pulled "$pulled" \
      '{id:$id, state:$st, channel:(.channel // null), title:(.title // null), provider:(.provider // "claude"),
        submitted_at:(.submitted_at // null), started_at:$s.started_at, finished_at:$s.finished_at,
-       duration_s:$s.duration_s, exit_code:$s.exit_code, reason:$s.reason, log_tail:$s.log_tail,
+       duration_s:$s.duration_s, exit_code:$s.exit_code, log_tail:$s.log_tail,
+       reason:(if $st == "outgoing" then "being handed over to \(.handover.to // "another VPS")" else $s.reason end),
        attempts:$s.attempts, limit_waits:$s.limit_waits, pulled:$pulled}' "$f" 2>/dev/null \
      || jq -nc --arg st "$state" --arg id "$id" '{id:$id, state:$st, invalid:true}'
 }
@@ -431,7 +440,7 @@ job_json_line() {
 cmd_jobs() {
   ensure_dirs
   local json=0 only="" s f
-  local states=(inbox running "done" failed)
+  local states=(inbox outgoing running "done" failed moved)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1 ;;
@@ -441,7 +450,7 @@ cmd_jobs() {
     shift
   done
   if [[ -n "$only" ]]; then
-    case "$only" in inbox|running|"done"|failed) states=("$only") ;; *) die "unknown state $only" ;; esac
+    case "$only" in inbox|outgoing|running|"done"|failed|moved) states=("$only") ;; *) die "unknown state $only" ;; esac
   fi
   {
     for s in "${states[@]}"; do
@@ -486,11 +495,12 @@ cmd_status() {
   local json=0
   [[ "${1:-}" == "--json" ]] && json=1
   local inbox running ndone nfailed unpulled dfree dpct load mem memtot cpus up service hb_age
-  local paused=false preason="" reboot=false hold=""
+  local paused=false preason="" reboot=false hold="" stuck
   inbox=$(find "$JOBS/inbox" -maxdepth 1 -name '*.json' -type f | wc -l)
   running=$(running_count)
   ndone=$(find "$JOBS/done" -maxdepth 1 -name '*.json' -type f | wc -l)
   nfailed=$(find "$JOBS/failed" -maxdepth 1 -name '*.json' -type f | wc -l)
+  stuck=$(find "$JOBS/outgoing" -maxdepth 1 -name '*.json' -type f -mmin +10 | wc -l)   # handovers that stopped halfway
   unpulled=$(cmd_finished | jq 'length')
   dfree=$(df -Pk "$FLEET_ROOT" | awk 'NR==2{printf "%.1f", $4/1048576}')
   dpct=$(df -Pk "$FLEET_ROOT" | awk 'NR==2{gsub("%","",$5); print 100-$5}')
@@ -520,11 +530,12 @@ cmd_status() {
     --arg load "$load" --argjson mem "${mem:-0}" --argjson memtot "${memtot:-0}" --argjson cpus "$cpus" \
     --argjson up "${up:-0}" --argjson hb "$hb_age" --argjson paused "$paused" --arg preason "$preason" \
     --argjson reboot "$reboot" --argjson providers "$(provider_report)" --arg t "$(now)" --arg hold "$hold" \
-    --argjson limit "$limit" \
+    --argjson limit "$limit" --argjson stuck "$stuck" \
     '{node:$node, worker_version:$v, service:$service, heartbeat_age_s:$hb, time:$t,
       max_parallel:$max, paused:$paused, paused_reason:(if $paused then $preason else null end),
       on_hold:(if $hold == "" then null else $hold end), limit:$limit,
       queue:{inbox:$inbox, running:$running, done:$done, failed:$failed, unpulled:$unpulled},
+      stuck_handovers:$stuck,
       disk_free_gb:$dfree, disk_free_pct:$dpct, min_free_gb:$minfree,
       low_disk:(($dfree < $minfree) or ($hold | startswith("low disk"))),
       load1:($load|tonumber), cpus:$cpus, mem_available_mb:$mem, mem_total_mb:$memtot,
@@ -559,13 +570,16 @@ cmd_cancel() {
   ensure_dirs
   exec 9>"$LOCK"
   flock -w 30 9 || die "could not lock the queue"
-  if [[ -f "$JOBS/inbox/$id.json" ]]; then
-    mkdir -p "$WORK/$id"
-    mv -f "$JOBS/inbox/$id.json" "$JOBS/running/$id.json"
-    finish_job "$id" failed 130 "cancelled before it started"
-    echo "cancelled queued job $id"
-    return 0
-  fi
+  local q
+  for q in inbox outgoing; do
+    if [[ -f "$JOBS/$q/$id.json" ]]; then
+      mkdir -p "$WORK/$id"
+      mv -f "$JOBS/$q/$id.json" "$JOBS/running/$id.json"
+      finish_job "$id" failed 130 "cancelled before it started"
+      echo "cancelled queued job $id"
+      return 0
+    fi
+  done
   flock -u 9
   if [[ -f "$JOBS/running/$id.json" ]]; then
     local pid
@@ -585,11 +599,99 @@ cmd_cancel() {
   die "job $id is not queued or running"
 }
 
+# release <id> <node>: take a queued job out of the queue for a handover to
+# <node> and print it on one line. Under the claim lock, so the loop cannot start
+# it meanwhile. The job waits in jobs/outgoing/ until `released` or `unrelease`.
+# Asking again for the same node prints it again (a handover that broke halfway).
+cmd_release() {
+  local id="${1:-}" to="${2:-}"
+  valid_id "$id" && [[ "$to" =~ $NAME_PATTERN ]] || die "usage: fleet-worker release <id> <node>"
+  ensure_dirs
+  local inf="$JOBS/inbox/$id.json" outf="$JOBS/outgoing/$id.json" prev started=false
+  exec 9>"$LOCK"
+  flock -w 30 9 || die "could not lock the queue"
+  if [[ -f "$inf" ]]; then
+    [[ -d "$WORK/$id" ]] && started=true
+    jq -c --arg to "$to" --arg t "$(now)" --argjson q "$(stat -c %Y "$inf")" --argjson s "$started" \
+      '.handover = {to: $to, at: $t, queued: $q, started: $s}' "$inf" >"$outf.tmp" \
+      || { rm -f "$outf.tmp"; die "job $id is not valid JSON"; }
+    mv -f "$outf.tmp" "$outf"
+    rm -f "$inf"
+    log "job $id: handing over to $to"
+  elif [[ -f "$outf" ]]; then
+    prev="$(jq -r '.handover.to // empty' "$outf" 2>/dev/null || true)"
+    if [[ "$prev" != "$to" ]]; then
+      echo "job $id is halfway through a handover to ${prev:-another VPS}; finish it with: fleet handover $FLEET_NODE ${prev:-<vps>} $id" >&2
+      exit 5
+    fi
+  elif [[ -f "$JOBS/running/$id.json" ]]; then
+    echo "job $id is running here" >&2
+    exit 3
+  else
+    echo "job $id is not queued here" >&2
+    exit 4
+  fi
+  flock -u 9
+  jq -c . "$outf"
+}
+
+# released <id>: the other VPS has queued the job. A job that had started here
+# keeps its workspace, filed as moved, so the next pull brings home what it made.
+cmd_released() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker released <id>"
+  ensure_dirs
+  local outf="$JOBS/outgoing/$id.json" to
+  exec 9>"$LOCK"
+  flock -w 30 9 || die "could not lock the queue"
+  if [[ ! -f "$outf" ]]; then
+    flock -u 9
+    echo "job $id is not being handed over (nothing to do)"
+    return 0
+  fi
+  to="$(jq -r '.handover.to // "another VPS"' "$outf" 2>/dev/null || echo "another VPS")"
+  if [[ -d "$WORK/$id" ]]; then
+    json_merge "$WORK/$id/status.json" --arg t "$(now)" --arg r "handed over to $to; it starts over there" \
+      '.state="moved" | .finished_at=$t | .reason=$r | del(.exit_code, .duration_s, .log_tail, .pid)'
+    rm -f "$WORK/$id/pid"
+    mv -f "$outf" "$JOBS/moved/$id.json"
+  else
+    rm -f "$outf"
+  fi
+  flock -u 9
+  log "job $id handed over to $to"
+  echo "job $id handed over to $to"
+}
+
+# unrelease <id>: the handover did not happen. The job goes back to its old
+# place in the queue.
+cmd_unrelease() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker unrelease <id>"
+  ensure_dirs
+  local outf="$JOBS/outgoing/$id.json" inf="$JOBS/inbox/$id.json" queued
+  exec 9>"$LOCK"
+  flock -w 30 9 || die "could not lock the queue"
+  if [[ ! -f "$outf" ]]; then
+    flock -u 9
+    echo "job $id is not being handed over (nothing to do)"
+    return 0
+  fi
+  queued="$(jq -r '.handover.queued // empty' "$outf" 2>/dev/null || true)"
+  jq 'del(.handover)' "$outf" >"$inf.tmp" || { rm -f "$inf.tmp"; die "job $id is not valid JSON"; }
+  [[ "$queued" =~ ^[0-9]+$ ]] && touch -d "@$queued" "$inf.tmp"
+  mv -f "$inf.tmp" "$inf"
+  rm -f "$outf"
+  flock -u 9
+  log "job $id stays here (handover undone)"
+  echo "job $id is back in the queue on $FLEET_NODE"
+}
+
 cmd_finished() {
   ensure_dirs
   local f s
   {
-    for s in "done" failed; do
+    for s in "done" failed moved; do
       for f in "$JOBS/$s"/*.json; do
         [[ -e "$f" ]] || continue
         [[ -f "$WORK/$(basename "$f" .json)/.pulled" ]] && continue
@@ -635,7 +737,7 @@ cmd_gc() {
     [[ -f "$d/.pulled" ]] || continue
     if [[ -n "$(find "$d/.pulled" -mtime +"$days" 2>/dev/null)" ]]; then
       rm -rf -- "$d"
-      rm -f -- "$JOBS/done/$id.json" "$JOBS/failed/$id.json"
+      rm -f -- "$JOBS/done/$id.json" "$JOBS/failed/$id.json" "$JOBS/moved/$id.json"
       n=$((n + 1))
     fi
   done
@@ -662,6 +764,9 @@ main() {
     resume) cmd_resume ;;
     gc) cmd_gc "$@" ;;
     recover) cmd_recover ;;
+    release) cmd_release "$@" ;;
+    released) cmd_released "$@" ;;
+    unrelease) cmd_unrelease "$@" ;;
     version) echo "$WORKER_VERSION" ;;
     ""|-h|--help|help) usage ;;
     *) die "unknown command '$cmd' (try: fleet-worker help)" ;;

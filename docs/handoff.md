@@ -8,14 +8,16 @@ in the repository root too: it holds the same rules in short.
 ## What this is
 
 The owner makes videos for several channels with five Hostinger VPSs, `vps1` to `vps5`,
-each in its own Hostinger account and each signed in to its own Claude account (a subscription token
-from `claude setup-token`). Each VPS runs headless Claude Code sessions that make videos
-for all of the owner's channels.
+each in its own Hostinger account and each signed in to its own Claude account (a
+subscription token from `claude setup-token`). Each VPS runs headless Claude Code
+sessions that make the videos of its own channel (`channels` in `fleet.ini`).
 
-One Hermes Agent (Nous Research) on the owner's Windows PC directs the fleet. It talks
-to the owner in its terminal and on Telegram, and reaches the VPSs only through the
-`fleet` command, over SSH on Tailscale. There is no Hermes on the VPSs, and the VPSs
-cannot reach the PC or each other.
+One Hermes Agent (Nous Research) on the owner's Windows PC directs the fleet, from its
+own Hermes profile named `director` (`hermes -p director`). It runs on a model from a
+provider the owner picks with `hermes -p director model`, not on Claude. It talks to the
+owner in its terminal and on Telegram, and reaches the VPSs only through the `fleet`
+command, over SSH on Tailscale. There is no Hermes on the VPSs, and the VPSs cannot
+reach the PC or each other.
 
 ## State
 
@@ -25,6 +27,7 @@ cannot reach the PC or each other.
 | Tests: unit, local end to end, and a fake Hostinger VPS over real SSH | Tailscale set-up and provisioning the five real VPSs |
 | This documentation site, with runbooks | The channel templates: `CLAUDE.md` files and Claude Code skills per channel in `vps/templates/`. The owner keeps this for a later step. |
 | | Optional: the Hostinger API MCP servers for Hermes |
+| | The studio view: a private page where the owner watches every VPS at work, from above |
 
 When you help with the set-up, follow [Getting started](getting-started.md) in order. The
 owner can give you their PC through Remote Control; the VPSs are reached only through
@@ -64,6 +67,18 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 - **Nothing unpulled is ever deleted** on a VPS. `gc` only deletes pulled workspaces.
 - **The provider contract:** exit 0 success, 75 usage limit (with `logs/limit.json`),
   78 no credentials, anything else failure. The worker knows nothing else about Claude.
+- **Hermes does not run on Claude.** The owner picks its provider and model with
+  `hermes -p director model`. `fleet init` never sets them, and the docs never point
+  Hermes at a Claude model.
+- **Hermes works from its `director` profile.** `fleet init` creates it and every Hermes
+  command the fleet runs has `-p director`, so the fleet's settings, Telegram bot and
+  scheduled jobs stay apart from the owner's default Hermes. The one gateway (started
+  from the default profile, `hermes gateway install`) serves it.
+- **One channel per VPS, and work never moves by itself.** `fleet dispatch` sends a job
+  only to the VPS whose `channels` names its channel, and the job waits there when that
+  VPS is busy, paused or at its limit. Work moves to another VPS only when the owner
+  asks: `fleet handover`, `--to` or `fleet retry --to`. Hermes offers a handover, and
+  never does one on its own.
 - **One Claude account per VPS, used openly.** Never add anything that hides the link
   between the accounts or rotates accounts to get around limits. See
   [Claude accounts](providers/claude-accounts.md).
@@ -118,6 +133,9 @@ before relying on them.
 | `hermes update`, `hermes --version`, `hermes uninstall`, `hermes gateway install/start/restart/status` | [Hermes CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |
 | hPanel: **Web console** and **Reboot** on the VPS Overview page; **OS & Panel > Operating System** to reinstall | [Hostinger VPS dashboard](https://www.hostinger.com/support/5726606-how-to-use-vps-dashboard-in-hostinger/), [Change the OS](https://www.hostinger.com/support/4965922-how-to-change-the-operating-system-of-your-vps-at-hostinger/) |
 | Tailscale: `tailscale set --auto-update` | [Update Tailscale](https://tailscale.com/docs/features/client/update) |
+| `hermes model` picks Hermes' provider and model (`model.provider`, `model.default`); Nous Portal, OpenRouter, OpenAI, Gemini and many more are supported; agent use needs at least 64K tokens of context | [Hermes providers](https://hermes-agent.nousresearch.com/docs/integrations/providers) |
+| Hermes profiles are separate Hermes homes (`~/.hermes/profiles/<name>/`) with their own config, `.env`, `SOUL.md`, memory, skills and cron jobs; `hermes -p <name>` runs one; `hermes profile create/list/show/delete`; by default one gateway, installed from the default profile, serves every profile; a bot token works in one profile only (a second one is parked as `duplicate_credential`); clones never copy bot tokens or cron jobs | [Hermes profiles](https://hermes-agent.nousresearch.com/docs/user-guide/profiles), [Many gateways](https://hermes-agent.nousresearch.com/docs/user-guide/multi-profile-gateways) |
+| Claude Code Projects (claude.ai/code and the Claude apps) are in public beta on Pro and Max, and are not used from the terminal or `claude -p` | [Claude Code projects](https://code.claude.com/docs/en/claude-projects.md) |
 
 ## Working with the owner
 

@@ -12,9 +12,11 @@ Your PC never runs a session itself; it only talks to this worker over SSH.
   app/                              code copied from the repository's vps/ folder
   app.old/                          the code before the last fleet sync
   jobs/inbox/<id>.json              jobs waiting to start, oldest first
+  jobs/outgoing/<id>.json           jobs that fleet handover is moving to another VPS
   jobs/running/<id>.json            jobs running now
   jobs/done/<id>.json               jobs that finished well
   jobs/failed/<id>.json             jobs that failed, timed out or were cancelled
+  jobs/moved/<id>.json              jobs handed over after they had started here
   work/<id>/                        each job's workspace (below)
   logs/worker.log                   what the worker did, rotated weekly
   .paused                           present while the VPS is paused, with the reason
@@ -49,8 +51,13 @@ stateDiagram-v2
   running --> failed: error, time-out, cancel
   running --> inbox: usage limit, or process lost with retries left
   inbox --> failed: fleet cancel
+  inbox --> outgoing: fleet handover starts
+  outgoing --> [*]: handed over before it started
+  outgoing --> moved: handed over after it had started
+  outgoing --> inbox: the other VPS could not take it
   done --> [*]: pulled, deleted 7 days later
   failed --> [*]: pulled, deleted 7 days later
+  moved --> [*]: pulled, deleted 7 days later
 ```
 
 Every 5 seconds the worker:
@@ -67,6 +74,12 @@ after a reboot or a crash. Such a job goes back to the inbox while it has retrie
 
 The worker can restart (after `fleet sync`, for example) without touching the running
 jobs, because each one runs in its own session. The restarted worker finds them again.
+
+A handover (`fleet handover`) moves a waiting job to `jobs/outgoing/`, where it cannot
+start, while your PC queues it on the other VPS. Then the job leaves this VPS: its file
+is deleted, or, when it had already started here, it is filed as `moved` with its
+workspace, so that the next pull brings home what it made. When the other VPS cannot
+take it, the job goes back to the inbox in its old place.
 
 ## Exit codes and reasons
 
@@ -99,7 +112,8 @@ fleet exec vps1 -- fleet-worker status
 | `fleet-worker status [--json]` | The VPS's summary; `fleet status` shows it. |
 | `fleet-worker jobs [--json] [--state S]` | The jobs on this VPS. |
 | `fleet-worker logs ID [-f] [-n LINES]` | A job's provider log. |
-| `fleet-worker cancel ID` | Cancel a waiting or running job. |
+| `fleet-worker cancel ID` | Cancel a waiting, outgoing or running job. |
+| `fleet-worker release ID NODE`, `released ID`, `unrelease ID` | The three steps of a handover: take a waiting job out of the queue for NODE, let it go once NODE has it, or put it back. `fleet handover` runs them. |
 | `fleet-worker finished [--json]` | Finished jobs that are not pulled yet. |
 | `fleet-worker mark-pulled ID` | Mark a job as pulled. |
 | `fleet-worker pause [REASON]`, `resume` | Stop and restart starting new jobs; `resume` also ends a usage-limit wait. |
@@ -145,6 +159,7 @@ fields other tools may use:
 | `max_parallel`, `paused`, `paused_reason`, `on_hold` | Capacity, and why no new job starts, if none does. |
 | `limit` | The usage-limit wait, while it lasts: `provider`, `kind`, `message`, `until` (Unix time) and `until_iso`. |
 | `queue` | `inbox`, `running`, `done`, `failed` and `unpulled` counts. |
+| `stuck_handovers` | Jobs left in `jobs/outgoing/` for more than 10 minutes: a handover that stopped halfway. |
 | `disk_free_gb`, `disk_free_pct`, `low_disk` | Free space, and whether it is under `MIN_FREE_GB`. |
 | `load1`, `cpus`, `mem_available_mb`, `mem_total_mb`, `uptime_s` | The machine's load and memory. |
 | `reboot_required` | Security updates wait for a reboot. |

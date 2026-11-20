@@ -15,8 +15,8 @@ has its own API token, so Hermes gets five small MCP servers, one per account.
 In each account's hPanel, open the **API** page, go to the **API tokens** tab and create
 a token. Give it an expiry date you will remember, and copy it.
 
-A token can do everything in its Hostinger account, so it stays on your PC, in Hermes'
-`.env` file, and nowhere else.
+A token can do everything in its Hostinger account, so it stays on your PC, in the
+director's `.env` file, and nowhere else.
 
 ## 2. Install the MCP server
 
@@ -29,22 +29,23 @@ npm install -g @hostinger/mcp
 The package includes `hostinger-vps-mcp`, a server with only the VPS tools, which is
 all the fleet needs.
 
-## 3. Give the tokens to Hermes
+## 3. Give the tokens to the director
 
 ```
-hermes config set HOSTINGER_TOKEN_ACCOUNT_1 <token of account 1>
-hermes config set HOSTINGER_TOKEN_ACCOUNT_2 <token of account 2>
+hermes -p director config set HOSTINGER_TOKEN_ACCOUNT_1 <token of account 1>
+hermes -p director config set HOSTINGER_TOKEN_ACCOUNT_2 <token of account 2>
 ...
-hermes config set HOSTINGER_TOKEN_ACCOUNT_5 <token of account 5>
+hermes -p director config set HOSTINGER_TOKEN_ACCOUNT_5 <token of account 5>
 ```
 
 Use the same numbering as the `hostinger_account` labels in your
 [inventory](../reference/config.md#fleetini), so account 1 is the one that owns vps1,
 and so on.
 
-## 4. Add the servers to Hermes
+## 4. Add the servers to the director
 
-Open Hermes' configuration with `hermes config edit` and paste the `mcp_servers:` block
+Open the director's configuration with `hermes -p director config edit` and paste the
+`mcp_servers:` block
 from [`home/hermes/mcp-hostinger.example.yaml`](https://github.com/CoffeeTimeGX/hermes-fleet/blob/main/home/hermes/mcp-hostinger.example.yaml).
 Each server reads its token from the variable you set in step 3.
 

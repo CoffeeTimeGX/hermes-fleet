@@ -2,7 +2,7 @@
 # Set up the Hermes fleet director on Linux, macOS or WSL2.
 #
 #   git clone https://github.com/CoffeeTimeGX/hermes-fleet ~/hermes-fleet
-#   cd ~/hermes-fleet && ./home/install.sh [--no-hermes] [--keep-model]
+#   cd ~/hermes-fleet && ./home/install.sh [--no-hermes]
 #
 # Installs Hermes Agent if it is missing, puts `fleet` on your PATH and runs
 # `fleet init`. Safe to re-run: your inventory, secrets and SSH key are kept.
@@ -15,7 +15,6 @@ INSTALL_HERMES=1
 for a in "$@"; do
   case "$a" in
     --no-hermes) INSTALL_HERMES=0; INIT_ARGS+=(--no-hermes) ;;
-    --keep-model) INIT_ARGS+=(--keep-model) ;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 1 ;;
   esac
@@ -65,9 +64,9 @@ step "Done. Next steps"
 cat <<'EOF'
 1. Check the setup:
      fleet doctor
-2. Give Hermes its API key and connect Telegram (docs/home/linux-macos.md, steps 4 and 5):
-     hermes config set ANTHROPIC_API_KEY <your Claude Console key>
-     hermes gateway setup
+2. Choose the director's model and connect Telegram (docs/home/linux-macos.md, steps 4 and 5):
+     hermes -p director model
+     hermes -p director gateway setup
      hermes gateway install
      hermes gateway start
 3. Create the scheduled checks:

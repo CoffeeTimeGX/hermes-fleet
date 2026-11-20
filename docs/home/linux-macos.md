@@ -46,13 +46,12 @@ It installs Hermes Agent with its official installer if it is missing, then runs
 | Secrets (mode 600, only you can read them) | `~/.config/fleet/secrets/` |
 | Fleet SSH key | `~/.ssh/fleet_ed25519` and `fleet_ed25519.pub` |
 | SSH shortcuts, so `ssh vps1` works | `~/.ssh/config.d/fleet`, included from `~/.ssh/config` |
-| Scheduled-check scripts and Hermes settings | `~/.hermes/` |
+| The director, Hermes' `director` profile: settings, `SOUL.md`, scheduled-check scripts | `~/.hermes/profiles/director/` (`hermes profile show director` prints it) |
 
 Finished jobs will go to `~/fleet-results/`. Running the installer again is safe: it
 never overwrites your inventory, your secrets or your key.
 
-Options: `--keep-model` leaves Hermes' model setting alone, and `--no-hermes` skips
-everything about Hermes.
+Option: `--no-hermes` skips everything about Hermes.
 
 At the end it prints **your fleet public key** (a line starting with `ssh-ed25519`).
 You will paste it into Hostinger. Print it again any time with
@@ -74,23 +73,35 @@ fleet doctor
 Every line should say `ok` or `warn`. Warnings about Tailscale, Claude credentials and
 node names that do not resolve yet are expected at this stage.
 
-## 4. Give Hermes its API key
+## 4. Choose the director's model
 
-Hermes itself runs on Claude through the Claude API, and Anthropic requires third-party
-agents such as Hermes to use an API key, not a Claude subscription login.
+Hermes directs the fleet from its own profile, `director`, which `fleet init` created. A
+profile is a separate Hermes with its own settings, model, memory and Telegram bot, so the
+fleet work stays apart from anything else you use Hermes for. Commands for the director
+have `-p director` in them.
 
-1. Sign in at [platform.claude.com](https://platform.claude.com), add a payment method,
-   create an API key named `hermes-director`, and set a monthly spend limit.
-2. Give it to Hermes (it is stored in `~/.hermes/.env`):
+The director runs on a model you choose from any provider Hermes supports. It does not
+use Claude: the Claude sessions run on the VPSs, signed in with their own Claude
+accounts, and the director hands them the work through the `fleet` command.
+
+1. Pick a provider and create an account there. Nous Portal is the one Hermes
+   recommends; OpenRouter, OpenAI, Google Gemini, DeepSeek, Kimi and GLM work too, and
+   the [Hermes providers page](https://hermes-agent.nousresearch.com/docs/integrations/providers) lists every one. Set a monthly spend limit
+   with the provider if it offers one.
+2. Run the model wizard for the director. It signs you in to the provider or asks for
+   its API key, and keeps the key in the director's own `.env` file:
 
     ```bash
-    hermes config set ANTHROPIC_API_KEY sk-ant-api03-...
+    hermes -p director model
     ```
 
-3. Try it: run `hermes` and ask *"run fleet list and tell me what you see"*.
+    Choose a model with at least 64,000 tokens of context that is good at tool calls.
 
-`fleet init` sets Hermes' model to `claude-opus-5-5`. To use another one:
-`hermes config set model.default <model id>`.
+3. Try it: run `hermes -p director` and ask *"run fleet list and tell me what you see"*.
+
+`fleet doctor` shows the director's model. Run `hermes -p director model` again to change
+it. `fleet init` also made the shortcut `director`, which does the same as
+`hermes -p director`.
 
 ## 5. Connect Telegram
 
@@ -98,8 +109,10 @@ The short version (details on the [Telegram page](telegram.md)):
 
 1. In Telegram, open **@BotFather**, send `/newbot`, and copy the token.
 2. Send a message to **@userinfobot** to get your numeric user id.
-3. Run `hermes gateway setup`, choose Telegram, and paste the token and your user id.
-4. Keep the gateway running in the background, start it now, and check it:
+3. Run `hermes -p director gateway setup`, choose Telegram, and paste the token and your
+   user id.
+4. Keep Hermes' gateway running in the background, start it now, and check it. One
+   gateway serves every profile, so these commands have no `-p director`:
 
     ```bash
     hermes gateway install
@@ -120,8 +133,8 @@ The short version (details on the [Telegram page](telegram.md)):
 fleet hermes-cron
 ```
 
-Three Hermes cron jobs: a health check every 10 minutes that messages you only when
-something changes, a pull every 30 minutes, and a daily report at 9 am. See
+Three cron jobs for the director: a health check every 10 minutes that messages you only
+when something changes, a pull every 30 minutes, and a daily report at 9 am. See
 [Scheduled checks](../operations/scheduled-checks.md).
 
 ## 7. Next

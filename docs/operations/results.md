@@ -30,6 +30,11 @@ fleet-results/
 To keep results somewhere else, such as an external disk, set `results_dir` in your
 inventory (see [Configuration](../reference/config.md#fleetini)).
 
+A job you moved with `fleet handover` after it had started, for example one that waited
+for a usage limit, comes home twice: what it made on the first VPS, marked `[MOVED]` in
+the pull message and filed under that VPS, and the finished job from the VPS that made
+it in the end.
+
 ## What each file tells you
 
 **`output/SUMMARY.txt`** is the session's last message: what it made and where, and the
@@ -63,8 +68,8 @@ jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tex
 
 `fleet-results/index.jsonl` gets one line of JSON for every job pulled, so Hermes (or a
 script of yours) can answer questions like *"what did vps3 make this week?"* without
-opening every folder. Each line has the job's `id`, `node`, `state` (`done` or
-`failed`), `channel`, `title`, `provider`, the `submitted_at`, `started_at` and
+opening every folder. Each line has the job's `id`, `node`, `state` (`done`, `failed`
+or `moved`), `channel`, `title`, `provider`, the `submitted_at`, `started_at` and
 `finished_at` times, `duration_s`, `exit_code`, `reason`, `attempts`, `limit_waits`,
 `path` (the folder on your PC), `summary` (the first 600 characters of `SUMMARY.txt`)
 and `pulled_at`.

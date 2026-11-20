@@ -1,7 +1,7 @@
 # Scheduled checks
 
-Hermes watches the fleet for you with three scheduled jobs. `fleet hermes-cron` creates
-them once, during the home setup:
+Hermes watches the fleet for you with three scheduled jobs of its `director` profile.
+`fleet hermes-cron` creates them once, during the home setup:
 
 ```
 fleet hermes-cron
@@ -11,7 +11,8 @@ fleet hermes-cron
 + fleet-health
 + fleet-pull
 + fleet-daily-report
-Cron runs inside the Hermes gateway: keep it running (hermes gateway status).
+These jobs belong to the 'director' profile (hermes -p director cron list). They run inside
+the Hermes gateway: keep it running (hermes gateway status).
 ```
 
 Running it again changes nothing: jobs that already exist are left alone.
@@ -56,9 +57,10 @@ It looks for these problems:
 | Free disk under 15%, or under 3 GB (new jobs then wait) | [Disk full](../runbooks/disk-full.md) |
 | Claude is not installed, or not working (no credentials, failed check) | [Provision a VPS](../vps/provisioning.md), steps 5 to 7 |
 | A subscription token is 330 days old (it expires after a year) | [Rotate credentials](../runbooks/rotate-credentials.md) |
-| More than 25 jobs wait in one queue | Spread the work, or check why the VPS is slow |
+| More than 25 jobs wait in one queue | Check why the VPS is slow. If another VPS should make some of them, move them with `fleet handover` ([Move work to another VPS](everyday.md#move-work-to-another-vps)) |
 | Security updates need a reboot | `fleet reboot <vps>` when no job runs |
-| A usage-limit wait longer than 6 hours (a weekly limit) | Nothing to do: [Usage limits](usage-limits.md) |
+| A usage-limit wait longer than 6 hours (a weekly limit) | Nothing to do, unless another VPS should take its queue: [Usage limits](usage-limits.md) |
+| A handover stopped halfway (a job has been `outgoing` for more than 10 minutes) | Run the same `fleet handover` again: it finishes the move without making a second copy |
 
 The check remembers what it reported in `~/.config/fleet/state/health.json` on your PC.
 
@@ -82,7 +84,7 @@ not reach, because the health check already reports that.
 At 9 am, Hermes runs `fleet status` and `fleet jobs` with its `fleet-ops` skill and
 sends you a report of at most 12 lines: each VPS's health, the jobs that finished and
 failed in the last 24 hours, what is still queued or running, and anything you need to
-do. This is the only one of the three that uses Hermes' model, and so its API key.
+do. This is the only one of the three that uses Hermes' model.
 
 ## Where the messages go
 
@@ -94,11 +96,12 @@ With `--deliver local`, Hermes only saves the messages in its `cron/output/` fol
 ## Times and timezone
 
 Hermes reads *"every day at 9am"* in the timezone of its settings. If the report comes
-at the wrong hour, set your timezone in Hermes' settings (`timezone:` in its
-`config.yaml`, which `hermes config edit` opens), or give the report its own timezone:
+at the wrong hour, set your timezone in the director's settings (`timezone:` in its
+`config.yaml`, which `hermes -p director config edit` opens), or give the report its own
+timezone:
 
 ```
-hermes cron edit fleet-daily-report --timezone Europe/London
+hermes -p director cron edit fleet-daily-report --timezone Europe/London
 ```
 
 Use your own zone's name from the
@@ -115,14 +118,14 @@ everything and the next health check reports what is still wrong. See
 ## Manage the jobs
 
 ```
-hermes cron list                          # the jobs and their next run
-hermes cron run fleet-daily-report        # run one within the next minute, as an extra
-hermes cron pause fleet-health            # stop one for a while
-hermes cron resume fleet-health
-hermes cron remove fleet-daily-report     # delete one (fleet hermes-cron creates it again)
+hermes -p director cron list                        # the jobs and their next run
+hermes -p director cron run fleet-daily-report      # run one within the next minute, as an extra
+hermes -p director cron pause fleet-health          # stop one for a while
+hermes -p director cron resume fleet-health
+hermes -p director cron remove fleet-daily-report   # delete one (fleet hermes-cron creates it again)
 ```
 
-The two script jobs run small Python files that `fleet init` wrote into Hermes'
+The two script jobs run small Python files that `fleet init` wrote into the director's
 `scripts/` folder: `fleet_health.py` and `fleet_pull.py`. They point at your copy of the
 repository and your inventory. To change a threshold of the health check, edit the
 argument list in `fleet_health.py`, for example

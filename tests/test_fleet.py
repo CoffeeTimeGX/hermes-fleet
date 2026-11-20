@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import fnmatch
 import importlib.machinery
 import importlib.util
 import io
@@ -546,6 +547,214 @@ class UsageLimitTest(TempDirTest):
         self.assertIn("warning: vps2: at its usage limit until", err)
 
 
+# --------------------------------------------------------------------------- channels and handover
+
+class ChannelTest(TempDirTest):
+    """Each VPS makes videos for its own channels (`channels` in fleet.ini)."""
+
+    def cfg(self, **channels):
+        cfg = make_cfg(self.tmp, *channels)
+        for name, ch in channels.items():
+            cfg.nodes[name].channels = ch
+        return cfg
+
+    def dispatch(self, cfg, statuses, jobs, spec="auto"):
+        uploaded = []
+        with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)), \
+                mock.patch.object(fleet, "upload_job",
+                                  side_effect=lambda c, n, j: uploaded.append((n.name, j["channel"]))):
+            rc, _, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job(j) for j in jobs], spec, False, False)
+        return rc, uploaded, err
+
+    def test_names_match_loosely(self):
+        key = fleet.channel_key
+        self.assertEqual({key("Space Facts"), key("space-facts"), key(" SPACE_FACTS "), key("space  facts!")},
+                         {"space-facts"})
+        self.assertEqual(key("قناة الفضاء"), "قناة-الفضاء")
+        self.assertNotEqual(key("Space Facts"), key("Space Fact"))
+        self.assertEqual(key("!!!"), "!!!")
+
+    def test_channel_home(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="History, all", vps3="")
+        pool = list(cfg.nodes.values())
+
+        def home(nodes, ch):
+            found, dedicated = fleet.channel_home(nodes, ch)
+            return [n.name for n in found], dedicated
+        self.assertEqual(home(pool, "space-facts"), (["vps1"], True))
+        self.assertEqual(home(pool, "HISTORY"), (["vps2"], True))
+        self.assertEqual(home(pool, "Cooking"), (["vps2"], False))
+        self.assertEqual(home(pool[:1], "Cooking"), ([], False))
+        self.assertTrue(fleet.serves(cfg.nodes["vps2"], "Cooking"))
+        self.assertFalse(fleet.serves(cfg.nodes["vps3"], "Cooking"))
+        self.assertEqual(fleet.dedicated_channels(cfg.nodes["vps2"]), ["History"])
+
+    def test_inventory(self):
+        p = self.tmp / "fleet.ini"
+        p.write_text("[vps1]\nchannels = Space Facts, History ; two\n[vps2]\nchannels =\n[vps3]\n", encoding="utf-8")
+        cfg = fleet.load_config(p)
+        self.assertEqual(fleet.channel_names(cfg.nodes["vps1"]), ["Space Facts", "History"])
+        self.assertEqual(fleet.channel_names(cfg.nodes["vps2"]), [])
+        self.assertEqual(fleet.channel_names(cfg.nodes["vps3"]), ["all"])  # inventories from before channels
+        example = fleet.load_config(REPO / "home" / "fleet.ini.example")
+        self.assertTrue(all(n.channels == "" for n in example.nodes.values()))
+
+    def test_jobs_stay_on_their_channels_vps(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="History", vps3="all")
+        statuses = {"vps1": UsageLimitTest.limited(30), "vps2": healthy(paused=True), "vps3": healthy()}
+        rc, up, err = self.dispatch(cfg, statuses, [{"prompt": "a", "channel": "Space Facts"},
+                                                    {"prompt": "b", "channel": "history"},
+                                                    {"prompt": "c", "channel": "Cooking"}])
+        self.assertEqual(rc, 0)
+        self.assertEqual(up, [("vps1", "Space Facts"), ("vps2", "history"), ("vps3", "Cooking")])
+        self.assertIn("warning: vps1: at its usage limit until", err)
+        self.assertIn("waits in its queue until the limit resets", err)
+        self.assertIn("warning: vps2: paused", err)
+
+    def test_several_vps_for_one_channel(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="space facts", vps3="all")
+        busy = dict(healthy()["queue"], inbox=2)
+        jobs = [{"prompt": p, "channel": "Space Facts"} for p in "abc"]
+        rc, up, _ = self.dispatch(cfg, {"vps1": healthy(queue=busy), "vps2": healthy(), "vps3": healthy()}, jobs)
+        self.assertEqual((rc, [n for n, _ in up]), (0, ["vps2", "vps2", "vps1"]))
+        limited = {"vps1": UsageLimitTest.limited(1), "vps2": UsageLimitTest.limited(2), "vps3": healthy()}
+        rc, up, _ = self.dispatch(cfg, limited, jobs[:1])
+        self.assertEqual((rc, up), (0, [("vps1", "Space Facts")]))  # never the idle vps3
+
+    def test_no_vps_for_the_channel(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="")
+        rc, up, err = self.dispatch(cfg, {"vps1": healthy(), "vps2": healthy()}, [{"prompt": "a", "channel": "Cooking"}])
+        self.assertEqual((rc, up), (1, []))
+        self.assertIn("no VPS makes videos for channel 'Cooking'", err)
+        self.assertIn("--to", err)
+
+    def test_unreachable_channel_vps_is_an_error(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="all")
+        rc, up, err = self.dispatch(cfg, {"vps1": {"reachable": False}, "vps2": healthy()},
+                                    [{"prompt": "a", "channel": "Space Facts"}])
+        self.assertEqual((rc, up), (1, []))
+        self.assertIn("channel 'Space Facts' is made on vps1, and no VPS can take", err)
+
+    def test_broken_provider_on_the_channels_vps(self):
+        # Such a job would fail rather than wait, so auto dispatch refuses it.
+        cfg = self.cfg(vps1="Space Facts", vps2="all")
+        broken = healthy(providers=[{"provider": "claude", "installed": True, "ok": False,
+                                     "error": "no credentials"}])
+        statuses = {"vps1": broken, "vps2": healthy()}
+        job = [{"prompt": "a", "channel": "Space Facts"}]
+        rc, up, err = self.dispatch(cfg, statuses, job)
+        self.assertEqual((rc, up), (1, []))
+        self.assertIn("channel 'Space Facts' is made on vps1, and no VPS can take a claude job right now "
+                      "(vps1 claude is not ok (no credentials))", err)
+        rc, up, err = self.dispatch(cfg, statuses, job, spec="vps1")  # named: it goes, with a warning
+        self.assertEqual((rc, up), (0, [("vps1", "Space Facts")]))
+        self.assertIn("fails if that is not fixed before it starts", err)
+
+    def test_named_vps_gets_a_note(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="History")
+        statuses = {"vps1": healthy(), "vps2": healthy()}
+        rc, up, err = self.dispatch(cfg, statuses, [{"prompt": "a", "channel": "Space Facts"}], spec="vps2")
+        self.assertEqual((rc, up), (0, [("vps2", "Space Facts")]))
+        self.assertIn("note: vps2 does not make videos for channel 'Space Facts'", err)
+        rc, up, err = self.dispatch(cfg, statuses, [{"prompt": "a", "channel": "Space Facts"}], spec="vps1")
+        self.assertNotIn("note:", err)
+
+    def test_provider_on_the_channels_vps(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="all")
+        cfg.nodes["vps2"].providers = ["claude", "other"]
+        rc, up, err = self.dispatch(cfg, {"vps1": healthy(), "vps2": healthy()},
+                                    [{"prompt": "a", "channel": "Space Facts", "provider": "other"}])
+        self.assertEqual((rc, up), (1, []))
+        self.assertIn("channel 'Space Facts' is made on vps1, which does not offer provider 'other'", err)
+
+    def test_health_points_to_handover_for_a_channels_vps(self):
+        cfg = self.cfg(vps1="Space Facts", vps2="all")
+        week = 7 * 24
+        statuses = {"vps1": UsageLimitTest.limited(3, hours_total=week),
+                    "vps2": UsageLimitTest.limited(3, hours_total=week, stuck_handovers=2)}
+        with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)):
+            p = fleet.health_problems(cfg, argparse.Namespace(min_disk_pct=15, max_backlog=25))
+        self.assertIn("(new Space Facts jobs wait there too, unless you move them with fleet handover)",
+                      p["vps1:limit"])
+        self.assertFalse([m for m in p.values() if re.search(r"[<>`]", m)])  # plain text for every chat app
+        self.assertIn("fleet dispatch sends new jobs to other VPSs meanwhile", p["vps2:limit"])
+        self.assertIn("2 job(s) stopped halfway through a handover", p["vps2:handover"])
+        self.assertNotIn("vps1:handover", p)
+
+
+class HandoverTest(TempDirTest):
+    listing = [{"id": "q1", "state": "inbox", "channel": "Space Facts", "provider": "claude"},
+               {"id": "q2", "state": "outgoing", "channel": "Space Facts", "provider": "claude"},
+               {"id": "r1", "state": "running", "channel": "Space Facts"},
+               {"id": "d1", "state": "done", "channel": "Space Facts"},
+               {"id": "o1", "state": "inbox", "channel": "Space Facts", "provider": "other"}]
+
+    def handover(self, listing, ids=(), dry_run=False, to_status=None, fail=()):
+        cfg = make_cfg(self.tmp, "vps1", "vps2")
+        cfg.nodes["vps1"].channels, cfg.nodes["vps2"].channels = "Space Facts", "History"
+        moved = []
+
+        def fake_remote(c, n, command, **kw):
+            self.assertEqual((n.name, command.split()[-2:]), ("vps1", ["jobs", "--json"]))
+            return subprocess.CompletedProcess([], 0, json.dumps(listing).encode(), b"")
+
+        def fake_hand_over(c, frm, to, jid):
+            if jid in fail:
+                raise fleet.FleetError(f"{jid} stays on {frm.name}: boom")
+            moved.append(jid)
+            return f"moved {jid}"
+        a = argparse.Namespace(from_node="vps1", to_node="vps2", job_ids=list(ids), dry_run=dry_run)
+        with mock.patch.object(fleet, "remote", side_effect=fake_remote), \
+                mock.patch.object(fleet, "fetch_status", return_value=to_status or healthy()), \
+                mock.patch.object(fleet, "hand_over", side_effect=fake_hand_over):
+            rc, out, err = quietly(fleet.cmd_handover, cfg, a)
+        return rc, moved, out, err
+
+    def test_moves_every_queued_job_by_default(self):
+        rc, moved, out, err = self.handover(self.listing)
+        self.assertEqual((rc, moved), (1, ["q1", "q2"]))  # o1 stays: vps2 does not offer its provider
+        self.assertIn("vps2 does not offer provider 'other'", err)
+        self.assertIn("running jobs stay on vps1: r1", err)
+        self.assertIn("note: only these jobs moved. New Space Facts jobs still go to the VPS", out)
+
+    def test_named_jobs(self):
+        rc, moved, _, err = self.handover(self.listing, ids=["q2", "r1", "d1", "zz"])
+        self.assertEqual((rc, moved), (1, ["q2"]))
+        self.assertIn("fleet cancel vps1 r1, then fleet retry vps1 r1 --to vps2", err)
+        self.assertIn("d1 is not queued on vps1 (it is done)", err)
+        self.assertIn("vps1 has no job zz", err)
+
+    def test_dry_run_and_nothing_to_move(self):
+        rc, moved, out, _ = self.handover(self.listing[:2], dry_run=True)
+        self.assertEqual((rc, moved), (0, []))
+        self.assertIn("would move q1 (channel Space Facts) from vps1 to vps2", out)
+        rc, moved, out, _ = self.handover([{"id": "d1", "state": "done"}])
+        self.assertEqual((rc, moved), (0, []))
+        self.assertIn("nothing to hand over", out)
+
+    def test_target_checks(self):
+        rc, moved, _, err = self.handover(self.listing[:1], to_status=UsageLimitTest.limited(2))
+        self.assertEqual((rc, moved), (0, ["q1"]))
+        self.assertIn("warning: vps2: at its usage limit", err)
+        broken = healthy(providers=[{"provider": "claude", "installed": True, "ok": False, "error": "no credentials"}])
+        rc, moved, _, err = self.handover(self.listing[:1], to_status=broken)
+        self.assertEqual((rc, moved), (1, []))  # it would only fail there
+        self.assertIn("q1 stays on vps1: on vps2, claude is not ok (no credentials), so it would fail there", err)
+        with self.assertRaisesRegex(fleet.FleetError, "unreachable, so nothing was moved"):
+            self.handover(self.listing[:1], to_status={"reachable": False, "error": "timed out"})
+        a = argparse.Namespace(from_node="vps1", to_node="vps1", job_ids=[], dry_run=False)
+        with self.assertRaisesRegex(fleet.FleetError, "same VPS"):
+            fleet.cmd_handover(make_cfg(self.tmp, "vps1"), a)
+        a = argparse.Namespace(from_node="vps1", to_node="vps2", job_ids=["../x"], dry_run=False)
+        with self.assertRaisesRegex(fleet.FleetError, "invalid job id"):
+            fleet.cmd_handover(make_cfg(self.tmp, "vps1", "vps2"), a)
+
+    def test_failures_are_reported(self):
+        rc, moved, _, err = self.handover(self.listing[:2], fail=("q1",))
+        self.assertEqual((rc, moved), (1, ["q2"]))
+        self.assertIn("q1 stays on vps1: boom", err)
+
+
 # --------------------------------------------------------------------------- secrets
 
 class SecretsTest(TempDirTest):
@@ -629,7 +838,7 @@ class FakeHermes:
     def __init__(self, store=None):
         self.store, self.sets = dict(store or {}), []
 
-    def __call__(self, exe, *args, timeout=120):
+    def __call__(self, exe, *args, profile=None, timeout=120):
         if args[:2] == ("config", "get"):
             out = json.dumps(self.store[args[2]]) if args[2] in self.store else "null"
             return subprocess.CompletedProcess(args, 0, out.encode(), b"")
@@ -644,32 +853,130 @@ class FakeHermes:
         return subprocess.CompletedProcess(args, 1, b"", b"unsupported")
 
 
+class ProfileHermes(FakeHermes):
+    """FakeHermes with profiles: `profile create` makes the profile's folder under root."""
+
+    def __init__(self, root, store=None):
+        super().__init__(store)
+        self.root, self.calls, self.cron = Path(root), [], []
+
+    def __call__(self, exe, *args, profile=fleet.HERMES_PROFILE, timeout=120):
+        self.calls.append((profile, args))
+        if args[:2] == ("profile", "show"):
+            home = self.root / "profiles" / args[2]
+            if not home.is_dir():
+                return subprocess.CompletedProcess(args, 1, b"", b"no such profile")
+            return subprocess.CompletedProcess(args, 0, f"Profile: {args[2]}\nPath:    {home}\n".encode(), b"")
+        if args[:2] == ("profile", "create"):
+            (self.root / "profiles" / args[2]).mkdir(parents=True)
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        if args[:2] == ("cron", "list"):
+            return subprocess.CompletedProcess(args, 0, "\n".join(self.cron).encode(), b"")
+        if args[:2] == ("cron", "create"):
+            self.cron.append(args[args.index("--name") + 1])
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        return super().__call__(exe, *args, timeout=timeout)
+
+
+class DirectorProfileTest(TempDirTest):
+    """Hermes directs the fleet from its own profile, `director`."""
+
+    def test_hermes_commands_target_the_director(self):
+        seen = []
+        with mock.patch.object(fleet.subprocess, "run", side_effect=lambda argv, **kw: seen.append(argv)):
+            fleet.hermes_cmd("hermes", "cron", "list")
+            fleet.hermes_cmd("hermes", "profile", "list", profile="")
+        self.assertEqual(seen, [["hermes", "-p", "director", "cron", "list"], ["hermes", "profile", "list"]])
+
+    def test_profile_is_created_once(self):
+        fake = ProfileHermes(self.tmp)
+        with mock.patch.object(fleet, "hermes_cmd", fake):
+            home, lines = fleet.ensure_director("hermes")
+            self.assertEqual(home, self.tmp / "profiles" / "director")
+            self.assertIn("+ profile director", lines[0])
+            again, lines = fleet.ensure_director("hermes")
+        self.assertEqual(again, home)
+        self.assertIn("= profile director", lines[0])
+        creates = [args for _, args in fake.calls if args[:2] == ("profile", "create")]
+        self.assertEqual(len(creates), 1)
+        self.assertIn("--no-skills", creates[0])
+        self.assertEqual({p for p, _ in fake.calls}, {""})  # profile commands run without -p
+
+    def test_hermes_without_profiles(self):
+        with mock.patch.object(fleet, "hermes_cmd", FakeHermes()):
+            home, lines = fleet.ensure_director("hermes")
+        self.assertIsNone(home)
+        self.assertIn("could not create the Hermes profile 'director': unsupported", lines[0])
+        self.assertIn("hermes update", lines[1])
+
+    def test_init_sets_up_the_director(self):
+        (self.tmp / "key").write_text("private", encoding="utf-8")
+        (self.tmp / "key.pub").write_text("ssh-ed25519 AAAA test", encoding="utf-8")
+        ini = self.tmp / "fleet.ini"
+        ini.write_text(f"[defaults]\nssh_key = {(self.tmp / 'key').as_posix()}\n"
+                       f"secrets_dir = {(self.tmp / 'secrets').as_posix()}\n[vps1]\n", encoding="utf-8")
+        fake = ProfileHermes(self.tmp / "hermes", {"model.provider": "openrouter", "model.default": "some/model"})
+        with mock.patch.object(fleet, "HOME", self.tmp), mock.patch.object(fleet, "STATE_DIR", self.tmp / "state"), \
+                mock.patch.object(fleet, "find_hermes", return_value="hermes"), \
+                mock.patch.object(fleet, "hermes_cmd", fake):
+            rc, out, _ = quietly(fleet.cmd_init, ini, argparse.Namespace(no_hermes=False))
+        self.assertEqual(rc, 0)
+        home = self.tmp / "hermes" / "profiles" / "director"
+        self.assertEqual((home / "SOUL.md").read_bytes(), (REPO / "home" / "hermes" / "SOUL.md").read_bytes())
+        self.assertTrue((home / "scripts" / "fleet_health.py").is_file())
+        self.assertTrue((home / "scripts" / "fleet_pull.py").is_file())
+        self.assertEqual(fake.store["terminal.cwd"], fleet.REPO_ROOT.as_posix())
+        self.assertEqual({p for p, args in fake.calls if args[0] == "config"}, {"director"})
+        self.assertIn("model: openrouter / some/model", out)
+        self.assertIn("hermes -p director model", out)
+
+    def test_cron_jobs_belong_to_the_director(self):
+        fake, cfg, a = ProfileHermes(self.tmp), make_cfg(self.tmp, "vps1"), argparse.Namespace(deliver="telegram")
+        with mock.patch.object(fleet, "find_hermes", return_value="hermes"), mock.patch.object(fleet, "hermes_cmd", fake):
+            with self.assertRaisesRegex(fleet.FleetError, "run `fleet init` first"):
+                fleet.cmd_hermes_cron(cfg, a)
+            (self.tmp / "profiles" / "director").mkdir(parents=True)
+            self.assertEqual(quietly(fleet.cmd_hermes_cron, cfg, a)[0], 0)
+            self.assertEqual(fake.cron, ["fleet-health", "fleet-pull", "fleet-daily-report"])
+            self.assertIn("= fleet-health already exists", quietly(fleet.cmd_hermes_cron, cfg, a)[1])
+        self.assertEqual({p for p, args in fake.calls if args[0] == "cron"}, {"director"})
+
+
 class HermesSettingsTest(unittest.TestCase):
     def test_merge_and_idempotence(self):
         skills = (REPO / "home" / "hermes" / "skills").as_posix()
         fake = FakeHermes({"skills.external_dirs": ["/mine"], "terminal.timeout": 1800,
                            "approvals.deny": ["my rule"], "model.default": "something-else"})
         with mock.patch.object(fleet, "hermes_cmd", fake):
-            report = fleet.apply_hermes_settings("hermes", "/repo", keep_model=False)
+            report = fleet.apply_hermes_settings("hermes", "/repo")
             self.assertEqual(fake.store["skills.external_dirs"], ["/mine", skills])
             self.assertEqual(fake.store["terminal.timeout"], 1800)
             self.assertEqual(fake.store["terminal.cwd"], "/repo")
-            self.assertEqual(fake.store["approvals.deny"][0], "my rule")
-            self.assertEqual(len(fake.store["approvals.deny"]), 4)
+            deny = fake.store["approvals.deny"]
+            self.assertEqual((deny[0], len(deny)), ("my rule", 5))
+            for secret in ("cat ~/.hermes/.env", "cat ~/.hermes/profiles/director/.env",
+                           r"type %LOCALAPPDATA%\hermes\profiles\director\.env", "cat ~/.config/fleet/secrets/vps1/claude.env"):
+                self.assertTrue(any(fnmatch.fnmatchcase(secret, d) for d in deny), secret)
+            self.assertFalse(any(fnmatch.fnmatchcase("fleet status", d) for d in deny))
             self.assertEqual(fake.store["skills.auto_load"], ["fleet-ops"])
-            self.assertEqual((fake.store["model.provider"], fake.store["model.default"]),
-                             ("anthropic", fleet.DIRECTOR_MODEL))
-            self.assertTrue(any("was \"something-else\"" in line for line in report))
+            self.assertTrue(any("terminal.cwd" in line for line in report))
             fake.sets.clear()
-            fleet.apply_hermes_settings("hermes", "/repo", keep_model=False)
+            fleet.apply_hermes_settings("hermes", "/repo")
             self.assertEqual(fake.sets, [])
 
-    def test_keep_model_and_low_timeout(self):
-        fake = FakeHermes({"terminal.timeout": 60})
+    def test_model_is_left_to_the_owner(self):
+        fake = FakeHermes({"terminal.timeout": 60, "model.provider": "openrouter", "model.default": "some/model"})
         with mock.patch.object(fleet, "hermes_cmd", fake):
-            fleet.apply_hermes_settings("hermes", "/repo", keep_model=True)
-        self.assertNotIn("model.default", fake.store)
+            fleet.apply_hermes_settings("hermes", "/repo")
         self.assertEqual(fake.store["terminal.timeout"], 900)
+        self.assertEqual((fake.store["model.provider"], fake.store["model.default"]), ("openrouter", "some/model"))
+        self.assertFalse([k for k in fake.sets if k.startswith("model.")])
+
+    def test_hermes_model(self):
+        for store, want in (({}, ""), ({"model.default": "some/model"}, "some/model"),
+                            ({"model.provider": "nous", "model.default": "hermes-x"}, "nous / hermes-x")):
+            with mock.patch.object(fleet, "hermes_cmd", FakeHermes(store)):
+                self.assertEqual(fleet.hermes_model("hermes"), want)
 
 
 class ShimTest(TempDirTest):
@@ -704,7 +1011,7 @@ class CommandLineTest(TempDirTest):
         self.assertEqual(self.run_cli("--version").stdout.strip(), f"fleet {fleet.VERSION}")
         r = self.run_cli("--help")
         self.assertEqual(r.returncode, 0)
-        for cmd in ("dispatch", "pause", "resume", "retry", "hermes-cron", "doctor"):
+        for cmd in ("dispatch", "pause", "resume", "retry", "handover", "hermes-cron", "doctor"):
             self.assertIn(cmd, r.stdout)
 
     def test_missing_config_is_a_clear_error(self):
@@ -719,6 +1026,10 @@ class CommandLineTest(TempDirTest):
         a = p.parse_args(["provider", "install", "claude", "vps3", "--version", "2.1.0"])
         self.assertEqual((a.action, a.name, a.targets, a.version), ("install", "claude", "vps3", "2.1.0"))
         self.assertEqual(p.parse_args(["secrets", "push", "claude"]).targets, "all")
+        a = p.parse_args(["handover", "vps2", "vps4", "job-a", "job-b", "--dry-run"])
+        self.assertEqual((a.from_node, a.to_node, a.job_ids, a.dry_run), ("vps2", "vps4", ["job-a", "job-b"], True))
+        self.assertEqual(p.parse_args(["handover", "vps2", "vps4"]).job_ids, [])
+        self.assertEqual(p.parse_args(["jobs", "--state", "moved"]).state, "moved")
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             p.parse_args(["jobs", "--state", "weird"])
 

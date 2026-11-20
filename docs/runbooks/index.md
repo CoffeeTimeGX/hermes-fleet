@@ -33,7 +33,8 @@ fleet ping            # can your PC reach each VPS at all?
 - **Look before changing.** Read `fleet health` and the job's reason first. Most
   problems say what fixes them.
 - **One VPS at a time.** Fix and check one VPS before you touch the next. The others
-  keep working meanwhile, and `fleet dispatch` sends new jobs around a broken one.
+  keep working meanwhile. New jobs for the channel of the VPS you repair wait in its
+  queue, or `fleet dispatch` refuses them and says why.
 - **Pause what you work on.** `fleet pause vps3` stops new jobs from starting there
   while you repair it. `fleet resume vps3` when you are done.
 - **Nothing on a VPS is precious until it is pulled.** Run `fleet pull` before anything

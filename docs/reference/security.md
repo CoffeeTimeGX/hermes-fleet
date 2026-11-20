@@ -21,9 +21,9 @@ says what protects what, and where the limits are.
 | Secret | Where | What it opens |
 | --- | --- | --- |
 | Claude token or API key, one per VPS | Your PC (`~/.config/fleet/secrets/<vps>/claude.env`) and that VPS (`~/.config/fleet/providers/claude.env`, readable only by `fleet`) | That VPS's Claude account |
-| Hermes' API key | Hermes' `.env` on your PC | The Claude Console account Hermes runs on |
-| Telegram bot token | Hermes' `.env` | Your bot |
-| Hostinger API tokens (optional) | Hermes' `.env` | Everything in that Hostinger account |
+| The director's model provider key | The director's `.env` on your PC | Your account with the provider the director runs on |
+| Telegram bot token | The director's `.env` | Your bot |
+| Hostinger API tokens (optional) | The director's `.env` | Everything in that Hostinger account |
 | Tailscale auth key | Your PC (`~/.config/fleet/secrets/tailscale.env`) | Adding machines to your tailnet as `tag:fleet` |
 | The fleet SSH key | Your PC (`~/.ssh/fleet_ed25519`) | The `fleet` and `root` users on every VPS |
 

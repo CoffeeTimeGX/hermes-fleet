@@ -23,10 +23,12 @@ flowchart TB
 ```
 
 **Hermes, the director.** [Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous
-Research runs on your home PC. It is the one you talk to. It has a personality file
-(`home/hermes/SOUL.md`) that tells it it directs a video fleet, and two skills:
-`fleet-ops` for everyday work and `fleet-provision` for setting up and repairing VPSs.
-It never renders video itself. It reaches the fleet only through the `fleet` command.
+Research runs on your home PC, in its own Hermes profile named `director`. It is the one
+you talk to. It runs on a model you choose from another provider, not on Claude. It has a
+personality file (`home/hermes/SOUL.md`) that tells it it directs a video fleet, and two
+skills: `fleet-ops` for everyday work and `fleet-provision` for setting up and repairing
+VPSs. It never renders video and never runs Claude itself. It reaches the fleet only
+through the `fleet` command.
 
 **The `fleet` command.** A single Python file (`home/bin/fleet`, standard library only)
 that works on Windows, Linux and macOS. Every action is an SSH command to a VPS. You can
@@ -68,7 +70,7 @@ sequenceDiagram
   participant Claude as Claude Code (VPS)
   You->>Hermes: "Make a short about Saturn's rings for Space Facts"
   Hermes->>Hermes: writes a job file
-  Hermes->>VPS: fleet dispatch (picks the least busy VPS)
+  Hermes->>VPS: fleet dispatch (to the VPS that makes Space Facts)
   VPS->>VPS: job waits in inbox, then is claimed
   VPS->>Claude: run.sh starts a headless session in the job's workspace
   Claude->>VPS: deliverables in output/, summary, result.json
@@ -78,10 +80,11 @@ sequenceDiagram
   Hermes->>You: "Done: video.mp4, thumbnail.png ..."
 ```
 
-1. **Dispatch.** `fleet dispatch` checks the status of every VPS and picks the least busy
-   one that can take the job right now. It uploads the job file into that VPS's
-   `jobs/inbox/`. You can also choose a VPS (`--to vps2`) or send a copy to every VPS
-   (`--to all`).
+1. **Dispatch.** `fleet dispatch` puts the job on the VPS that makes videos for its
+   channel (the `channels` line in your inventory) and uploads the job file into that
+   VPS's `jobs/inbox/`. When that VPS is busy, paused or at its usage limit, the job waits
+   there: work moves to another VPS only when you say so, with `fleet handover`. You can
+   also choose a VPS (`--to vps2`) or send a copy to every VPS (`--to all`).
 2. **Claim.** The worker checks the inbox every 5 seconds. When fewer jobs are running
    than the VPS's `sessions` setting, it claims the oldest job and starts it in its own
    process session, so restarting the worker never kills a running job.
@@ -102,11 +105,11 @@ sequenceDiagram
 | Situation | What the fleet does |
 | --- | --- |
 | Your PC is off or asleep | The VPSs keep working through their queues. When the PC is back, the next pull collects everything. |
-| A Claude account hits its usage limit | That VPS puts the job back at the front of its queue and starts nothing until the limit resets, then resumes the same Claude session. `fleet dispatch` sends new jobs to the other VPSs. See [Usage limits](operations/usage-limits.md). |
+| A Claude account hits its usage limit | That VPS puts the job back at the front of its queue and starts nothing until the limit resets, then resumes the same Claude session. New jobs for its channel wait there too, unless you move them with `fleet handover`. See [Usage limits](operations/usage-limits.md). |
 | A VPS reboots or the worker crashes | On restart the worker finds jobs whose process is gone and puts them back in the queue (once, by default), or files them as failed. |
 | A job runs too long | It is stopped at its `timeout_minutes` (180 by default) and filed as failed. |
 | The disk gets low (under 3 GB free) | The VPS stops starting new jobs; running jobs continue. `fleet health` tells you. See [Disk full](runbooks/disk-full.md). |
-| A VPS is unreachable | `fleet health` reports it, and `fleet dispatch` skips it. See [VPS unreachable](runbooks/vps-unreachable.md). |
+| A VPS is unreachable | `fleet health` reports it, and `fleet dispatch` refuses new jobs for its channel until it is back. See [VPS unreachable](runbooks/vps-unreachable.md). |
 
 ## Security in one paragraph
 

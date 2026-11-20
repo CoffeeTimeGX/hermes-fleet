@@ -1,9 +1,9 @@
 # Hermes Fleet
 
 One [Hermes Agent](https://hermes-agent.nousresearch.com/) on your home computer runs a
-fleet of five Hostinger VPSs. Each VPS runs Claude Code sessions that make videos for
-all of your channels. You talk to Hermes from the terminal or from Telegram on your
-phone. Hermes queues the work, spreads it over the VPSs, watches them, collects the
+fleet of five Hostinger VPSs. Each VPS runs Claude Code sessions that make the videos
+of its own channel. You talk to Hermes from the terminal or from Telegram on your
+phone. Hermes queues each video on its channel's VPS, watches the VPSs, collects the
 finished videos and tells you what happened.
 
 ```mermaid
@@ -22,15 +22,18 @@ flowchart LR
 - **5 Claude sessions**, one on each VPS. Each VPS lives on its own Hostinger account
   and signs in to its own Claude account. A bigger VPS can run more than one session
   at a time.
-- **One director.** Hermes runs only on your home computer. The VPSs run a small job
-  worker and Claude Code, nothing else, so a VPS can be rebuilt in a few minutes.
+- **One director.** Hermes runs only on your home computer, on a model you choose from
+  another provider: it does not use Claude. The VPSs run a small job worker and Claude
+  Code, nothing else, so a VPS can be rebuilt in a few minutes.
+- **One channel per VPS.** Each VPS makes the videos of the channel your inventory gives
+  it. Work moves to another VPS only when you say so.
 - **Work continues while your PC is off.** Each VPS keeps its own queue. When your PC
   comes back, Hermes collects whatever finished in the meantime.
 - **Nothing is open to the internet.** Once a VPS is set up, SSH is closed on its public
   address and only your own devices reach it, through your private Tailscale network.
 - **Usage limits are handled.** When a Claude account reaches its 5-hour or weekly
   limit, that VPS waits for the reset and then continues the same Claude session.
-  New work goes to the other VPSs meanwhile.
+  New jobs for its channel wait there too, unless you move them.
 
 ## Where to start
 
