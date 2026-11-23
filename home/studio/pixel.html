@@ -106,19 +106,35 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .tag span { color: #d9d3c4; font-weight: 500; }
 .screen.small .tag { font-size: 10px; padding: 3px 4px 2px; }
 .screen.small .tag span { display: none; }
-.screen.small .hud { top: 4px; }
+.screen.small .hud { top: 4px; gap: 3px; }
 .screen.small .hud-l { left: 4px; }
 .screen.small .hud-r { right: 4px; }
-.screen.small .badge, .screen.small .sky button { font-size: 10px; padding: 3px 5px 2px; }
-.hud { position: absolute; top: 8px; display: flex; gap: 6px; align-items: center; }
-.hud-l { left: 8px; }
-.hud-r { right: 8px; }
+.screen.small .badge, .screen.small .clock, .screen.small .time button, .screen.small .hbtn { font-size: 10px; padding: 3px 5px 2px; }
+.screen.small .time input { display: none; }
+/* On a small screen the controls sit under the picture, so they hide none of the sky. */
+.film:not(.is-full) .screen.small { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 6px; width: min-content; }
+.film:not(.is-full) .screen.small #scene { flex: none; }
+.film:not(.is-full) .screen.small .hud { position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
+.hud { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 5px; transition: opacity .4s; }
+.hud-l { left: 8px; align-items: flex-start; }
+.hud-r { right: 8px; align-items: flex-end; }
 .badge { font: 600 12px/1 var(--font-pixel); background: #111; color: #fff; padding: 5px 7px 4px; border: 2px solid #fff; letter-spacing: .06em; text-transform: uppercase; }
 .badge.live::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: #ff4b3a; animation: blink 1.2s steps(2, jump-none) infinite; }
 .badge.lost { background: #6b1d16; }
-.sky { display: inline-flex; border: 2px solid #fff; background: #111; }
-.sky button { font: 600 12px/1 var(--font-pixel); color: #cfc9bb; background: transparent; border: 0; padding: 5px 7px 4px; cursor: pointer; }
-.sky button[aria-pressed="true"] { background: #fff; color: #111; }
+.clock { font: 500 12px/1 var(--font-mono); background: rgba(17, 17, 17, .78); color: #fff; padding: 5px 7px 4px; border: 2px solid rgba(255, 255, 255, .85); letter-spacing: .04em; white-space: nowrap; }
+.time { display: inline-flex; align-items: center; border: 2px solid #fff; background: #111; }
+.time button, .hbtn { font: 600 12px/1 var(--font-pixel); color: #cfc9bb; background: transparent; border: 0; padding: 5px 7px 4px; cursor: pointer; white-space: nowrap; }
+.hbtn { color: #fff; background: #111; border: 2px solid #fff; }
+.time button:hover, .hbtn:hover { color: #fff; background: #2a2a2a; }
+.time button[aria-pressed="true"], .hbtn[aria-pressed="true"] { background: #fff; color: #111; }
+.time input[type="range"] { width: 128px; margin: 0 6px; accent-color: #e3b54b; cursor: pointer; }
+/* Full screen: the lot and nothing else. The controls fade when the mouse rests. */
+.film.is-full { padding: 0; border-radius: 0; background: #000; display: flex; align-items: center; justify-content: center; width: 100vw; height: 100vh; }
+.film.full { position: fixed; inset: 0; z-index: 1000; height: 100dvh; }
+.film.is-full::before, .film.is-full::after { display: none; }
+.film.idle .hud-r, .film.idle .nametag { opacity: 0; pointer-events: none; }
+.film.idle, .film.idle #scene { cursor: none; }
+html.lot-full, html.lot-full body { overflow: hidden; }
 .nametag {
   position: absolute; z-index: 3; pointer-events: none; transform: translate(-50%, calc(-100% - 6px)); white-space: nowrap;
   font: 600 12px/1.1 var(--font-pixel); background: var(--box); color: var(--box-ink); border: 2px solid var(--box-edge); padding: 4px 6px 3px;
@@ -182,6 +198,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .foot code, .lede code { font-size: .95em; }
 @media (prefers-reduced-motion: reduce) {
   .badge.live::before, .quote .typed::after { animation: none; }
+  .hud { transition: none; }
 }
 </style>
 </head>
@@ -191,7 +208,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     <div>
       <p class="eyebrow">Hermes Fleet Studio · the lot</p>
       <h1>Everyone at work</h1>
-      <p class="lede">Each VPS is a sound stage and each job a crew. Click anyone on the lot to see what they stand for.</p>
+      <p class="lede">Each VPS is a sound stage and each job a crew. Click anyone on the lot to see what they stand for. The light follows this device's clock; press F for full screen.</p>
     </div>
     <nav class="views" aria-label="Views">
       <a href="index.html">Board</a>
@@ -205,10 +222,11 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       <div class="screen" id="screen">
         <canvas id="scene" width="544" height="320" role="img" aria-label="The film lot, drawn in pixel art"></canvas>
         <div class="labels" id="labels" aria-hidden="true"></div>
-        <div class="hud hud-l"><span class="badge" id="badge">Example</span></div>
+        <div class="hud hud-l"><span class="badge" id="badge">Example</span><span class="clock" id="t-clock">--:--</span></div>
         <div class="hud hud-r">
-          <div class="sky" role="group" aria-label="Light on the lot">
-            <button type="button" data-sky="auto" aria-pressed="true">Auto</button><button type="button" data-sky="day" aria-pressed="false">Day</button><button type="button" data-sky="night" aria-pressed="false">Night</button>
+          <button type="button" class="hbtn" id="t-full" aria-pressed="false" title="Full screen (F)">Full screen</button>
+          <div class="time" role="group" aria-label="Time of day on the lot">
+            <button type="button" id="t-auto" aria-pressed="true" title="Follow this device's clock">Auto</button><input type="range" id="t-slider" min="0" max="1435" step="5" value="720" aria-label="Time of day"><button type="button" id="t-lapse" aria-pressed="false" title="Run a whole day in one minute">Day in 1 min</button>
           </div>
         </div>
         <div class="nametag" id="nametag" hidden></div>
@@ -256,12 +274,20 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   function plan(n) {
     const R = Math.ceil(n / 2), Lc = Math.floor(n / 2);
     G = Math.max(22, B + Math.max(R, Lc + 1) * SLOT + 5);
-    OX = G * 8 + 8; OY = 46; W = G * 16 + 16; H = OY + G * 8 + 22;
     towerBase = B + Lc * SLOT;
     const out = [];  // read from left to right: the left edge from the outside in, then the right edge
     for (let j = Lc - 1; j >= 0; j--) out.push({ edge: "L", base: B + j * SLOT });
     for (let j = 0; j < R; j++) out.push({ edge: "R", base: B + j * SLOT });
     return out;
+  }
+  // The frame around the lot: at least SKY0 pixels of sky and hills above its back corner, SIDE0
+  // of town on each side and FOOT0 below its front corner. A bigger screen shows more of the town
+  // and more sky around a lot of the same size, so its pixels stay whole.
+  const SKY0 = 136, SIDE0 = 24, FOOT0 = 34;
+  const lotFrame = () => [G * 16 + 16 + 2 * SIDE0, SKY0 + G * 8 + FOOT0];
+  function setFrame(w, h) {
+    const extra = Math.max(0, h - lotFrame()[1]);
+    W = w; H = h; OX = Math.round(w / 2); OY = SKY0 + Math.round(extra * 0.72);
   }
   const P = (gx, gy, z) => [Math.round(OX + (gx - gy) * 8), Math.round(OY + (gx + gy) * 4 - (z || 0))];
   // A point in a stage's own measures: a along its front from the corner side, v out from its door.
@@ -406,70 +432,134 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   }
   const textW = (str, o) => String(str).length * ((o && o.big ? 6 : 4) * ((o && o.scale) || 1)) - ((o && o.scale) || 1);
 
-  // ---------------------------------------------------------------- day and night
-  let skyMode = "auto";
-  try { skyMode = localStorage.getItem("fleet-lot-sky") || "auto"; } catch (e) { skyMode = "auto"; }
-  if (!/^(auto|day|night)$/.test(skyMode)) skyMode = "auto";
-  function period() {
-    if (skyMode !== "auto") return skyMode;
-    const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
-    if (h >= 7 && h < 18) return "day";
-    if ((h >= 18 && h < 19.5) || (h >= 6 && h < 7)) return "dusk";
-    return "night";
+  // ---------------------------------------------------------------- light through the day
+  // The lot follows the clock of the device you watch on, minute by minute. Each key is a moment
+  // of the day; between two keys every colour slides from one to the next. top, mid and low: the
+  // sky from its top down to the hills. mul: what the land is multiplied by (white leaves it as it
+  // is). haze and hazeA: a veil over the land. dark: 0 in daylight, 1 at night; lamps, windows,
+  // stars and searchlights follow it.
+  const DAYKEYS = [
+    // minute  top        mid        low        mul        haze       hazeA dark
+    [0,    "#050919", "#0a1130", "#151d46", "#4f5b96", "#0b1033", 0.14, 1],
+    [270,  "#060a1d", "#0c1434", "#1a2350", "#4f5b96", "#0b1033", 0.14, 1],
+    [330,  "#0f1640", "#252c63", "#53467c", "#646aa0", "#2a2552", 0.12, 0.86],
+    [372,  "#26387a", "#6f62a0", "#e0866f", "#a296b8", "#c97462", 0.1, 0.5],
+    [405,  "#4b73b9", "#a3a4c9", "#f7b779", "#e6c8b8", "#efa06e", 0.08, 0.16],
+    [455,  "#5a9ad8", "#9ccaee", "#f4dfb9", "#fbf1e4", "#f6d6a6", 0.05, 0],
+    [600,  "#4c97e3", "#86c3f1", "#cfe8f8", "#ffffff", "#ffffff", 0, 0],
+    [840,  "#4a94e0", "#84c0ee", "#d6ecf8", "#ffffff", "#ffffff", 0, 0],
+    [1000, "#5590d4", "#a2c4e3", "#efdcb4", "#fff2dc", "#ffd9a3", 0.05, 0],
+    [1075, "#5a7dc2", "#d6a78a", "#f6b766", "#ffdaac", "#ffa257", 0.09, 0.04],
+    [1122, "#3d4b8c", "#c46a6c", "#f38a3e", "#eaa994", "#df624b", 0.12, 0.28],
+    [1158, "#232860", "#673d78", "#c4585f", "#a385a4", "#5b3b6b", 0.13, 0.58],
+    [1200, "#121944", "#2a2e66", "#544372", "#7377a8", "#2a2a5c", 0.14, 0.82],
+    [1265, "#080d27", "#10183c", "#1f2853", "#545f98", "#0e1336", 0.14, 0.97],
+    [1440, "#050919", "#0a1130", "#151d46", "#4f5b96", "#0b1033", 0.14, 1],
+  ];
+  const MOMENTS = [[300, "Night"], [360, "Before dawn"], [405, "Dawn"], [450, "Sunrise"], [690, "Morning"], [810, "Midday"],
+    [1020, "Afternoon"], [1110, "Golden hour"], [1150, "Sunset"], [1200, "Dusk"], [1320, "Evening"], [1441, "Night"]];
+  const momentOf = (min) => MOMENTS.find((x) => min < x[0])[1];
+  const hhmmOf = (min) => { const m = Math.floor(((min % 1440) + 1440) % 1440); return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); };
+
+  // The sun clears the hills at RISE and meets them at SET. k runs from 0 to 1 over the day's arc;
+  // up is its height on the arc, below 0 under the hills.
+  const RISE = 6 * 60 + 40, SET = 18 * 60 + 55;
+  const arcAt = (min) => { const k = (min - RISE) / (SET - RISE); return { k, up: Math.sin(Math.PI * Math.max(-0.2, Math.min(1.2, k))) }; };
+  // The real phase of the moon: 0 new, 0.5 full. It rises later each day by its phase.
+  const moonPhase = (ms) => ((((ms - Date.UTC(2000, 0, 6, 18, 14)) / 86400000) / 29.530588853) % 1 + 1) % 1;
+
+  function lightAt(min) {
+    min = ((min % 1440) + 1440) % 1440;
+    let i = 1;
+    while (DAYKEYS[i][0] < min) i++;
+    const a = DAYKEYS[i - 1], b = DAYKEYS[i], f = (min - a[0]) / (b[0] - a[0] || 1);
+    const c = (k) => mix(a[k], b[k], f), n = (k) => a[k] + (b[k] - a[k]) * f;
+    const phase = moonPhase(Date.now()), mk2 = ((min - phase * 1440 - RISE) % 1440 + 1440) % 1440 / (SET - RISE);
+    return { min, top: c(1), mid: c(2), low: c(3), mul: c(4), haze: c(5), hazeA: n(6), dark: n(7),
+      sun: arcAt(min), moon: { k: mk2, up: mk2 <= 1 ? Math.sin(Math.PI * mk2) : -1, phase } };
+  }
+  // The land at this light: a colour multiplied and veiled the way the whole land is.
+  function litCol(col, L) {
+    const a = rgb(col), m = rgb(L.mul), h = rgb(L.haze);
+    const ch = (i) => (a[i] * m[i]) / 255 * (1 - L.hazeA) + h[i] * L.hazeA;
+    return hex(ch(0), ch(1), ch(2));
   }
 
-  // ---------------------------------------------------------------- the sky, the hills and the sign
-  const TINT = { day: null, dusk: ["#5d2c4c", 0.28], night: ["#0a0e2c", 0.6] };
-  const BANDS = {
-    day: ["#7cbfe9", "#8fc9ed", "#a3d3ef", "#b7dcf0", "#cbe5ef"],
-    dusk: ["#2e3062", "#57437b", "#98597b", "#d57a69", "#f0ab72"],
-    night: ["#080c22", "#0c122e", "#11193a", "#162045", "#1b274f"],
-  };
-  const tinted = (col, per) => (TINT[per] ? mix(col, TINT[per][0], TINT[per][1]) : col);
+  // When the lot shows: "auto" follows this device's clock; a minute of the day stays put; a
+  // time-lapse runs a whole day in a minute from where it starts.
+  let lightMode = "auto", lapse = null;
+  try { lightMode = localStorage.getItem("fleet-lot-light") || "auto"; } catch (e) { lightMode = "auto"; }
+  if (lightMode !== "auto" && !/^\d{1,4}$/.test(lightMode)) lightMode = "auto";
+  function nowMin() {
+    if (lapse) return (lapse.from + ((performance.now() - lapse.at) / 1000) * 24) % 1440;
+    if (lightMode !== "auto") return Number(lightMode) % 1440;
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  }
+
+  // A lit window keeps its own hours: on once it is dark enough for its tenant, off at their
+  // bedtime, some all night, some again before dawn. The same seed gives the same hours every day.
+  function hoursFor(seed, kind) {
+    const r = rng(seed), office = kind === "office";
+    return { thr: 0.18 + r() * 0.5, off: office ? 1130 + r() * 260 : 1290 + r() * 320,
+      allNight: r() < (office ? 0.14 : 0.07), early: r() < (office ? 0.45 : 0.3) ? 320 + r() * 90 : -1 };
+  }
+  function litNow(w, min, dark) {
+    if (dark < w.thr) return false;
+    if (w.allNight) return true;
+    if (min >= 960) return w.off > 1440 || min < w.off;
+    if (min < 720) return (w.off > 1440 && min < w.off - 1440) || (w.early >= 0 && min >= w.early);
+    return false;
+  }
+  // How busy the roads are: quiet in the small hours, busy at the morning and evening rush.
+  function traffic(min) {
+    const h = min / 60;
+    const bump = (c, w, a) => a * Math.exp(-(((h - c) / w) ** 2));
+    return Math.min(1, 0.12 + bump(8.5, 1.6, 0.75) + bump(13, 3.2, 0.42) + bump(18, 2, 0.8) + bump(21.5, 1.6, 0.25));
+  }
+
+  // ---------------------------------------------------------------- the sky
+  // Where the land meets the sky: the far mountains stand on MTN, the near hills top out at HILL.
+  const MTN = () => OY - 58, HILL = () => OY - 44;
   function disc(g, cx, cy, r, col) {
     g.fillStyle = col;
     for (let dy = -r; dy <= r; dy++) { const w = Math.floor(Math.sqrt(r * r - dy * dy + r * 0.8)); g.fillRect(cx - w, cy + dy, 2 * w + 1, 1); }
   }
-  const nearTop = (x) => OY - 7 + 3 * Math.sin(x / 31 + 2.1) + 2 * Math.sin(x / 11 + 0.7);
-  function drawSky(g, per) {
-    const bands = BANDS[per], bh = Math.ceil((OY - 4) / bands.length);
-    px(g, 0, 0, W, H, bands[bands.length - 1]);
+  // The sky from its top down to the mountains, in dithered bands, with the sun and the moon on their arcs.
+  const skyBand = (L, f) => (f < 0.55 ? mix(L.top, L.mid, f / 0.55) : mix(L.mid, L.low, (f - 0.55) / 0.45));
+  const sunAt = (L) => [Math.round(W * (0.08 + 0.84 * L.sun.k)), Math.round(MTN() - 2 - L.sun.up * (MTN() - 16))];
+  const moonAt = (L) => [Math.round(W * (0.08 + 0.84 * L.moon.k)), Math.round(MTN() - 2 - L.moon.up * (MTN() - 16))];
+  function drawSky(g, L) {
+    const n = 12, bot = MTN() + 6, bh = Math.max(2, Math.ceil(bot / n)), bands = [];
+    for (let i = 0; i < n; i++) bands.push(skyBand(L, i / (n - 1)));
+    px(g, 0, 0, W, H, bands[n - 1]);
     bands.forEach((c, i) => px(g, 0, i * bh, W, bh, c));
-    for (let i = 1; i < bands.length; i++) {  // dither the seams
+    for (let i = 1; i < n; i++) {  // dither the seams
       g.fillStyle = bands[i];
       for (let x = i % 2; x < W; x += 2) g.fillRect(x, i * bh - 1, 1, 1);
       g.fillStyle = bands[i - 1];
       for (let x = (i + 1) % 2; x < W; x += 2) g.fillRect(x, i * bh, 1, 1);
     }
-    const r = rng(7);
-    if (per === "night") {
-      for (let i = 0; i < 90; i++) px(g, Math.floor(r() * W), Math.floor(r() * (OY - 10)), 1, 1, r() < 0.3 ? "#fff6d8" : "#8f9bd0");
-      const mx = Math.round(W * 0.86);
-      disc(g, mx, 18, 6, "#f3efd9"); disc(g, mx + 3, 16, 5, bands[0]);
-    } else if (per === "dusk") {
-      disc(g, Math.round(W * 0.15), OY - 12, 10, "#ffb56c"); disc(g, Math.round(W * 0.15), OY - 12, 7, "#ffd08a");
-    } else {
-      disc(g, Math.round(W * 0.1), 20, 9, "#fff1bd"); disc(g, Math.round(W * 0.1), 20, 6, "#fffbe8");
+    const s = L.sun, [sx, sy] = sunAt(L);
+    if (s.up > -0.25 && s.up < 0.55) {  // a low sun warms the sky around it
+      const a = Math.max(0, 1 - Math.abs(s.up - 0.04) / 0.5);
+      g.save(); g.globalCompositeOperation = "lighter";
+      for (const [r, al] of [[120, 0.05], [80, 0.06], [50, 0.08], [28, 0.1]]) { g.globalAlpha = al * a; ellipse(g, sx, Math.max(sy, MTN() - 8), r * 1.7, r * 0.62, "#ff9548"); }
+      g.restore();
     }
-    const far = tinted("#9cb7c3", per), farTop = tinted("#b4cad2", per);
-    for (let x = 0; x < W; x++) {
-      const t = Math.round(OY - 22 + 9 * Math.sin(x / 41 + 1.3) + 5 * Math.sin(x / 17 + 0.4));
-      px(g, x, t, 1, OY + 30 - t, far); px(g, x, t, 1, 1, farTop);
+    if (s.up > -0.1) {
+      const low = Math.max(0, Math.min(1, 1 - s.up / 0.32)), r = 8 + Math.round(low * 3);
+      disc(g, sx, sy, r + 1, mix("#fff6cf", "#ff7a32", low)); disc(g, sx, sy, r - 2, mix("#fffdf2", "#ffb466", low));
     }
-    const field = tinted(PAL.field, per), field2 = tinted(PAL.field2, per), ridge = tinted("#79aa5f", per);
-    for (let x = 0; x < W; x++) { const t = Math.round(nearTop(x)); px(g, x, t, 1, H - t, field); px(g, x, t, 1, 1, ridge); }
-    for (let i = 0; i < (W * H) / 70; i++) {
-      const x = Math.floor(r() * W), y = Math.floor(nearTop(x) + 3 + r() * (H - OY));
-      px(g, x, y, 1, 1, field2);
+    const m = L.moon, lit = (1 - Math.cos(2 * Math.PI * m.phase)) / 2;
+    if (m.up > -0.05 && lit > 0.04) {
+      const [mx, my] = moonAt(L), r = 6, under = skyBand(L, Math.max(0, Math.min(1, my / bot)));
+      g.save(); g.globalAlpha = 0.35 + 0.65 * L.dark;
+      disc(g, mx, my, r, "#f3efd9"); px(g, mx - 2, my - 1, 2, 2, "#d9d3bb"); px(g, mx + 2, my + 2, 1, 1, "#d9d3bb");
+      const dx = m.phase < 0.5 ? -Math.round(2 * r * 2 * m.phase) : Math.round(2 * r * 2 * (1 - m.phase));
+      if (Math.abs(dx) < 2 * r + 1) { g.globalAlpha = 1; disc(g, mx + dx, my, r + 1, under); }
+      g.restore();
     }
-    // the sign on the hill
-    const label = "HERMES FLEET", tw = textW(label, { big: true }), sx = W - tw - 26;
-    let sy = 0;
-    for (let x = sx; x < sx + tw; x++) sy = Math.max(sy, Math.round(nearTop(x)) - 10);
-    for (let x = sx + 2; x < sx + tw; x += 6) px(g, x, sy + 7, 1, 3, tinted("#6b5a44", per));
-    text(g, label, sx + 1, sy + 1, tinted("#55704f", per), { big: true });
-    text(g, label, sx, sy, per === "night" ? "#d5d8e8" : tinted("#f7f4ec", per), { big: true });
-    lights.sign = [sx, sy, tw, 7];
   }
 
   // ---------------------------------------------------------------- the lot
@@ -484,7 +574,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
-  const lights = { sign: null, lamps: [], windows: [], doors: [], posts: [] };
+  const lights = { windows: [], doors: [], posts: [] };  // the lot's own lights; the town keeps its own in city
   let staticHits = [];  // { x, y, w, h, key, pri }: smaller pri wins
 
   function drawGround(g) {
@@ -493,9 +583,9 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     box(g, -0.5, -0.5, G, 0, 0, 9, "#c98d6b", PAL.brick, PAL.brick2);        // the back walls
     box(g, -0.5, 0, 0, G, 0, 9, "#c98d6b", PAL.brick, PAL.brick2);
     const laneEnd = G - 1.2;
-    flat(g, 7, 7, G + 9, 9, PAL.asphalt);                                    // the lane to the gate, and the road outside
+    flat(g, 7, 7, G + 1.4, 9, PAL.asphalt);                                  // the lane out of the gate to the boulevard
     flat(g, 7, 7, 9, laneEnd, PAL.asphalt);                                  // the lane along the left stages
-    for (let x = 9.6; x < G + 9; x += 1.25) seg(g, P(x, 8), P(x + 0.55, 8), PAL.paint);
+    for (let x = 9.6; x < G + 0.8; x += 1.25) seg(g, P(x, 8), P(x + 0.55, 8), PAL.paint);
     for (let y = 9.6; y < laneEnd - 0.4; y += 1.25) seg(g, P(8, y), P(8, y + 0.55), PAL.paint);
     seg(g, P(9, 9), P(G, 9), PAL.stripe); seg(g, P(9, 9), P(9, laneEnd), PAL.stripe);
     // the plaza: a mown lawn, the promenade, the fountain, the carpet
@@ -709,6 +799,708 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       for (let i = 0; i < 40; i++) { const t = rr(); px(g, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t + rr() * 4, 1, 1, "#5a9a4f"); }
     };
     hedge(G - 0.4, 0, G, 6.2); hedge(G - 0.4, 9.8, G, G); hedge(0, G - 0.4, G - 0.4, G);
+  }
+
+  // ---------------------------------------------------------------- the town around the lot
+  // None of the town stands for anything in the fleet: it is the neighbourhood the studio sits in.
+  // Far off, mountains and a downtown skyline; then hills with the sign; blocks behind the walls; a
+  // boulevard with traffic along the front; shops and houses beyond it. It is all placed by tile
+  // from fixed seeds, so a bigger screen shows more of the same town.
+  const TOWN = () => HILL() + 10;            // the town stands nearer than this line; the hills hide the rest
+  const ROW = 6.4, DEEP = 5, STREET = 1.4;   // a row of blocks is DEEP tiles deep, then a street
+  const OUT = () => G + 5.6;                 // the blocks beyond the boulevard start here
+  // What the town lights: windows by their own hours, lamps and signs by the dark, beacons by the
+  // clock. B is drawn with the land behind the lot, F with the land in front of it.
+  const city = { winB: [], winF: [], emB: [], emF: [], haloB: [], haloF: [], pools: [], blink: [], towers: [], far: [], near: [], hill: [], horizon: [] };
+  const TC = {
+    street: "#5b5d64", street2: "#53555c", walk: "#cdc6b6", walk2: "#c2bbab", kerb: "#a39c8e", lawn: "#7ba95d", lawn2: "#72a256",
+    pave: "#aaa89f", pave2: "#9d9b93", line: "#ece7d8", yellow: "#e8c34a", glass: "#56707f", dirt: "#bba27a",
+    leaf: "#3f7a3a", leaf2: "#4d8c43", leaf3: "#68a853", trunk: "#6b4a32",
+  };
+  const WARM = ["#ffd27a", "#ffe1a0", "#ffc566", "#fff0c4", "#ffd88f", "#ffbf6b"], COOL = ["#f4f7ff", "#e9f0ff", "#fff5d8", "#dde8ff"];
+  const OFFICE = ["#c8ccd0", "#b9c6d1", "#d9d0c1", "#a8bccb", "#e1ddd4", "#c4b8a8"];
+  const BRICK = ["#b8664b", "#a9573f", "#c27a5b", "#9b5a46"];
+  const STUCCO = ["#e5d3b3", "#dcbda0", "#cdd6c6", "#ebcfc5", "#d9d5c9", "#e8dcb8"];
+  const HOUSE = ["#efe4cf", "#e8d5b9", "#d7e0e6", "#f0d8c8", "#e3e8d2", "#f2ead7"];
+  const ROOFS = ["#a24b3a", "#6d5a4a", "#55626f", "#8a3f35", "#7b6a52"];
+  const CARS = ["#c0392b", "#2e86c1", "#ecf0f1", "#27ae60", "#7d3c98", "#34495e", "#d35400", "#bdc3c7", "#16a085", "#8e2c2c", "#f1c40f"];
+  const NIGHT = { thr: 0.25, off: 9999, allNight: true, early: -1 };  // lights that stay on all night
+
+  // ---------------------------------------------------------------- far off
+  // The silhouettes are anchored to the middle of the lot, so a wider screen shows more of the same range.
+  function farLand() {
+    const r = rng(hash("peaks")), pk = [], pk2 = [];
+    for (let c = -1700; c < 1700; c += 60 + r() * 70) pk.push([c, 5 + r() * 19, 26 + r() * 40]);
+    for (let c = -1700; c < 1700; c += 80 + r() * 90) pk2.push([c, 3 + r() * 9, 30 + r() * 46]);
+    const ridge = (xw, s, base, amp, peaks) => {
+      let y = base - amp * (0.5 + 0.3 * Math.sin(xw / 67 + s) + 0.2 * Math.sin(xw / 23 + s * 1.7));
+      for (const [c, h, w] of peaks) { const d = Math.abs(xw - c); if (d < w) y -= h * (1 - d / w); }
+      return Math.round(y);
+    };
+    city.far = []; city.near = []; city.hill = []; city.horizon = [];
+    for (let x = 0; x < W; x++) {
+      const xw = x - OX;
+      city.far.push(ridge(xw, 1.3, MTN() - 1, 12, pk));
+      city.near.push(ridge(xw, 4.1, MTN() + 8, 8, pk2));
+      city.hill.push(Math.round(HILL() - 6 - 4 * Math.sin(xw / 53 + 2.0) - 3 * Math.sin(xw / 19 + 0.7) - 1.5 * Math.sin(xw / 7.3 + 1.1)));
+      city.horizon.push(Math.min(city.far[x], city.near[x], city.hill[x]));
+    }
+    // The skyline downtown, on the left: a back row and a front row of towers, tallest in the middle.
+    city.towers = [];
+    const r2 = rng(hash("downtown")), x0 = Math.round(W * 0.04), x1 = Math.round(W * 0.38);
+    for (const layer of [0, 1]) {
+      for (let x = x0 + layer * 4; x < x1;) {
+        const w = 6 + Math.floor(r2() * (layer ? 8 : 7)), c = (x + w / 2 - x0) / (x1 - x0);
+        const bell = Math.sin(Math.PI * Math.max(0, Math.min(1, c)));
+        const h = Math.round((layer ? 12 : 20) + bell * (layer ? 24 : 26) * (0.5 + r2() * 0.5));
+        const tw = { x, w, top: HILL() - h, layer, col: pick(["#9fb1c1", "#b4c0c9", "#8fa3b5", "#c2c7c9", "#a7b8b0", "#b9b2a6"], Math.floor(r2() * 6)),
+          style: pick(["flat", "flat", "spire", "step", "slant", "flat"], Math.floor(r2() * 6)), wins: [] };
+        for (let y = tw.top + 3; y < HILL() + 2; y += 3) {
+          for (let xx = x + 1; xx < x + w - 1; xx += 2) { const sd = hash(xx + ":" + y + ":" + layer); tw.wins.push({ x: xx, y, hr: hoursFor(sd, "office"), c: COOL[sd % 4] }); }
+        }
+        city.towers.push(tw);
+        for (let xx = x; xx < x + w && xx < W; xx++) if (xx >= 0) city.horizon[xx] = Math.min(city.horizon[xx], tw.top - (tw.style === "spire" ? 9 : 0));
+        x += w + (layer ? Math.floor(r2() * 5) : 2 + Math.floor(r2() * 6));
+      }
+    }
+    const tall = city.towers.slice().sort((a, b) => a.top - b.top).slice(0, 3);
+    tall.forEach((tw, i) => city.blink.push({ x: tw.x + Math.floor(tw.w * 0.6) - 1, y: tw.top - (tw.style === "spire" ? 9 : 1), c: "#ff3b2f", p: 1500 + i * 230, far: true }));
+  }
+  // The far range and the skyline, in the haze of the hour: drawn on the sky, once for each light.
+  function drawFar(g, L) {
+    const hz = (c, f) => mix(litCol(c, L), L.low, f);
+    const fa = hz("#aabdcc", 0.45), fs = hz("#94a8b9", 0.45), snow = hz("#f4f7f9", 0.38);
+    const na = hz("#8fa7b5", 0.3), ns = hz("#7b93a3", 0.3);
+    for (let x = 0; x < W; x++) {
+      const t = city.far[x], sl = city.far[Math.min(W - 1, x + 2)] - city.far[Math.max(0, x - 2)];
+      px(g, x, t, 1, H - t, sl > 0 ? fs : fa);
+      if (t < MTN() - 19) px(g, x, t, 1, Math.min(3, MTN() - 18 - t), snow);
+    }
+    for (let x = 0; x < W; x++) {
+      const t = city.near[x], sl = city.near[Math.min(W - 1, x + 2)] - city.near[Math.max(0, x - 2)];
+      px(g, x, t, 1, H - t, sl > 0 ? ns : na);
+    }
+    const bot = HILL() + 8;
+    for (const tw of city.towers) {
+      const f = tw.layer ? 0.3 : 0.46, face = hz(tw.col, f), side = hz(shade(tw.col, -0.24), f), lw = Math.ceil(tw.w * 0.6);
+      px(g, tw.x, tw.top, lw, bot - tw.top, face); px(g, tw.x + lw, tw.top, tw.w - lw, bot - tw.top, side);
+      px(g, tw.x, tw.top, tw.w, 1, hz(shade(tw.col, 0.25), f));
+      for (let y = tw.top + 2; y < bot; y += 3) px(g, tw.x, y, tw.w, 1, shade(face, -0.06));
+      if (tw.style === "spire") px(g, tw.x + lw - 1, tw.top - 9, 1, 9, side);
+      else if (tw.style === "step") { px(g, tw.x + 2, tw.top - 4, tw.w - 4, 4, face); px(g, tw.x + lw, tw.top - 4, Math.max(1, tw.w - lw - 2), 4, side); }
+      else if (tw.style === "slant") for (let i = 0; i < tw.w; i++) px(g, tw.x + i, tw.top - Math.floor(i / 2), 1, Math.floor(i / 2), i < lw ? face : side);
+      if (L.dark > 0.15) for (const w of tw.wins) if (litNow(w.hr, L.min, L.dark)) px(g, w.x, w.y, 1, 1, w.c);
+    }
+  }
+
+  // ---------------------------------------------------------------- the near hills, the sign, the mast
+  function drawHills(g) {
+    for (let x = 0; x < W; x++) {
+      const t = city.hill[x];
+      px(g, x, t, 1, H - t, "#76a05a");
+      px(g, x, t, 1, 1, city.hill[Math.max(0, x - 1)] > t ? "#9cc078" : "#8ab46a");
+    }
+    const r = rng(hash("hillgrass"));
+    for (let i = 0; i < W; i++) { const x = Math.floor(r() * W), y = city.hill[x] + 2 + Math.floor(r() * Math.max(1, TOWN() - city.hill[x])); px(g, x, y, 1, 1, "#6a9450"); }
+    // farms and copses, anchored to the lot so they stay put
+    for (let xw = -Math.ceil(OX / 11) * 11; xw < W - OX; xw += 11) {
+      const rr = rng(hash("hill:" + xw)), x = OX + xw + Math.floor(rr() * 7);
+      if (x < 2 || x > W - 6 || (x > signAt()[0] - 7 && x < signAt()[1] + 2)) continue;
+      const top = city.hill[x], room = TOWN() - top - 6;
+      if (room < 2) continue;
+      const y = top + 3 + Math.floor(rr() * room), what = rr();
+      if (what < 0.38) {  // a farmhouse with a window that lights up
+        px(g, x, y - 2, 4, 3, "#ece3d0"); px(g, x + 3, y - 2, 1, 3, "#cfc4ae"); px(g, x - 1, y - 3, 6, 1, "#a8503c"); px(g, x, y - 4, 4, 1, "#a8503c");
+        city.winB.push({ x: x + 1, y: y - 1, w: 1, h: 1, hr: hoursFor(hash("farm" + xw), "home"), c: WARM[xw & 3] });
+      } else if (what < 0.8) {
+        for (let k = 0; k < 2 + Math.floor(rr() * 3); k++) { const tx = x + k * 3 - 1, ty = y - Math.floor(rr() * 2); px(g, tx, ty - 2, 3, 3, "#4b7d42"); px(g, tx, ty - 3, 2, 1, "#5f9550"); }
+      } else {
+        for (let k = 0; k < 6; k++) px(g, x + k, y + (k % 2), 1, 1, "#8b6f4a");  // a fence
+      }
+    }
+    drawSign(g);
+    drawMast(g);
+  }
+  const signAt = () => { const tw = textW("HERMES FLEET", { big: true }), sx = Math.min(W - tw - 8, OX + 190); return [sx, sx + tw]; };
+  function drawSign(g) {
+    const label = "HERMES FLEET", [sx, sx1] = signAt(), tw = sx1 - sx;
+    let sy = 0;
+    for (let x = sx; x < sx + tw; x++) sy = Math.max(sy, city.hill[x] - 10);
+    for (let x = sx + 2; x < sx + tw; x += 6) px(g, x, sy + 7, 1, 4, "#6b5a44");
+    text(g, label, sx + 1, sy + 1, "#55704f", { big: true });
+    text(g, label, sx, sy, "#f7f4ec", { big: true });
+    for (const lx of [sx + 8, sx + tw - 10]) px(g, lx, sy + 11, 3, 1, "#3d3a35");  // the floodlights
+    city.emB.push({ thr: 0.28, f: (g2, k) => {
+      g2.globalAlpha = 0.22 * k;
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) text(g2, label, sx + dx, sy + dy, "#ffd98a", { big: true });
+      g2.globalAlpha = 0.9 * k; text(g2, label, sx, sy, "#fff6dc", { big: true }); g2.globalAlpha = 1;
+    } });
+    for (let x = Math.max(0, sx); x < Math.min(W, sx + tw); x++) city.horizon[x] = Math.min(city.horizon[x], sy);
+  }
+  function drawMast(g) {  // a radio mast on the hill, its beacons blink all night
+    const x = OX + 296;
+    if (x > W - 4) return;
+    const base = city.hill[x] + 4, top = base - 48;
+    for (let y = top; y < base; y++) { const s = Math.floor((y - top) / 14); px(g, x - s, y, 1, 1, "#6a6d72"); px(g, x + 1 + s, y, 1, 1, "#585b60"); }
+    for (let y = top + 5; y < base - 3; y += 5) { const s = Math.floor((y - top) / 14); line(g, x - s, y, x + 1 + s, y + 4, "#7d8085"); }
+    for (const [dy, i] of [[1, 0], [17, 1], [33, 2]]) city.blink.push({ x, y: top + dy - 2, w: 2, c: "#ff3b2f", p: 1700, ph: i * 90 });
+    for (let xx = x - 3; xx < x + 5; xx++) if (xx >= 0 && xx < W) city.horizon[xx] = Math.min(city.horizon[xx], top - 2);
+  }
+
+  // ---------------------------------------------------------------- the street plan
+  // Behind each back wall, rows of blocks DEEP tiles deep with streets between them; beyond each
+  // boulevard, more rows. u runs along a row, v away from the lot; the footprint is [x0, y0, x1, y1].
+  function foot(z, u0, u1, v0, v1) {
+    if (z === "br") return [u0, -v1, u1, -v0];
+    if (z === "bl") return [-v1, u0, -v0, u1];
+    if (z === "fr") return [OUT() + v0, u0, OUT() + v1, u1];
+    return [u0, OUT() + v0, u1, OUT() + v1];
+  }
+  function blocksOf(z) {  // blocks along u, with a cross street between them
+    const r = rng(hash("blocks:" + z)), out = [];
+    if (z[0] === "b") {
+      for (let u = G; u > -70;) { const w = 10 + r() * 9; out.push([Math.max(-70, u - w), u]); u -= w + STREET; }
+    } else {
+      for (let u = 9; u < 130;) { const w = 9 + r() * 9; out.push([u, u + w]); u += w + STREET; }
+      for (let u = 7; u > -70;) { const w = 9 + r() * 9; out.push([Math.max(-70, u - w), u]); u -= w + STREET; }
+    }
+    return out;
+  }
+  function split(bl, r) {  // the parcels in a block
+    const out = [];
+    for (let u = bl[0]; bl[1] - u > 0.05;) {
+      let w = 2.6 + r() * 3.6;
+      if (bl[1] - u - w < 2.6) w = bl[1] - u;
+      out.push([u, u + w]); u += w;
+    }
+    return out;
+  }
+  function onScreen(fp, h) {
+    const l = P(fp[0], fp[3])[0], rr = P(fp[2], fp[1])[0], t = P(fp[0], fp[1])[1] - h, b = P(fp[2], fp[3])[1];
+    return rr >= -12 && l <= W + 12 && b >= -4 && t <= H + 4;
+  }
+  function townPlan() {
+    const out = [], specials = { fr: [[9.5, "diner"], [20, "motel"], [30, "shop"]], fl: [[14, "gas"], [26, "cinema"]] };
+    for (const z of ["br", "bl", "fr", "fl"]) {
+      const back = z[0] === "b", blocks = blocksOf(z);
+      for (let k = 0; k < 30; k++) {
+        const v0 = back ? STREET + ROW * k : ROW * k, v1 = v0 + DEEP;
+        let more = false;
+        for (const bl of blocks) {
+          const r = rng(hash(z + ":" + k + ":" + bl[0].toFixed(2)));
+          for (const [u0, u1] of split(bl, r)) {
+            const fp = foot(z, u0, u1, v0, v1);
+            // the two back zones meet at an avenue behind the lot's corner, the two front ones beyond it
+            if ((z === "br" && fp[0] - fp[3] < 1.4) || (z === "bl" && fp[1] - fp[2] < 1.4) ||
+              (z === "fr" && fp[0] - fp[3] < 0.7) || (z === "fl" && fp[1] - fp[2] < 0.7)) continue;
+            const backY = P(fp[0], fp[1])[1];
+            if (back ? backY < TOWN() : backY > H + 2) continue;
+            more = true;
+            const cap = back ? Math.min(46, backY - (HILL() - 8)) : 30;
+            if (!onScreen(fp, Math.max(cap, 14))) continue;
+            const p = { z, k, fp, u0, u1, back, cap, seed: hash(z + "/" + k + "/" + u0.toFixed(2)), face: z === "br" || z === "fl" ? "L" : "R" };
+            p.in = [fp[0] + 0.25, fp[1] + 0.25, fp[2] - 0.25, fp[3] - 0.25];
+            choose(p, k === 0 ? specials[z] : null);
+            out.push(p);
+          }
+        }
+        if (!more) break;
+      }
+    }
+    return out;
+  }
+  function choose(p, specials) {
+    const r = rng(p.seed ^ 0x5bd1e995), w = p.u1 - p.u0;
+    let kind = null;
+    if (p.z === "bl" && p.k === 0) { if (p.u0 >= 8.5 && p.u1 <= 23) kind = "western"; else if (p.u0 >= 25.5 && w >= 4) kind = "castle"; }
+    for (const [at, s] of specials || []) if (!kind && p.u0 <= at && at < p.u1 && w >= 3.4) kind = s;
+    if (!kind) {
+      const list = !p.back ? ["shop", "shop", "shop", "house", "house", "shop", "park", "parking", "house"]
+        : p.cap < 12 ? ["house", "house", "park", "parking", "house"]
+          : p.cap < 20 ? ["house", "house", "apartment", "warehouse", "park", "parking", "garage", "house"]
+            : p.k === 0 && p.z === "br" ? ["warehouse", "office", "garage", "parking", "office", "warehouse", "apartment", "hotel"]
+              : ["office", "office", "apartment", "apartment", "apartment", "hotel", "warehouse", "garage", "park", "parking", "house", "office"];
+      kind = list[Math.floor(r() * list.length)];
+    }
+    const lim = (lo, hi) => Math.max(lo, Math.min(p.cap, hi));
+    p.h = kind === "office" ? lim(12, 6 * Math.floor((18 + r() * 30) / 6)) : kind === "apartment" ? lim(11, 7 * Math.floor((14 + r() * 22) / 7) + 2)
+      : kind === "hotel" ? lim(18, 6 * Math.floor((24 + r() * 24) / 6)) : kind === "garage" ? lim(12, 6 * (2 + Math.floor(r() * 3))) : 0;
+    if (p.h > p.cap) kind = p.cap >= 9 ? "house" : "park";
+    p.kind = kind;
+  }
+
+  // ---------------------------------------------------------------- faces, panes and roofs
+  // A point on a face of the box b: face "L" runs along gx at gy = b[3] and looks down to the left,
+  // "R" runs along gy at gx = b[2] and looks down to the right. out is the distance in front of it.
+  const onFace = (b, f, a, z, out) => (f === "L" ? P(a, b[3] + (out || 0), z) : P(b[2] + (out || 0), a, z));
+  const faceQ = (b, f, a0, a1, z0, z1, out) => [onFace(b, f, a0, z0, out), onFace(b, f, a1, z0, out), onFace(b, f, a1, z1, out), onFace(b, f, a0, z1, out)];
+  const along = (b, f) => (f === "L" ? [b[0], b[2]] : [b[1], b[3]]);
+  function faceText(g, b, f, a, z, str, col, out) {  // text along a face, centred at a, its foot at height z
+    const tw = textW(str), c = onFace(b, f, a, z, out), sh = f === "L" ? 1 : -1;
+    const x = c[0] - Math.floor(tw / 2), y = c[1] - 5 - sh * Math.floor(tw / 4);
+    text(g, str, x, y, col, { shear: sh });
+    return [x, y, sh];
+  }
+  function pane(g, list, b, f, a, z, o) {  // one window; it keeps its own hours
+    const w = o.w || 2, h = o.h || 3, p = onFace(b, f, f === "L" ? a - w / 16 : a + w / 16, z), sd = hash(o.seed);
+    px(g, p[0], p[1] - h, w, h, o.glass || TC.glass);
+    if (o.sill) px(g, p[0], p[1], w, 1, o.sill);
+    if (o.list !== false) list.push({ x: p[0], y: p[1] - h, w, h, hr: o.hr || hoursFor(sd, o.kind || "home"), c: o.cool ? COOL[sd % 4] : WARM[sd % 6], tv: !o.cool && sd % 9 === 0 });
+  }
+  function panes(g, list, b, f, z0, z1, o) {  // rows of windows on one face
+    const [a0, a1] = along(b, f), step = o.step || 0.8, fl = o.floor || 7, h = o.h || 3, m = o.m || 0.4;
+    const n = Math.floor((a1 - a0 - 2 * m) / step) + 1;
+    if (n < 1) return;
+    const off = (a1 - a0 - (n - 1) * step) / 2;
+    for (let z = z0, k = 0; z + h <= z1; z += fl, k++) {
+      for (let i = 0; i < n; i++) pane(g, list, b, f, a0 + off + i * step, z, Object.assign({}, o, { seed: o.seed + ":" + k + ":" + i }));
+    }
+  }
+  function bx(g, b, z0, z1, wall, top) { box(g, b[0], b[1], b[2], b[3], z0, z1, top || shade(wall, 0.12), wall, shade(wall, -0.2)); }
+  function roofTop(g, b, h, wall, r) {  // a parapet, a vent or two, sometimes an aerial
+    if (b[2] - b[0] > 1 && b[3] - b[1] > 1) flat(g, b[0] + 0.22, b[1] + 0.22, b[2] - 0.22, b[3] - 0.22, shade(wall, -0.22), h);
+    if (r() < 0.8 && b[2] - b[0] > 1.8 && b[3] - b[1] > 1.6) {
+      const cx = b[0] + 0.45 + r() * (b[2] - b[0] - 1.6), cy = b[1] + 0.4 + r() * (b[3] - b[1] - 1.3);
+      box3(g, cx, cy, cx + 0.8, cy + 0.6, h, h + 3, "#a3aaae");
+    }
+    if (r() < 0.3) { const a = P(b[0] + 0.6, b[1] + 0.6, h); px(g, a[0], a[1] - 9, 1, 9, "#4a4d52"); px(g, a[0] - 2, a[1] - 7, 5, 1, "#4a4d52"); }
+  }
+  function hipRoof(g, b, z, col) {  // four slopes up to a ridge along the longer side
+    const [x0, y0, x1, y1] = b, w = x1 - x0, d = y1 - y0, rh = Math.round(2 * Math.min(w, d) + 3), alongX = w >= d;
+    const R0 = alongX ? P(x0 + d / 2, (y0 + y1) / 2, z + rh) : P((x0 + x1) / 2, y0 + w / 2, z + rh);
+    const R1 = alongX ? P(x1 - d / 2, (y0 + y1) / 2, z + rh) : P((x0 + x1) / 2, y1 - w / 2, z + rh);
+    const c00 = P(x0, y0, z), c10 = P(x1, y0, z), c11 = P(x1, y1, z), c01 = P(x0, y1, z);
+    if (alongX) {
+      poly(g, [c00, c10, R1, R0], shade(col, -0.3)); poly(g, [c00, c01, R0], shade(col, -0.3));
+      poly(g, [c10, c11, R1], shade(col, -0.22)); poly(g, [c01, c11, R1, R0], col);
+    } else {
+      poly(g, [c00, c10, R0], shade(col, -0.3)); poly(g, [c00, c01, R1, R0], shade(col, -0.3));
+      poly(g, [c10, c11, R1, R0], shade(col, -0.22)); poly(g, [c01, c11, R1], col);
+    }
+    seg(g, c01, c11, shade(col, -0.35)); seg(g, c11, c10, shade(col, -0.4)); seg(g, R0, R1, shade(col, 0.2));
+  }
+  function tree(g, gx, gy, s) {
+    const p = P(gx, gy), cy = p[1] - 3 - s;
+    px(g, p[0], p[1] - 4, 1, 4, TC.trunk);
+    disc(g, p[0], cy, s, TC.leaf); disc(g, p[0] - 1, cy - 1, Math.max(1, s - 1), TC.leaf2);
+    px(g, p[0] - Math.ceil(s / 2), cy - Math.ceil(s / 2), 2, 1, TC.leaf3);
+  }
+  function tank(g, gx, gy, z) {  // a water tank on a roof
+    const p = P(gx, gy, z);
+    px(g, p[0] - 3, p[1] - 3, 1, 3, "#5a4636"); px(g, p[0] + 2, p[1] - 3, 1, 3, "#5a4636");
+    px(g, p[0] - 3, p[1] - 9, 6, 6, "#8f6a4a"); px(g, p[0] + 1, p[1] - 9, 2, 6, "#765539"); px(g, p[0] - 3, p[1] - 7, 6, 1, "#5a4636");
+    px(g, p[0] - 2, p[1] - 11, 4, 2, "#6d5a4a"); px(g, p[0] - 1, p[1] - 12, 2, 1, "#6d5a4a");
+  }
+  function parkedCar(g, gx, gy, alongX, col) {
+    const L = 0.5, Wd = 0.27, b = alongX ? [gx - L, gy - Wd, gx + L, gy + Wd] : [gx - Wd, gy - L, gx + Wd, gy + L];
+    box(g, b[0], b[1], b[2], b[3], 0.5, 3.5, shade(col, 0.15), col, shade(col, -0.25));
+    const c = alongX ? [gx - 0.26, gy - 0.22, gx + 0.18, gy + 0.22] : [gx - 0.22, gy - 0.26, gx + 0.22, gy + 0.18];
+    box(g, c[0], c[1], c[2], c[3], 3.5, 5.5, shade(col, 0.2), PAL.glassDark, shade(PAL.glassDark, -0.2));
+  }
+  function lampPool(gx, gy, rx, thr) { city.pools.push({ gx, gy, rx, thr }); }
+  function halo(back, x, y, r, thr) { (back ? city.haloB : city.haloF).push({ x, y, r, thr, c: "#ffc46b" }); }  // the glow around a bulb
+
+  // ---------------------------------------------------------------- the ground of every parcel
+  function groundOf(g, p) {
+    const f = p.fp, b = p.in, k = p.kind, r = rng(p.seed ^ 0x2545f491);
+    const fill = (c) => flat(g, f[0], f[1], f[2], f[3], c);
+    if (k === "park") {
+      fill(TC.lawn);
+      const mx = (f[0] + f[2]) / 2, my = (f[1] + f[3]) / 2;
+      flat(g, mx - 0.22, f[1], mx + 0.22, f[3], TC.walk); flat(g, f[0], my - 0.22, f[2], my + 0.22, TC.walk);
+      for (let i = 0; i < 30; i++) { const q = P(f[0] + r() * (f[2] - f[0]), f[1] + r() * (f[3] - f[1])); px(g, q[0], q[1], 1, 1, TC.lawn2); }
+      if (r() < 0.5) { const c = P(mx + 1.2, my + 1.2); ellipse(g, c[0], c[1], 8, 4, "#5b9bc2"); ellipse(g, c[0] - 1, c[1] - 1, 5, 2, "#7cb6d8"); }
+    } else if (k === "parking") {
+      fill(TC.street2);
+      const alongX = f[2] - f[0] >= f[3] - f[1];
+      if (alongX) for (let x = f[0] + 0.3; x < f[2] - 0.3; x += 0.75) { seg(g, P(x, f[1] + 0.15), P(x, f[1] + 1.35), TC.line); seg(g, P(x, f[3] - 1.35), P(x, f[3] - 0.15), TC.line); }
+      else for (let y = f[1] + 0.3; y < f[3] - 0.3; y += 0.75) { seg(g, P(f[0] + 0.15, y), P(f[0] + 1.35, y), TC.line); seg(g, P(f[2] - 1.35, y), P(f[2] - 0.15, y), TC.line); }
+    } else if (k === "house") {
+      fill(TC.lawn2);
+      for (let i = 0; i < 14; i++) { const q = P(f[0] + r() * (f[2] - f[0]), f[1] + r() * (f[3] - f[1])); px(g, q[0], q[1], 1, 1, TC.lawn); }
+    } else if (k === "western" || k === "castle") fill(TC.dirt);
+    else if (k === "warehouse" || k === "garage" || k === "gas") fill(TC.pave2);
+    else if (k === "shop" || k === "diner" || k === "cinema" || k === "motel") fill(TC.walk2);
+    else fill(TC.pave);
+    if (k === "gas") flat(g, b[0] + 0.4, b[1] + 0.4, b[2] - 0.4, b[3] - 0.4, "#b9b7ae");
+  }
+
+  // ---------------------------------------------------------------- buildings, by kind
+  function office(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), wall = pick(OFFICE, p.seed), h = p.h, glass = r() < 0.5 ? "#4d697a" : "#5a6c78";
+    bx(g, b, 0, h, wall);
+    for (const f of ["L", "R"]) {
+      const [a0, a1] = along(b, f);
+      poly(g, faceQ(b, f, a0 + 0.1, a1 - 0.1, 0, 4), shade(wall, -0.34));
+      list.push({ q: faceQ(b, f, a0 + 0.25, a1 - 0.25, 0, 3), hr: NIGHT, c: "#ffe6b0", a: 0.6 });  // the lobby stays lit
+      panes(g, list, b, f, 7, h - 2, { kind: "office", cool: true, step: 0.62, w: 3, h: 3, floor: 6, glass, seed: p.seed + f });
+    }
+    roofTop(g, b, h, wall, r);
+  }
+  function apartment(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), brick = r() < 0.5, wall = brick ? pick(BRICK, p.seed) : pick(STUCCO, p.seed >>> 3), h = p.h;
+    bx(g, b, 0, h, wall, shade(wall, 0.05));
+    for (const f of ["L", "R"]) {
+      const [a0, a1] = along(b, f);
+      for (let z = 9; z < h - 2; z += 7) seg(g, onFace(b, f, a0, z), onFace(b, f, a1, z), shade(wall, -0.12));
+      panes(g, list, b, f, 4, h - 2, { kind: "home", step: 0.72, w: 2, h: 3, floor: 7, sill: shade(wall, brick ? 0.35 : -0.15), seed: p.seed + f });
+    }
+    const [a0, a1] = along(b, p.face), mid = (a0 + a1) / 2;
+    poly(g, faceQ(b, p.face, mid - 0.3, mid + 0.3, 0, 5), "#5b4434");
+    list.push({ q: faceQ(b, p.face, mid - 0.24, mid + 0.24, 1, 4), hr: NIGHT, c: "#ffd58a", a: 0.7 });
+    roofTop(g, b, h, wall, r);
+    if (r() < 0.6 && b[2] - b[0] > 2 && b[3] - b[1] > 2) tank(g, b[0] + (b[2] - b[0]) * 0.62, b[1] + (b[3] - b[1]) * 0.42, h);
+  }
+  function hotel(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), wall = pick(["#e6c79c", "#d7a98f", "#e8d8c0", "#c9a27e"], p.seed), h = p.h;
+    bx(g, b, 0, h, wall);
+    for (const f of ["L", "R"]) panes(g, list, b, f, 7, h - 3, { kind: "home", step: 0.6, w: 2, h: 3, floor: 6, sill: shade(wall, -0.2), seed: p.seed + f });
+    const [a0, a1] = along(b, p.face), mid = (a0 + a1) / 2;
+    poly(g, faceQ(b, p.face, mid - 0.7, mid + 0.7, 0, 5), "#3e3430");
+    list.push({ q: faceQ(b, p.face, mid - 0.6, mid + 0.6, 0, 4), hr: NIGHT, c: "#ffd58a", a: 0.8 });
+    poly(g, [onFace(b, p.face, mid - 0.9, 6), onFace(b, p.face, mid + 0.9, 6), onFace(b, p.face, mid + 0.9, 5, 0.7), onFace(b, p.face, mid - 0.9, 5, 0.7)], "#8e2f2f");
+    roofTop(g, b, h, wall, r);
+    const word = "HOTEL", tw = textW(word);
+    if ((a1 - a0) * 8 >= tw + 6) {  // the sign on the roof, in neon after dark
+      const c0 = onFace(b, p.face, mid - tw / 16, h, -0.3), c1 = onFace(b, p.face, mid + tw / 16, h, -0.3);
+      px(g, c0[0], c0[1] - 4, 1, 4, "#3a3532"); px(g, c1[0], c1[1] - 4, 1, 4, "#3a3532");
+      const [x, y, sh] = faceText(g, b, p.face, mid, h + 3, word, "#9b2f35", -0.3);
+      em.push({ thr: 0.22, f: (g2, k) => {
+        g2.globalAlpha = 0.3 * k; text(g2, word, x - 1, y, "#ff7d95", { shear: sh }); text(g2, word, x + 1, y, "#ff7d95", { shear: sh });
+        g2.globalAlpha = k; text(g2, word, x, y, "#ff5c7a", { shear: sh }); g2.globalAlpha = 1;
+      } });
+    }
+  }
+  function warehouse(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), wall = pick(["#b0aa9e", "#a7b0b5", "#bba98f", "#c2b8a3", "#9fa9a0"], p.seed), h = Math.min(Math.max(9, p.cap - 5), 11 + Math.floor(r() * 4));
+    bx(g, b, 0, h, wall);
+    const n = Math.max(2, Math.round((b[2] - b[0]) / 1.5)), st = (b[2] - b[0]) / n, rf = shade(wall, 0.14);
+    for (let i = 0; i < n; i++) {
+      const a0 = b[0] + i * st, a1 = a0 + st, gl = [P(a1, b[1], h), P(a1, b[3], h), P(a1, b[3], h + 5), P(a1, b[1], h + 5)];
+      poly(g, [P(a0, b[1], h), P(a1, b[1], h + 5), P(a1, b[3], h + 5), P(a0, b[3], h)], i % 2 ? rf : shade(rf, -0.05));
+      poly(g, gl, "#6d8695");
+      poly(g, [P(a0, b[3], h), P(a1, b[3], h), P(a1, b[3], h + 5)], wall);
+      list.push({ q: gl, hr: hoursFor(hash(p.seed + "saw" + i), "office"), c: "#c9d8e6", a: 0.28 });
+    }
+    const f = p.face, [a0, a1] = along(b, f), nd = Math.max(1, Math.floor((a1 - a0) / 2.2));
+    for (let i = 0; i < nd; i++) {
+      const c = a0 + (a1 - a0) * (i + 0.5) / nd;
+      poly(g, faceQ(b, f, c - 0.6, c + 0.6, 0, 7), "#7f878c");
+      for (let z = 1; z < 7; z += 2) seg(g, onFace(b, f, c - 0.6, z), onFace(b, f, c + 0.6, z), "#6b7378");
+      const lamp = onFace(b, f, c, 8.5);
+      px(g, lamp[0] - 1, lamp[1], 3, 1, "#3b3d40");
+      em.push({ thr: 0.3, f: (g2, k) => { g2.globalAlpha = k; px(g2, lamp[0] - 1, lamp[1] + 1, 3, 1, "#fff1c4"); g2.globalAlpha = 1; } });
+      halo(p.back, lamp[0], lamp[1] + 1, 4, 0.3);
+      const gp = f === "L" ? [c, b[3] + 0.8] : [b[2] + 0.8, c];
+      lampPool(gp[0], gp[1], 12, 0.3);
+    }
+    if (r() < 0.35 && b[2] - b[0] > 3) billboard(g, p, b, h + 5, em, r);
+  }
+  function billboard(g, p, b, z, em, r) {  // on the roof, facing the street
+    const f = p.face, [a0, a1] = along(b, f), mid = (a0 + a1) / 2, ad = pick(["COLD SODA", "SURF CITY", "FILM FEST", "DRIVE-IN", "CAR WASH"], p.seed >>> 7);
+    const wq = Math.max(textW(ad) / 8 + 0.6, 2.2) / 2, col = pick(["#2e6fb5", "#c0392b", "#2f8a5b", "#d68a1c"], p.seed >>> 9);
+    for (const a of [mid - wq + 0.3, mid + wq - 0.3]) { const q = onFace(b, f, a, z, -0.6); px(g, q[0], q[1] - 6, 1, 6, "#4a4d52"); }
+    poly(g, faceQ(b, f, mid - wq, mid + wq, z + 5, z + 13, -0.6), "#f3efe4");
+    poly(g, faceQ(b, f, mid - wq + 0.1, mid + wq - 0.1, z + 6, z + 12, -0.6), col);
+    faceText(g, b, f, mid, z + 6.5, ad, "#fbf8f0", -0.6);
+    em.push({ thr: 0.3, f: (g2, k) => { g2.globalAlpha = 0.18 * k; poly(g2, faceQ(b, f, mid - wq, mid + wq, z + 5, z + 13, -0.6), "#fff3c8"); g2.globalAlpha = 1; } });
+  }
+  function garage(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), lv = Math.max(2, Math.min(4, Math.floor(p.h / 6))), h = lv * 6, wall = pick(["#c3beb2", "#b8b6ae", "#cbc4b4"], p.seed);
+    bx(g, b, 0, h, wall, shade(wall, -0.04));
+    for (const f of ["L", "R"]) {
+      const [a0, a1] = along(b, f);
+      for (let i = 0; i < lv; i++) {
+        const q = faceQ(b, f, a0 + 0.25, a1 - 0.25, i * 6 + 2, i * 6 + 5);
+        poly(g, q, f === "L" ? "#43474d" : "#393c41");
+        list.push({ q, hr: NIGHT, c: "#e7ead0", a: 0.45 });
+      }
+    }
+    flat(g, b[0] + 0.2, b[1] + 0.2, b[2] - 0.2, b[3] - 0.2, "#9d9a92", h);
+    for (let i = 0; i < 4; i++) if (r() < 0.7) { const c = P(b[0] + 0.5 + r() * (b[2] - b[0] - 1), b[1] + 0.5 + r() * (b[3] - b[1] - 1), h); px(g, c[0] - 2, c[1] - 2, 4, 2, pick(CARS, i + p.seed)); }
+    if (r() < 0.3) billboard(g, p, b, h, em, r);
+  }
+  function park(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), spots = [], n = Math.max(2, Math.round((b[2] - b[0]) * (b[3] - b[1]) / 4.5));
+    for (let i = 0; i < n; i++) {
+      const x = b[0] + 0.4 + r() * (b[2] - b[0] - 0.8), y = b[1] + 0.4 + r() * (b[3] - b[1] - 0.8);
+      if (Math.abs(x - (b[0] + b[2]) / 2) < 0.45 || Math.abs(y - (b[1] + b[3]) / 2) < 0.45) continue;
+      spots.push([x, y, 3 + Math.floor(r() * 3)]);
+    }
+    const mx = (b[0] + b[2]) / 2, my = (b[1] + b[3]) / 2;
+    spots.push([mx + 0.35, my + 0.35, 0]);
+    spots.sort((a, c) => a[0] + a[1] - c[0] - c[1]);
+    for (const [x, y, s] of spots) {
+      if (s) tree(g, x, y, s);
+      else { const q = P(x, y); px(g, q[0], q[1] - 16, 1, 16, "#3a3d42"); px(g, q[0] - 1, q[1] - 17, 3, 2, "#2f3236"); em.push({ thr: 0.35, f: (g2, k) => { g2.globalAlpha = k; px(g2, q[0] - 1, q[1] - 16, 3, 1, "#fff1c4"); g2.globalAlpha = 1; } }); halo(p.back, q[0], q[1] - 16, 4, 0.35); lampPool(x, y, 14, 0.35); }
+    }
+  }
+  function parking(g, p, list, em) {
+    const f = p.fp, r = rng(p.seed), alongX = f[2] - f[0] >= f[3] - f[1], cars = [];
+    if (alongX) for (let x = f[0] + 0.67; x < f[2] - 0.3; x += 0.75) { if (r() < 0.6) cars.push([x, f[1] + 0.75, false]); if (r() < 0.6) cars.push([x, f[3] - 0.75, false]); }
+    else for (let y = f[1] + 0.67; y < f[3] - 0.3; y += 0.75) { if (r() < 0.6) cars.push([f[0] + 0.75, y, true]); if (r() < 0.6) cars.push([f[2] - 0.75, y, true]); }
+    cars.sort((a, c) => a[0] + a[1] - c[0] - c[1]);
+    for (const [x, y, ax] of cars) parkedCar(g, x, y, ax, pick(CARS, hash(p.seed + ":" + x + ":" + y)));
+    const lx = (f[0] + f[2]) / 2, ly = (f[1] + f[3]) / 2, q = P(lx, ly);
+    px(g, q[0], q[1] - 18, 1, 18, "#3a3d42"); px(g, q[0] - 2, q[1] - 19, 5, 1, "#2f3236");
+    em.push({ thr: 0.32, f: (g2, k) => { g2.globalAlpha = k; px(g2, q[0] - 2, q[1] - 18, 5, 1, "#fff1c4"); g2.globalAlpha = 1; } });
+    halo(p.back, q[0], q[1] - 18, 5, 0.32);
+    lampPool(lx, ly, 22, 0.32);
+  }
+  function house(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), W0 = b[2] - b[0], D0 = b[3] - b[1], f = p.face;
+    const w = Math.max(1.6, Math.min(W0 - 0.6, 2.3 + r() * 1.3)), d = Math.max(1.6, Math.min(D0 - 0.6, 2.1 + r() * 0.9));
+    const x0 = f === "L" ? b[0] + (W0 - w) * (0.3 + r() * 0.4) : b[0] + 0.25, y0 = f === "L" ? b[1] + 0.25 : b[1] + (D0 - d) * (0.3 + r() * 0.4);
+    const hb = [x0, y0, x0 + w, y0 + d], h = 7 + Math.floor(r() * 3), wall = pick(HOUSE, p.seed), roof = pick(ROOFS, p.seed >>> 4);
+    bx(g, hb, 0, h, wall, wall);
+    const [a0, a1] = along(hb, f), side = f === "L" ? "R" : "L", [s0, s1] = along(hb, side);
+    poly(g, faceQ(hb, f, (a0 + a1) / 2 - 0.22, (a0 + a1) / 2 + 0.22, 0, 5), "#6b4a3a");
+    pane(g, list, hb, f, a0 + (a1 - a0) * 0.22, 2, { w: 2, h: 3, sill: "#f4efe4", seed: p.seed + "a" });
+    pane(g, list, hb, f, a0 + (a1 - a0) * 0.8, 2, { w: 2, h: 3, sill: "#f4efe4", seed: p.seed + "b" });
+    pane(g, list, hb, side, (s0 + s1) / 2, 2, { w: 2, h: 3, sill: "#f4efe4", seed: p.seed + "c" });
+    if (r() < 0.45) { const c = P(hb[0] + w * 0.7, hb[1] + d * 0.3, h + 2); px(g, c[0], c[1] - 7, 3, 7, "#8a5a44"); px(g, c[0], c[1] - 7, 3, 1, "#5e3d2f"); }
+    hipRoof(g, hb, h, roof);
+    // the yard: a tree in front, sometimes a fence
+    const tx = f === "L" ? (r() < 0.5 ? b[0] + 0.4 : b[2] - 0.4) : b[2] - 0.35, ty = f === "L" ? b[3] - 0.35 : (r() < 0.5 ? b[1] + 0.4 : b[3] - 0.4);
+    if (r() < 0.8) tree(g, tx, ty, 3 + Math.floor(r() * 2));
+    if (r() < 0.5) { const e0 = f === "L" ? P(p.fp[0] + 0.1, p.fp[3] - 0.1) : P(p.fp[2] - 0.1, p.fp[1] + 0.1), e1 = P(p.fp[2] - 0.1, p.fp[3] - 0.1); for (const e of [e0, e1]) px(g, e[0], e[1] - 2, 1, 2, "#efe9dc"); seg(g, [e0[0], e0[1] - 2], [e1[0], e1[1] - 2], "#efe9dc"); }
+  }
+  const SHOPS = ["CAFE", "BOOKS", "PIZZA", "FLOWERS", "VIDEO", "DELI", "SHOES", "TACOS", "BAKERY", "RECORDS", "BIKES", "TOYS"];
+  function shop(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), f = p.face, two = r() < 0.5, h = two ? 15 : 10;
+    const wall = pick(STUCCO.concat(BRICK), p.seed), awn = pick(["#c8423a", "#2f7d63", "#2e5f9a", "#d08b2c", "#7d3c98", "#3d8b8b"], p.seed >>> 4);
+    bx(g, b, 0, h, wall);
+    roofTop(g, b, h, wall, r);
+    const [a0, a1] = along(b, f), len = a1 - a0, mid = (a0 + a1) / 2;
+    // the shop front: a display window and a door, lit until closing time
+    const win = faceQ(b, f, a0 + 0.3, a1 - 0.75, 1, 6);
+    poly(g, win, "#58707c"); poly(g, faceQ(b, f, a1 - 0.62, a1 - 0.25, 0, 6), "#4b3a30");
+    list.push({ q: win, hr: hoursFor(hash(p.seed + "shop"), "office"), c: "#ffe6b0", a: 0.9 });
+    for (let a = a0 + 0.3, i = 0; a < a1 - 0.3; a += 0.36, i++) {  // the awning, striped
+      const e = Math.min(a + 0.36, a1 - 0.3);
+      poly(g, [onFace(b, f, a, 8.5), onFace(b, f, e, 8.5), onFace(b, f, e, 6.5, 0.6), onFace(b, f, a, 6.5, 0.6)], i % 2 ? "#f4efe4" : awn);
+    }
+    if (two) panes(g, list, b, f, 10, 13, { kind: "home", step: 0.9, w: 2, h: 3, floor: 7, seed: p.seed + "up" });
+    const fits = SHOPS.filter((s) => textW(s) <= len * 8 - 4), name = fits.length ? fits[(p.seed >>> 6) % fits.length] : "", zt = 9;
+    if (name) faceText(g, b, f, mid, zt + 0.2, name, "#2b2622", 0);
+    const side = f === "L" ? "R" : "L";
+    panes(g, list, b, side, 3, h - 2, { kind: "home", step: 1.1, w: 2, h: 3, floor: 7, seed: p.seed + "side", m: 0.5 });
+    if (name) em.push({ thr: 0.3, f: (g2, k) => { g2.globalAlpha = k; faceText(g2, b, f, mid, zt + 0.2, name, pick(["#ffe08a", "#ff9fb2", "#9ef0ff", "#b8ff9e"], p.seed >>> 3), 0); g2.globalAlpha = 1; } });
+    const gp = f === "L" ? [mid, b[3] + 0.7] : [b[2] + 0.7, mid];
+    lampPool(gp[0], gp[1], 12, 0.4);
+  }
+  function diner(g, p, list, em) {
+    const b = p.in, f = p.face, h = 9, wall = "#dfe7e4";
+    bx(g, b, 0, h, wall, "#cfd6d4");
+    for (const ff of ["L", "R"]) {
+      const [a0, a1] = along(b, ff);
+      poly(g, faceQ(b, ff, a0, a1, 2, 3), "#c8423a");
+      const q = faceQ(b, ff, a0 + 0.3, a1 - 0.3, 4, 7);
+      poly(g, q, "#58707c");
+      list.push({ q, hr: { thr: 0.12, off: 1500, allNight: true, early: -1 }, c: "#fff0c8", a: 0.9 });
+    }
+    flat(g, b[0] + 0.2, b[1] + 0.2, b[2] - 0.2, b[3] - 0.2, "#b9c2c0", h);
+    const [a0, a1] = along(b, f), mid = (a0 + a1) / 2, word = "DINER";
+    const [x, y, sh] = faceText(g, b, f, mid, h + 2, word, "#2e8fa0", -0.4);
+    const c0 = onFace(b, f, mid, h, -0.4); px(g, c0[0], c0[1] - 2, 1, 2, "#3a3532");
+    em.push({ thr: 0.15, f: (g2, k) => {
+      g2.globalAlpha = 0.3 * k; text(g2, word, x - 1, y, "#ff8fd0", { shear: sh }); text(g2, word, x + 1, y, "#ff8fd0", { shear: sh });
+      g2.globalAlpha = k; text(g2, word, x, y, "#ff6ac1", { shear: sh }); g2.globalAlpha = 1;
+    } });
+    const gp = f === "L" ? [mid, b[3] + 0.8] : [b[2] + 0.8, mid];
+    lampPool(gp[0], gp[1], 18, 0.15);
+  }
+  function motel(g, p, list, em) {
+    const b = p.in, f = p.face, h = 14, wall = "#e9d9b8";
+    bx(g, b, 0, h, wall);
+    const [a0, a1] = along(b, f), n = Math.max(2, Math.floor((a1 - a0) / 0.9));
+    for (let i = 0; i < n; i++) {
+      const a = a0 + (a1 - a0) * (i + 0.5) / n;
+      for (const z of [0, 7]) { poly(g, faceQ(b, f, a - 0.32, a - 0.05, z, z + 5), "#7b4a35"); pane(g, list, b, f, a + 0.18, z + 2, { w: 2, h: 2, seed: p.seed + ":" + i + ":" + z }); }
+    }
+    seg(g, onFace(b, f, a0, 7, 0.4), onFace(b, f, a1, 7, 0.4), "#8b7355"); seg(g, onFace(b, f, a0, 9, 0.4), onFace(b, f, a1, 9, 0.4), "#8b7355");
+    roofTop(g, b, h, wall, rng(p.seed));
+    // the roadside sign on its pole
+    const pole = f === "L" ? [b[0] + 0.3, b[3] + 0.5] : [b[2] + 0.5, b[1] + 0.3], q = P(pole[0], pole[1]);
+    px(g, q[0], q[1] - 26, 1, 26, "#4a4d52");
+    px(g, q[0] - 9, q[1] - 36, 19, 10, "#2c5d7a"); px(g, q[0] - 8, q[1] - 35, 17, 8, "#3a76a0");
+    text(g, "MOTEL", q[0] - 9 + 1, q[1] - 34, "#f7f4ec");
+    px(g, q[0] - 8, q[1] - 25, 17, 6, "#1f2a33"); text(g, "VACANCY", q[0] - 13, q[1] - 24, "#5b6b5f");
+    em.push({ thr: 0.2, f: (g2, k) => {
+      g2.globalAlpha = k; text(g2, "MOTEL", q[0] - 8, q[1] - 34, "#ffe28a"); text(g2, "VACANCY", q[0] - 13, q[1] - 24, "#7dff9a");
+      g2.globalAlpha = 0.15 * k; px(g2, q[0] - 11, q[1] - 38, 23, 20, "#ffe9a8"); g2.globalAlpha = 1;
+    } });
+  }
+  function gas(g, p, list, em) {
+    const b = p.in, f = p.face;
+    // the shop at the back, the canopy over the pumps in front
+    const shopB = f === "L" ? [b[0], b[1], b[0] + Math.min(2.4, (b[2] - b[0]) * 0.45), b[1] + 1.6] : [b[0], b[1], b[0] + 1.6, b[1] + Math.min(2.4, (b[3] - b[1]) * 0.45)];
+    bx(g, shopB, 0, 8, "#eeeae0");
+    const sw = faceQ(shopB, f, along(shopB, f)[0] + 0.3, along(shopB, f)[1] - 0.3, 1, 6);
+    poly(g, sw, "#58707c"); list.push({ q: sw, hr: NIGHT, c: "#f4f7ff", a: 0.85 });
+    const cb = f === "L" ? [b[0] + 0.5, b[1] + 1.9, b[2] - 0.4, b[3] - 0.3] : [b[0] + 1.9, b[1] + 0.5, b[2] - 0.3, b[3] - 0.4];
+    for (const [x, y] of [[cb[0] + 0.2, cb[3] - 0.2], [cb[2] - 0.2, cb[3] - 0.2], [cb[2] - 0.2, cb[1] + 0.2], [cb[0] + 0.2, cb[1] + 0.2]]) { const q = P(x, y); px(g, q[0], q[1] - 11, 1, 11, "#d8d4ca"); }
+    const mx = (cb[0] + cb[2]) / 2, my = (cb[1] + cb[3]) / 2;
+    for (const o of [-0.6, 0.6]) { const pp = f === "L" ? [mx + o, my] : [mx, my + o]; box3(g, pp[0] - 0.15, pp[1] - 0.12, pp[0] + 0.15, pp[1] + 0.12, 0, 5, "#d6402f"); }
+    box(g, cb[0], cb[1], cb[2], cb[3], 11, 13, "#f2efe8", "#c8423a", "#a8352e");
+    em.push({ thr: 0.25, f: (g2, k) => { g2.globalAlpha = 0.5 * k; box(g2, cb[0], cb[1], cb[2], cb[3], 11, 13, "#fffaf0", "#ff6a5a", "#e0524a"); g2.globalAlpha = 1; } });
+    lampPool(mx, my, 30, 0.2);
+    const pole = f === "L" ? [b[2] - 0.2, b[3] - 0.2] : [b[2] - 0.2, b[3] - 0.2], q = P(pole[0], pole[1]);
+    px(g, q[0], q[1] - 20, 1, 20, "#4a4d52"); px(g, q[0] - 7, q[1] - 30, 15, 10, "#f2efe8"); px(g, q[0] - 6, q[1] - 29, 13, 3, "#c8423a");
+    text(g, "GAS", q[0] - 5, q[1] - 25, "#2b2622");
+    em.push({ thr: 0.25, f: (g2, k) => { g2.globalAlpha = 0.35 * k; px(g2, q[0] - 7, q[1] - 30, 15, 10, "#fff5d6"); g2.globalAlpha = 1; } });
+  }
+  function cinema(g, p, list, em) {
+    const b = p.in, f = p.face, h = 18, wall = "#c9a27e";
+    bx(g, b, 0, h, wall);
+    roofTop(g, b, h, wall, rng(p.seed));
+    const [a0, a1] = along(b, f), mid = (a0 + a1) / 2;
+    poly(g, faceQ(b, f, mid - 0.8, mid + 0.8, 0, 6), "#3e3430");
+    list.push({ q: faceQ(b, f, mid - 0.7, mid + 0.7, 0, 5), hr: { thr: 0.1, off: 1470, allNight: false, early: -1 }, c: "#ffd58a", a: 0.9 });
+    // the marquee over the doors, with its bulbs
+    const m0 = mid - 1.3, m1 = mid + 1.3;
+    poly(g, [onFace(b, f, m0, 11), onFace(b, f, m1, 11), onFace(b, f, m1, 9, 0.8), onFace(b, f, m0, 9, 0.8)], "#2a1f1c");
+    poly(g, faceQ(b, f, m0, m1, 11, 16, 0.8), "#f3efe4");
+    faceText(g, b, f, mid, 11.8, "CINEMA", "#b3262e", 0.8);
+    em.push({ thr: 0.15, f: (g2, k) => {
+      g2.globalAlpha = 0.35 * k; poly(g2, faceQ(b, f, m0, m1, 11, 16, 0.8), "#fff3c8");
+      g2.globalAlpha = k; for (let a = m0; a <= m1; a += 0.25) { const q = onFace(b, f, a, 16.5, 0.8); px(g2, q[0], q[1], 1, 1, "#ffe39a"); }
+      g2.globalAlpha = 1;
+    } });
+    lampPool(f === "L" ? mid : b[2] + 1, f === "L" ? b[3] + 1 : mid, 22, 0.15);
+  }
+  // The studio's own backlot sets behind the left wall: a western street and a castle.
+  function western(g, p, list, em) {
+    const b = p.in, r = rng(p.seed), names = ["SALOON", "BANK", "HOTEL", "JAIL", "STORE", "BARBER"];
+    let a = b[1] + 0.2, i = 0;
+    while (a < b[3] - 1.6) {
+      const w = Math.min(b[3] - a, 2.1 + r() * 1.3), h = 14 + Math.floor(r() * 9), x1 = b[2], x0 = x1 - 0.3, fb = [x0, a, x1, a + w];
+      const wood = pick(["#a0714b", "#8c5f3d", "#b98a5a", "#7a5a40", "#c9b28a", "#9e6b52"], hash(p.seed + ":" + i));
+      for (const s of [a + 0.4, a + w - 0.4]) line(g, P(x0, s, h - 3)[0], P(x0, s, h - 3)[1], P(x0 - 1.5, s, 0)[0], P(x0 - 1.5, s, 0)[1], "#6b5038");  // the braces behind
+      bx(g, fb, 0, h, wood);
+      const top = r() < 0.5;
+      if (top) bx(g, [x0, a + w * 0.25, x1, a + w * 0.75], h, h + 4, wood);
+      poly(g, faceQ(fb, "R", a + 0.4, a + 0.9, 0, 7), "#3b2a20");
+      pane(g, list, fb, "R", a + w - 0.6, 3, { w: 3, h: 3, list: false, glass: "#2e3a40" });
+      poly(g, [onFace(fb, "R", a, 9), onFace(fb, "R", a + w, 9), onFace(fb, "R", a + w, 7, 0.7), onFace(fb, "R", a, 7, 0.7)], shade(wood, -0.25));
+      const nm = names[i % names.length];
+      if (textW(nm) <= w * 8 - 2) faceText(g, fb, "R", a + w / 2, h - 7, nm, "#f2e6c8");
+      a += w + 0.15; i++;
+    }
+  }
+  function castle(g, p, list, em) {
+    const b = p.in, stone = "#b9b2a3", dark = "#9f9889", x1 = b[2], x0 = x1 - 0.8;
+    const keep = [b[0] + 0.3, (b[1] + b[3]) / 2 - 1.1, b[0] + 2.3, (b[1] + b[3]) / 2 + 1.1];
+    const crenels = (bb, z) => { const [s0, s1] = along(bb, "R"); for (let s = s0; s < s1 - 0.1; s += 0.5) bx(g, [bb[2] - 0.3, s, bb[2], Math.min(s1, s + 0.25)], z, z + 3, stone); };
+    bx(g, keep, 0, 32, dark);
+    for (let z = 6; z < 30; z += 8) pane(g, list, keep, "R", (keep[1] + keep[3]) / 2, z, { w: 1, h: 3, glass: "#3b3a38", list: false });
+    crenels(keep, 32);
+    const fl = P(keep[2] - 0.3, (keep[1] + keep[3]) / 2, 35);
+    px(g, fl[0], fl[1] - 10, 1, 10, "#4a4540"); px(g, fl[0] + 1, fl[1] - 10, 6, 4, "#c0392b"); px(g, fl[0] + 1, fl[1] - 8, 6, 1, "#e3b54b");
+    const t0 = [x0 - 0.3, b[1], x1, b[1] + 1.2], t1 = [x0 - 0.3, b[3] - 1.2, x1, b[3]], wall = [x0, b[1] + 1.2, x1, b[3] - 1.2];
+    bx(g, t0, 0, 24, stone); crenels(t0, 24);
+    bx(g, wall, 0, 17, stone); crenels(wall, 17);
+    const gm = (wall[1] + wall[3]) / 2;
+    poly(g, faceQ(wall, "R", gm - 0.5, gm + 0.5, 0, 9), "#3b2f27");
+    for (let a = gm - 0.4; a <= gm + 0.4; a += 0.2) seg(g, onFace(wall, "R", a, 0), onFace(wall, "R", a, 9), "#5b4a3a");
+    bx(g, t1, 0, 24, stone); crenels(t1, 24);
+    for (const tt of [t0, t1]) pane(g, list, tt, "R", (tt[1] + tt[3]) / 2, 14, { w: 1, h: 3, glass: "#3b3a38", list: false });
+    for (const s of [gm - 0.8, gm + 0.8]) {  // torches by the gate
+      const q = onFace(wall, "R", s, 8);
+      px(g, q[0], q[1], 1, 3, "#5b4a3a");
+      em.push({ thr: 0.3, f: (g2, k) => { g2.globalAlpha = k; px(g2, q[0], q[1] - 1, 1, 2, "#ffb347"); g2.globalAlpha = 0.25 * k; disc(g2, q[0], q[1] - 1, 3, "#ff9a3c"); g2.globalAlpha = 1; } });
+    }
+  }
+  const KINDS = { office, apartment, hotel, warehouse, garage, park, parking, house, shop, diner, motel, gas, cinema, western, castle };
+
+  // ---------------------------------------------------------------- along the boulevard
+  function drawStreets(g, plan) {
+    const far = -Math.ceil(W / 16) - 24, G1 = G + 1.4, G4 = G + 4.6, G5 = G + 5.6, END = G + Math.ceil(W / 16) + 40;
+    g.save(); g.beginPath(); g.rect(0, TOWN() - 1, W, H); g.clip();
+    for (const p of plan) { const f = p.fp; flat(g, f[0] - 0.7, f[1] - 0.7, f[2] + 0.7, f[3] + 0.7, TC.street); }
+    flat(g, -1.4, -1.4, G, -0.5, TC.street2); flat(g, -1.4, -0.5, -0.5, G, TC.street2);   // the alleys behind the walls
+    flat(g, G, far, G1, G1, TC.walk); flat(g, far, G, G1, G1, TC.walk);                    // the pavements along the hedges
+    flat(g, G1, far, G4, G4, TC.street); flat(g, far, G1, G4, G4, TC.street);              // the boulevard
+    flat(g, G4, far, G5, G5, TC.walk); flat(g, far, G4, G5, G5, TC.walk);                  // the pavements across it
+    for (const [a, b2] of [[P(G1, far), P(G1, G1)], [P(far, G1), P(G1, G1)], [P(G4, far), P(G4, G4)], [P(far, G4), P(G4, G4)]]) seg(g, a, b2, TC.kerb);
+    const dbl = (a, b2) => { seg(g, a, b2, TC.yellow); seg(g, [a[0] + 1, a[1]], [b2[0] + 1, b2[1]], TC.yellow); };
+    dbl(P(G + 3, far), P(G + 3, G + 3)); dbl(P(far, G + 3), P(G + 3, G + 3));
+    for (let y = far; y < G1; y += 1.25) { seg(g, P(G + 2.2, y), P(G + 2.2, y + 0.5), "#8d8f94"); seg(g, P(G + 3.8, y), P(G + 3.8, y + 0.5), "#8d8f94"); }
+    for (let x = far; x < G1; x += 1.25) { seg(g, P(x, G + 2.2), P(x + 0.5, G + 2.2), "#8d8f94"); seg(g, P(x, G + 3.8), P(x + 0.5, G + 3.8), "#8d8f94"); }
+    for (let x = G1 + 0.15; x < G4 - 0.2; x += 0.42) flat(g, x, 9.3, x + 0.22, 10.5, TC.line);   // the crossing by the gate
+    flat(g, G4, 7, END, 9, TC.street);                                                           // the side street opposite the gate
+    for (let x = G5 + 0.3; x < END; x += 1.25) seg(g, P(x, 8), P(x + 0.55, 8), PAL.paint);
+    const fa = P(G5, G5);
+    px(g, fa[0] - 5, fa[1], 10, Math.max(0, H - fa[1]), TC.walk);                                // a footpath beyond the corner
+    for (const p of plan) { const f = p.fp; flat(g, f[0] - 0.3, f[1] - 0.3, f[2] + 0.3, f[3] + 0.3, TC.walk2); }
+    for (const p of plan) groundOf(g, p);
+    g.restore();
+  }
+  // Palms and street lamps on the far pavements, a bus stop opposite the gate.
+  function kerbside(g) {
+    const far = -Math.ceil(W / 16) - 12, G5 = G + 5.25, out = [];
+    for (let a = far; a < G + 4.2; a += 4.4) {
+      if (a < 5.2 || a > 13.4) out.push({ x: G5, y: a, k: "palm" });
+      if (a + 2.2 < 6 || a + 2.2 > 9.8) out.push({ x: G5, y: a + 2.2, k: "lamp", s: "R" });
+      out.push({ x: a, y: G5, k: "palm" });
+      out.push({ x: a + 2.2, y: G5, k: "lamp", s: "L" });
+    }
+    out.push({ x: G + 5.0, y: 11.2, k: "stop" });
+    out.sort((a, b) => a.x + a.y - b.x - b.y);
+    for (const o of out) {
+      const q = P(o.x, o.y);
+      if (q[0] < -20 || q[0] > W + 20 || q[1] < TOWN() || q[1] - 40 > H) continue;
+      if (o.k === "palm") palm(g, q[0], q[1], 21 + (hash(o.x + ":" + o.y) % 6), (hash(o.y + ":" + o.x) & 1) === 1);
+      else if (o.k === "lamp") streetLamp(g, o.x, o.y, o.s);
+      else busStop(g, o.x, o.y);
+    }
+  }
+  function streetLamp(g, gx, gy, s) {
+    const b = P(gx, gy), h = 22, head = s === "R" ? P(gx - 0.9, gy, h) : P(gx, gy - 0.9, h), thr = 0.3 + (hash(gx.toFixed(1) + ":" + gy.toFixed(1)) % 100) / 400;
+    px(g, b[0], b[1] - h, 1, h, "#3a3d42"); px(g, b[0] - 1, b[1] - 1, 3, 1, "#3a3d42");
+    line(g, b[0], b[1] - h, head[0], head[1], "#3a3d42");
+    px(g, head[0] - 1, head[1], 3, 1, "#2c2f33"); px(g, head[0] - 1, head[1] + 1, 3, 1, "#cfc9b0");
+    city.emF.push({ thr, f: (g2, k) => { g2.globalAlpha = k; px(g2, head[0] - 1, head[1] + 1, 3, 1, "#fff4cc"); g2.globalAlpha = 1; } });
+    halo(false, head[0], head[1] + 1, 5, thr);
+    lampPool(s === "R" ? gx - 1.2 : gx, s === "R" ? gy : gy - 1.2, 22, thr);
+  }
+  function busStop(g, gx, gy) {
+    const b = [gx - 0.1, gy - 0.9, gx + 0.25, gy + 0.9];
+    poly(g, faceQ(b, "R", b[1], b[3], 1, 12), "#9cc3d3");
+    seg(g, P(b[2], b[1], 0), P(b[2], b[1], 12), "#4a4d52"); seg(g, P(b[2], b[3], 0), P(b[2], b[3], 12), "#4a4d52");
+    box(g, gx - 0.5, gy - 1.0, gx + 0.35, gy + 1.0, 12, 13, "#c8423a", "#b03a33", "#8e2f29");
+    box(g, gx - 0.05, gy - 0.6, gx + 0.15, gy + 0.6, 2, 3, "#8b6a4a", "#7a5a3c", "#5e4530");
+    const s = P(gx - 0.35, gy + 1.3);
+    px(g, s[0], s[1] - 16, 1, 16, "#4a4d52"); px(g, s[0] - 3, s[1] - 20, 7, 5, "#2e86c1"); text(g, "B", s[0] - 1, s[1] - 20, "#f7f4ec");
+    city.emF.push({ thr: 0.3, f: (g2, k) => { g2.globalAlpha = 0.45 * k; poly(g2, faceQ(b, "R", b[1], b[3], 1, 12), "#e8f4ff"); g2.globalAlpha = 1; } });
+  }
+
+  function copse(g) {  // trees on the slope behind the lot's corner, where the two back zones part
+    const r = rng(hash("copse")), spots = [];
+    for (let i = 0; i < 60 && spots.length < 12; i++) {
+      const gx = -1.9 - r() * 4.4, gy = -1.9 - r() * 4.4;
+      if (gx + gy < -7.2 || spots.some(([x, y]) => Math.abs(x - gx) + Math.abs(y - gy) < 1.2)) continue;
+      spots.push([gx, gy, 3 + Math.floor(r() * 3)]);
+    }
+    spots.sort((a, b) => a[0] + a[1] - b[0] - b[1]);
+    for (const [gx, gy, s] of spots) tree(g, gx, gy, s);
+  }
+
+  // ---------------------------------------------------------------- putting the town together
+  // Behind: the hills, all the flat ground and the blocks behind the walls. In front: the kerbside
+  // and the blocks beyond the boulevard. Both are drawn once for each size of the screen.
+  function buildTown(gb, gf) {
+    city.winB = []; city.winF = []; city.emB = []; city.emF = []; city.haloB = []; city.haloF = []; city.pools = []; city.blink = [];
+    farLand();
+    drawHills(gb);
+    const plan = townPlan();
+    drawStreets(gb, plan);
+    copse(gb);
+    const order = (a, b) => (a.back ? b.k - a.k : a.k - b.k) || a.u0 - b.u0;
+    for (const p of plan.filter((x) => x.back).sort(order)) KINDS[p.kind](gb, p, city.winB, city.emB);
+    kerbside(gf);
+    for (const p of plan.filter((x) => !x.back).sort(order)) KINDS[p.kind](gf, p, city.winF, city.emF);
+    city.plan = plan;
   }
 
   // ---------------------------------------------------------------- people
@@ -1273,7 +2065,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       }
     }
     lights.posts = [];
-    const post = (gx, gy) => { props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); lampPost(g, p[0], p[1]); } }); lights.posts.push(P(gx, gy)); };
+    const post = (gx, gy) => { props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); lampPost(g, p[0], p[1]); } }); lights.posts.push([gx, gy]); };
     for (let x = 11.5; x < G - 4; x += 7) post(x, 9.35);
     for (let y = 12.5; y < G - 2; y += 7) post(9.35, y);
     props.push({ gx: G - 3.4, gy: G - 3.4, key: "marquee", draw: (g, t) => marquee(g, t) });
@@ -1281,7 +2073,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     props.push({ key: "courier", pos: (t) => courierAt(t), draw: (g, t, v) => {
       vehicle(g, v.gx, v.gy, v.dir, "van", "#f4f1e8");
       const s = P(v.gx, v.gy);
-      if (v.step && v.step.stop) bubble(g, s[0], s[1] - 24, "!");
+      if (v.step && v.step.stop) overlayQ.push((g2) => bubble(g2, s[0], s[1] - 24, "!"));
       return { x: s[0] - 15, y: s[1] - 22, w: 30, h: 26 };
     } });
   }
@@ -1317,15 +2109,39 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   }
 
   // ---------------------------------------------------------------- one frame of film
-  let skyC = null, skyG = null, lotC = null, lotG = null, sceneC = null, sceneG = null;
-  let dirty = true, curPer = "", hits = [], selected = null, hover = null;
-  function layers(per) {
-    if (!skyC || skyC.width !== W || skyC.height !== H) {
-      [skyC, skyG] = mk(W, H); [lotC, lotG] = mk(W, H); [sceneC, sceneG] = mk(W, H);
-      cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
-      fit();
+  // The still layers are drawn once (the town for each size of the screen, the lot each time the
+  // fleet changes) and lit again each minute of the day: multiplied by the colour of the hour,
+  // veiled by its haze, with every window, lamp and sign that is on at that minute. Each frame then
+  // lays down the sky, the town behind the lot, the lot, everyone on it and the town in front.
+  let skyC, skyG, backC, backG, frontC, frontG, lotC, lotG, litBackC, litBackG, litLotC, litLotG, litFrontC, litFrontG, itemsC, itemsG, maskC, maskG, haloC, haloG;
+  let viewKey = "", lightKey = "", lotLit = false, dirty = true, hits = [], selected = null, hover = null, LIGHT = null, haloOn = false;
+  let stars = [], clouds = [], overlayQ = [];
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  function canvases() {
+    if (skyC && skyC.width === W && skyC.height === H) return;
+    [skyC, skyG] = mk(W, H); [backC, backG] = mk(W, H); [frontC, frontG] = mk(W, H); [lotC, lotG] = mk(W, H);
+    [litBackC, litBackG] = mk(W, H); [litLotC, litLotG] = mk(W, H); [litFrontC, litFrontG] = mk(W, H);
+    [itemsC, itemsG] = mk(W, H); [maskC, maskG] = mk(W, H); [haloC, haloG] = mk(W, H);
+    cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
+  }
+  function buildView() {  // the town for this size of screen, its stars and its clouds
+    canvases();
+    backG.clearRect(0, 0, W, H); frontG.clearRect(0, 0, W, H);
+    buildTown(backG, frontG);
+    const r = rng(hash("stars"));
+    stars = [];
+    for (let i = 0; i < (W * MTN()) / 240; i++) {
+      const x = Math.floor(r() * W), y = Math.floor(r() * (MTN() - 2)), b = 0.3 + r() * 0.7, ph = r() * 6.3, sp = 0.5 + r() * 1.8, c = r();
+      if (y < city.horizon[x] - 2) stars.push({ x, y, b, ph, sp, c: c < 0.22 ? "#ffe9c4" : c < 0.4 ? "#c9d6ff" : "#ffffff", big: b > 0.93 });
     }
-    skyG.clearRect(0, 0, W, H); drawSky(skyG, per);
+    clouds = [];
+    for (let i = 0; i < Math.max(4, Math.round(W / 115)); i++) {
+      const w = 20 + Math.floor(r() * 30), puffs = [[0, 3, w, 4]];
+      for (let k = 0; k < 2 + Math.floor(r() * 3); k++) { const pw = 6 + Math.floor(r() * (w / 2)); puffs.push([2 + Math.floor(r() * (w - pw - 3)), -Math.floor(r() * 3), pw, 5]); }
+      clouds.push({ y: 6 + r() * Math.max(10, MTN() - 44), w, sp: 0.0018 + r() * 0.0035, x0: r() * (W + 120), puffs });
+    }
+  }
+  function buildLot() {  // the lot as the fleet stands now
     lotG.clearRect(0, 0, W, H);
     staticHits = []; lights.windows = []; lights.doors = [];
     drawGround(lotG);
@@ -1336,6 +2152,259 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     drawFront(lotG);
     placeLabels();
   }
+
+  // ---------------------------------------------------------------- light
+  // Light a still layer: multiply it by the colour of the hour, keep its own shape, veil it in haze.
+  function tint(g, src, Lt, mul, hazeK) {
+    g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+    g.clearRect(0, 0, W, H);
+    g.drawImage(src, 0, 0);
+    if (mul !== "#ffffff") {
+      g.globalCompositeOperation = "multiply"; g.fillStyle = mul; g.fillRect(0, 0, W, H);
+      g.globalCompositeOperation = "destination-in"; g.drawImage(src, 0, 0);
+    }
+    const ha = Lt.hazeA * (hazeK == null ? 1 : hazeK);
+    if (ha > 0.004) { g.globalCompositeOperation = "source-atop"; g.globalAlpha = ha; g.fillStyle = Lt.haze; g.fillRect(0, 0, W, H); g.globalAlpha = 1; }
+    g.globalCompositeOperation = "source-over";
+  }
+  function lightUp(g, wins, ems, Lt) {  // the windows that are on at this minute, then lamps and signs
+    if (Lt.dark < 0.06) return;
+    const a = 0.45 + 0.55 * Lt.dark, eve = Lt.min > 1110 || Lt.min < 60;
+    for (const w of wins) {
+      if (!litNow(w.hr, Lt.min, Lt.dark)) continue;
+      g.globalAlpha = a * (w.a || 1);
+      const c = w.tv && eve ? "#a9c8ff" : w.c;
+      if (w.q) poly(g, w.q, c); else { g.fillStyle = c; g.fillRect(w.x, w.y, w.w, w.h); }
+    }
+    g.globalAlpha = 1;
+    for (const e of ems) { const k = clamp01((Lt.dark - e.thr) / 0.2); if (k > 0) e.f(g, k); }
+  }
+  function pools(g, list, Lt) {  // light on the ground under the lamps
+    g.save(); g.globalCompositeOperation = "lighter";
+    for (const p of list) {
+      const k = clamp01((Lt.dark - p.thr) / 0.25);
+      if (k <= 0) continue;
+      const q = P(p.gx, p.gy);
+      pool(g, q[0], q[1], p.rx, "#ffc677", 0.3 * k);
+    }
+    g.restore();
+  }
+  // The glow around each bulb that is on, added onto what lies behind it. Returns whether any is on.
+  function halos(g, list, Lt) {
+    let any = false;
+    g.save(); g.globalCompositeOperation = "lighter";
+    for (const h of list) {
+      const k = clamp01((Lt.dark - h.thr) / 0.2);
+      if (k <= 0) continue;
+      any = true;
+      g.globalAlpha = 0.13 * k; disc(g, h.x, h.y, h.r, h.c);
+      g.globalAlpha = 0.26 * k; disc(g, h.x, h.y, Math.max(1, Math.round(h.r / 2)), h.c);
+    }
+    g.restore();
+    return any;
+  }
+  function lotLights(g, Lt) {
+    const k = clamp01((Lt.dark - 0.18) / 0.25);
+    if (k <= 0) return;
+    g.save(); g.globalCompositeOperation = "lighter";
+    for (const st of lights.doors) {  // an open door spills its light onto the apron
+      const p = S(st, 2.1, 1.3);
+      pool(g, p[0], p[1], 26, "#ffcf7a", 0.42 * k);
+      g.globalAlpha = 0.3 * k; spoly(g, st, [[1.2, 0, 0], [3.0, 0, 0], [3.0, 0, 22], [1.2, 0, 22]], "#ffd98a"); g.globalAlpha = 1;
+    }
+    for (const [gx, gy] of lights.posts) { const q = P(gx, gy); pool(g, q[0], q[1], 18, "#ffe2a0", 0.3 * k); }
+    g.restore();
+    g.globalAlpha = 0.55 + 0.4 * k;
+    for (const w of lights.windows) poly(g, w, "#ffd27a");
+    for (const st of stagesNow) if (st.dnd && st.trailerWin) poly(g, st.trailerWin, "#ffd27a");
+    g.globalAlpha = 1;
+  }
+  function relight(Lt, all) {
+    if (all) {
+      skyG.clearRect(0, 0, W, H); drawSky(skyG, Lt); drawFar(skyG, Lt);
+      tint(litBackG, backC, Lt, Lt.mul);
+      pools(litBackG, city.pools, Lt);
+      lightUp(litBackG, city.winB, city.emB, Lt);
+      halos(litBackG, city.haloB, Lt);
+      tint(litFrontG, frontC, Lt, Lt.mul);
+      lightUp(litFrontG, city.winF, city.emF, Lt);
+      haloG.clearRect(0, 0, W, H); haloOn = halos(haloG, city.haloF, Lt);
+    }
+    tint(litLotG, lotC, Lt, Lt.mul);
+    lotLights(litLotG, Lt);
+  }
+
+  // ---------------------------------------------------------------- the sky alive
+  function skyLife(g, t, Lt) {
+    const tt = reduced ? 0 : t, sa = clamp01((Lt.dark - 0.55) / 0.35);
+    if (sa > 0) {  // the stars come out, and twinkle
+      const mp = Lt.moon.up > -0.05 ? moonAt(Lt) : null;
+      for (const s of stars) {
+        if (mp && Math.abs(s.x - mp[0]) < 9 && Math.abs(s.y - mp[1]) < 9) continue;
+        const tw = reduced ? 1 : 0.6 + 0.4 * Math.sin((tt / 1000) * s.sp + s.ph);
+        g.globalAlpha = sa * s.b * tw; g.fillStyle = s.c; g.fillRect(s.x, s.y, 1, 1);
+        if (s.big && tw > 0.8) { g.globalAlpha *= 0.45; g.fillRect(s.x - 1, s.y, 3, 1); g.fillRect(s.x, s.y - 1, 1, 3); }
+      }
+      g.globalAlpha = 1;
+      if (!reduced) meteor(g, tt, sa);
+    }
+    // clouds, in the colour of the hour
+    const cc = mix(mix(litCol("#ffffff", Lt), Lt.low, 0.2), Lt.mid, 0.3 * Lt.dark), cs = mix(cc, Lt.mid, 0.25), ct = mix(cc, "#ffffff", 0.25 * (1 - Lt.dark));
+    for (const c of clouds) {
+      const x = Math.round((((reduced ? c.x0 : c.x0 + tt * c.sp) % (W + 120)) + W + 120) % (W + 120) - 60), y = Math.round(c.y);
+      for (const [dx, dy, w, h] of c.puffs) px(g, x + dx, y + dy, w, h, cc);
+      for (const [dx, dy, w] of c.puffs.slice(1)) px(g, x + dx + 1, y + dy, w - 2, 1, ct);
+      px(g, x + 2, y + 7, c.w - 4, 1, cs);
+    }
+    if (!reduced) { birds(g, tt, Lt); plane(g, tt, Lt); }
+  }
+  function meteor(g, tt, sa) {  // now and then, a shooting star
+    const slot = 11000, n = Math.floor(tt / slot), h = hash("meteor" + n);
+    if (h % 3) return;
+    const k = (tt % slot) / 750;
+    if (k > 1) return;
+    const x0 = 40 + ((h >>> 4) % Math.max(1, W - 80)), y0 = 6 + ((h >>> 12) % 26);
+    for (let i = 0; i < 9; i++) {
+      const kk = k - i * 0.035;
+      if (kk < 0) break;
+      g.globalAlpha = sa * (1 - i / 9) * (1 - k * 0.5);
+      px(g, Math.round(x0 - kk * 50), Math.round(y0 + kk * 20), 1, 1, "#ffffff");
+    }
+    g.globalAlpha = 1;
+  }
+  function birds(g, tt, Lt) {  // a flock crosses now and then, by day
+    if (Lt.dark > 0.3) return;
+    const period = 47000, n = Math.floor(tt / period), h = hash("birds" + n);
+    if (h % 3 === 0) return;
+    const k = (tt % period) / period, x0 = -30 + k * (W + 60) * 1.3, y0 = 18 + (h % 34), col = litCol("#2b2b33", Lt), flap = Math.floor(tt / 230) % 2;
+    if (x0 > W + 30) return;
+    g.fillStyle = col;
+    [[0, 0], [-6, -3], [-6, 3], [-12, -6], [-12, 6]].forEach(([dx, dy], i) => {
+      const x = Math.round(x0 + dx), y = Math.round(y0 + dy + Math.sin(tt / 600 + i) * 1.2), up = (flap + i) % 2;
+      g.fillRect(x - 2, y - up, 1, 1); g.fillRect(x - 1, y, 1, 1); g.fillRect(x, y, 1, 1); g.fillRect(x + 1, y - up, 1, 1);
+    });
+  }
+  function plane(g, tt, Lt) {  // a plane on its way somewhere, its lights blinking after dark
+    const period = 79000, n = Math.floor(tt / period);
+    if (hash("plane" + n) % 2) return;
+    const x = Math.round(W + 20 - ((tt % period) / period) * (W + 40) * 1.7), y = 10 + (hash("py" + n) % 16);
+    if (x < -30 || x > W + 30) return;
+    if (Lt.dark < 0.55) {
+      const c = litCol("#e8ebee", Lt);
+      g.globalAlpha = 0.3 * (1 - Lt.dark); px(g, x + 8, y, 34, 1, mix(c, Lt.top, 0.2)); g.globalAlpha = 1;
+      px(g, x, y, 7, 1, c); px(g, x + 3, y - 1, 2, 1, c); px(g, x + 3, y + 1, 2, 1, c); px(g, x + 6, y - 2, 1, 2, c);
+    }
+    if (Lt.dark > 0.2) {
+      const blink = Math.floor(tt / 450) % 2;
+      px(g, x + 3, y - 1, 1, 1, blink ? "#ff4b3a" : "#6a1d18"); px(g, x + 3, y + 1, 1, 1, "#56ff8a");
+      if (Math.floor(tt / 300) % 5 === 0) px(g, x, y, 1, 1, "#ffffff");
+    }
+  }
+  function beams(g, t, Lt) {  // two searchlights behind the lot, for the evening premiere
+    const m = Lt.min, edge = m >= 1170 ? clamp01((m - 1170) / 20) : m < 45 ? clamp01((45 - m) / 20) : 0, a = edge * clamp01((Lt.dark - 0.4) / 0.3);
+    if (a <= 0) return;
+    g.save(); g.globalCompositeOperation = "lighter";
+    [P(-1.5, 15, 10), P(15, -1.5, 10)].forEach((b, i) => {
+      const ang = -Math.PI / 2 + (i ? 0.32 : -0.32) + (reduced ? 0 : Math.sin(t / 3400 + i * 2.2) * 0.42), L2 = H + 200;
+      for (const [w, al] of [[0.09, 0.06], [0.045, 0.08]]) {
+        g.globalAlpha = al * a;
+        poly(g, [b, [b[0] + Math.cos(ang - w) * L2, b[1] + Math.sin(ang - w) * L2], [b[0] + Math.cos(ang + w) * L2, b[1] + Math.sin(ang + w) * L2]], "#c9d8ff");
+      }
+    });
+    g.restore();
+  }
+  function beacons(g, t, Lt) {  // the red lights on the tallest towers and the mast
+    for (const b of city.blink) {
+      if (!reduced && (t + (b.ph || 0)) % b.p > b.p * 0.5) continue;
+      g.globalAlpha = 0.5 + 0.5 * Lt.dark;
+      px(g, b.x, b.y, b.w || 1, 1, b.c);
+      if (Lt.dark > 0.3) { g.globalAlpha = 0.22 * Lt.dark; px(g, b.x - 1, b.y - 1, (b.w || 1) + 2, 3, b.c); }
+    }
+    g.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------------- traffic and passers-by
+  // Nobody tracks them: each car and walker has a slot in time, so where it is follows from the
+  // clock alone. How many turn up follows the hour: a rush in the morning and the evening.
+  let lanes = [], walks = [], roadKey = "";
+  const CAR = { slot: 1500, jit: 400, speed: 3 / 1000 }, WALK = { slot: 2600, jit: 1200, speed: 1.1 / 1000 };
+  const WALKERS = Array.from({ length: 16 }, (_, i) => look("walker" + i, {
+    shirt: pick(["#c0392b", "#2e86c1", "#e3b54b", "#27ae60", "#8e44ad", "#ecf0f1", "#34495e", "#d35400", "#e27fa0", "#5b8c85"], i * 7 + 3),
+    pants: pick(["#2f2f36", "#3b4f6b", "#5a4a3a", "#2a2a30", "#6b6f75"], i), hat: i % 5 === 0 ? "cap" : null, hatC: pick(["#3b3f46", "#c0392b", "#2e86c1"], i) }));
+  function roads() {
+    const key = W + ":" + G + ":" + OY;
+    if (key === roadKey) return;
+    roadKey = key;
+    const f = Math.max(G + 3 - (W / 2 + 48) / 8, (TOWN() + 2 - OY) / 4 - (G + 3));  // where the boulevard leaves the screen or meets the hills
+    lanes = [route([[G + 2.2, f], [G + 2.2, G + 2.2], [f, G + 2.2]]), route([[f, G + 3.8], [G + 3.8, G + 3.8], [G + 3.8, f]])];
+    walks = [route([[G + 0.7, f], [G + 0.7, G + 0.7], [f, G + 0.7]]), route([[f, G + 0.7], [G + 0.7, G + 0.7], [G + 0.7, f]]),
+      route([[G + 4.85, f], [G + 4.85, G + 4.85], [f, G + 4.85]]), route([[f, G + 4.85], [G + 4.85, G + 4.85], [G + 4.85, f]])];
+  }
+  function minAt(tp) { return lapse ? ((lapse.from + ((tp - lapse.at) / 1000) * 24) % 1440 + 1440) % 1440 : nowMin(); }
+  function strollers(min) {
+    const h = min / 60, bump = (c, w, a) => a * Math.exp(-(((h - c) / w) ** 2));
+    return Math.min(0.85, 0.04 + bump(12.5, 4.2, 0.6) + bump(18.5, 2.4, 0.3) + bump(22, 1.5, 0.1));
+  }
+  function slots(t, rt, o, seed, dens, out) {
+    const dur = rt.len / o.speed, n1 = Math.floor(t / o.slot), n0 = Math.floor((t - dur - o.jit) / o.slot);
+    for (let n = n0; n <= n1; n++) {
+      const h = hash(seed + ":" + n), born = n * o.slot + (h % o.jit), dist = (t - born) * o.speed;
+      if (dist < 0 || dist > rt.len || (h >>> 8) / 16777216 > dens(minAt(born))) continue;
+      out.push([rt.at(dist), h]);
+    }
+  }
+  function passersBy(t, items) {
+    roads();
+    const tt = reduced ? 3.6e6 : t, found = [];
+    lanes.forEach((rt, i) => slots(tt, rt, CAR, "car" + i, traffic, found));
+    for (const [v, h] of found) {
+      const r = (h >>> 3) % 100, kind = r < 6 ? "bus" : r < 13 ? "truck" : r < 22 ? "taxi" : r < 30 ? "van" : "car";
+      const col = kind === "taxi" ? "#f2c12e" : kind === "bus" ? pick(["#2e86c1", "#c0392b", "#27ae60"], h >>> 12) : pick(CARS, h >>> 12);
+      items.push({ d: v.gx + v.gy, car: { v, kind, col } });
+    }
+    const people = [];
+    walks.forEach((rt, i) => slots(tt, rt, WALK, "walk" + i, strollers, people));
+    for (const [v, h] of people) items.push({ d: v.gx + v.gy, walker: { v, look: WALKERS[(h >>> 4) % WALKERS.length], ph: h % 997 } });
+  }
+  function drawWalker(g, t, w) {
+    const v = w.v, s = P(v.gx, v.gy), pose = reduced ? "stand" : Math.floor((t + w.ph) / 280) % 2 ? "walkA" : "walkB";
+    g.drawImage(personSprite(Object.assign({}, w.look, { pose }), v.dir === "y+" || v.dir === "x-"), s[0] - 4, s[1] - 15);
+  }
+  function drawCar(g, c, Lt, glows, cones) {
+    const v = c.v, ax = v.dir[0] === "x", fwd = v.dir[1] === "+" ? 1 : -1, kind = c.kind, col = c.col;
+    const Ln = kind === "bus" ? 1.35 : kind === "truck" ? 0.95 : kind === "van" ? 0.7 : 0.62, Wd = kind === "bus" ? 0.42 : 0.33;
+    const b = ax ? [v.gx - Ln, v.gy - Wd, v.gx + Ln, v.gy + Wd] : [v.gx - Wd, v.gy - Ln, v.gx + Wd, v.gy + Ln];
+    for (const s of [-0.62, 0.62]) { const q = ax ? P(v.gx + s * Ln, b[3], 0) : P(b[2], v.gy + s * Ln, 0); px(g, q[0] - 1, q[1] - 2, 2, 2, "#1d1c1b"); }
+    const part = (r, z0, z1, cc) => box(g, r[0], r[1], r[2], r[3], z0, z1, shade(cc, 0.16), cc, shade(cc, -0.22));
+    const cut = (at) => (ax ? [[b[0], b[1], at, b[3]], [at, b[1], b[2], b[3]]] : [[b[0], b[1], b[2], at], [b[0], at, b[2], b[3]]]);
+    if (kind === "bus") {
+      part(b, 1, 12, col);
+      const wq = ax ? faceQ(b, "L", b[0] + 0.15, b[2] - 0.15, 6, 10) : faceQ(b, "R", b[1] + 0.15, b[3] - 0.15, 6, 10);
+      poly(g, wq, PAL.glassDark);
+      if (Lt.dark > 0.2) glows.push({ q: wq, c: "#fff0c0", a: 0.75 });
+    } else if (kind === "truck") {
+      const [back, front] = cut((ax ? v.gx : v.gy) + fwd * (Ln - 0.5));
+      const cab = fwd > 0 ? front : back, cargo = fwd > 0 ? back : front;
+      const load = () => { part(cargo, 1, 10, "#e8e4da"); poly(g, ax ? faceQ(cargo, "L", cargo[0] + 0.06, cargo[2] - 0.06, 5, 7) : faceQ(cargo, "R", cargo[1] + 0.06, cargo[3] - 0.06, 5, 7), col); };
+      if (fwd > 0) { load(); part(cab, 1, 7, col); } else { part(cab, 1, 7, col); load(); }
+    } else {
+      part(b, 1, 4, col);
+      const o = kind === "van" ? 0.08 : 0.22, sh = fwd * -0.06;
+      const cb = ax ? [b[0] + Ln * o * 2 + sh, b[1] + 0.03, b[2] - Ln * o * 2 + sh, b[3] - 0.03] : [b[0] + 0.03, b[1] + Ln * o * 2 + sh, b[2] - 0.03, b[3] - Ln * o * 2 + sh];
+      box(g, cb[0], cb[1], cb[2], cb[3], 4, kind === "van" ? 8 : 6.5, shade(col, 0.22), PAL.glassDark, shade(PAL.glassDark, -0.2));
+      if (kind === "van") box(g, cb[0], cb[1], cb[2], cb[3], 7, 8, shade(col, 0.2), col, shade(col, -0.2));
+      if (kind === "taxi") { const q = P(v.gx, v.gy, 6.5); px(g, q[0] - 1, q[1] - 2, 3, 2, "#f7f4ec"); }
+    }
+    if (Lt.dark > 0.22) {  // lights at the end you can see, beams on the road ahead
+      const end = ax ? [P(b[2], v.gy - Wd * 0.55, 2.5), P(b[2], v.gy + Wd * 0.55, 2.5)] : [P(v.gx - Wd * 0.55, b[3], 2.5), P(v.gx + Wd * 0.55, b[3], 2.5)];
+      glows.push({ pts: end, c: fwd > 0 ? "#fff6d0" : "#ff3a2a" });
+      const fx = ax ? (fwd > 0 ? b[2] : b[0]) : v.gx, fy = ax ? v.gy : fwd > 0 ? b[3] : b[1];
+      cones.push(ax ? [P(fx, fy - 0.22), P(fx + fwd * 2.6, fy - 0.75), P(fx + fwd * 2.6, fy + 0.75), P(fx, fy + 0.22)]
+        : [P(fx - 0.22, fy), P(fx - 0.75, fy + fwd * 2.6), P(fx + 0.75, fy + fwd * 2.6), P(fx + 0.22, fy)]);
+    }
+  }
+
+  // ---------------------------------------------------------------- the frame
   function drawPerson(g, t, m) {
     const p = m._p, s = P(p.gx, p.gy, p.z || 0), pose = p.pose || "stand", seated = pose === "sit" || pose === "sleep";
     if (m.under) m.under(g, t, s, p);
@@ -1353,16 +2422,24 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     return { x: s[0] - 9, y: s[1] - 23, w: 18, h: 25 };
   }
   function frame(t) {
-    const per = period();
-    if (per !== curPer || dirty) { layers(per); curPer = per; dirty = false; }
+    const min = nowMin(), Lt = lightAt(min);
+    LIGHT = Lt;
+    const vk = W + "x" + H + ":" + G + ":" + OY;
+    if (vk !== viewKey) { buildView(); viewKey = vk; lightKey = ""; dirty = true; }
+    if (dirty) { buildLot(); dirty = false; lotLit = false; }
+    const lk = String(Math.floor(lapse ? min / 5 : min));
+    if (lk !== lightKey) { relight(Lt, true); lightKey = lk; lotLit = true; } else if (!lotLit) { relight(Lt, false); lotLit = true; }
     ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
     ctx.drawImage(skyC, 0, 0);
-    if (per !== "night") clouds(ctx, t, per); else beams(ctx, t);
-    const g = sceneG;
+    skyLife(ctx, t, Lt);
+    beams(ctx, t, Lt);
+    ctx.drawImage(litBackC, 0, 0);
+    beacons(ctx, t, Lt);
+    ctx.drawImage(litLotC, 0, 0);
+    // everyone and everything that moves, in depth order, lit as a whole
+    const g = itemsG, items = [], glows = [], cones = [];
     g.clearRect(0, 0, W, H);
-    g.drawImage(lotC, 0, 0);
-    const items = [];
-    lights.torch = null;
+    lights.torch = null; overlayQ = [];
     for (const m of cast) {
       if (m.pos) { const p = m.pos(t); m._p = p; if (!p.hidden) items.push({ d: p.gx + p.gy, m, kind: "person" }); }
       else if (m.cart) { const v = m.cart(t); m._v = v; items.push({ d: v.gx + v.gy, m, kind: "cart" }); }
@@ -1372,9 +2449,12 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       if (pr.pos) { const v = pr.pos(t); pr._v = v; items.push({ d: v.gx + v.gy + 0.01, pr }); }
       else items.push({ d: pr.gx + pr.gy, pr });
     }
+    passersBy(t, items);
     items.sort((a, b) => a.d - b.d);
     hits = [];
     for (const it of items) {
+      if (it.car) { drawCar(g, it.car, Lt, glows, cones); continue; }
+      if (it.walker) { drawWalker(g, t, it.walker); continue; }
       let r = null, key = null;
       if (it.pr) { r = it.pr.draw(g, t, it.pr._v); key = it.pr.key || null; }
       else if (it.kind === "person") { r = drawPerson(g, t, it.m); key = it.m.key; }
@@ -1382,17 +2462,21 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       else { r = it.m.drawObj(g, t); key = it.m.key; }
       if (r && key && castBy.has(key)) hits.push(Object.assign({ key }, r));
     }
-    effects(g, t, per);
-    if (TINT[per]) {
-      g.globalCompositeOperation = "source-atop"; g.globalAlpha = TINT[per][1];
-      px(g, 0, 0, W, H, TINT[per][0]);
-      g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+    stuff(g, t);
+    if (Lt.mul !== "#ffffff" || Lt.hazeA > 0.004) {
+      maskG.clearRect(0, 0, W, H); maskG.drawImage(itemsC, 0, 0);
+      tint(itemsG, maskC, Lt, mix(Lt.mul, "#ffffff", 0.2), 0.7);
     }
-    ctx.drawImage(sceneC, 0, 0);
-    if (per !== "day") glow(ctx, t, per);
-    lamps(ctx, t, per);
-    const r = selected && rectOf(selected);
-    if (r) arrow(ctx, r.x + r.w / 2, r.y - 2 - (reduced ? 0 : Math.floor(t / 320) % 2));
+    for (const gl of glows) {  // head and tail lights, lit bus windows
+      g.globalAlpha = gl.a || 1;
+      if (gl.q) poly(g, gl.q, gl.c); else for (const q of gl.pts) px(g, q[0], q[1] - 1, 1, 1, gl.c);
+    }
+    g.globalAlpha = 1;
+    ctx.drawImage(itemsC, 0, 0);
+    lotGlows(ctx, t, Lt, cones);
+    ctx.drawImage(litFrontC, 0, 0);
+    if (haloOn) { ctx.globalCompositeOperation = "lighter"; ctx.drawImage(haloC, 0, 0); ctx.globalCompositeOperation = "source-over"; }
+    overlays(ctx, t, Lt);
   }
   function rectOf(key) {
     for (let i = hits.length - 1; i >= 0; i--) if (hits[i].key === key) return hits[i];
@@ -1405,46 +2489,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     for (let i = 0; i < 3; i++) px(g, x - 3 + i, y - 6 + i, 7 - 2 * i, 1, "#f2c12e");
     px(g, x - 3, y - 6, 2, 1, "#fff3b0");
   }
-
-  function clouds(g, t, per) {
-    const col = per === "dusk" ? "#f2b8a2" : "#ffffff", sh = per === "dusk" ? "#c98a86" : "#dbe7ef";
-    for (let i = 0; i < 4; i++) {
-      const w = 24 + ((i * 11) % 18), speed = 0.0035 + i * 0.0012;
-      const x = Math.round(((reduced ? i * 140 : t * speed + i * 157) % (W + 90)) - 45), y = 7 + ((i * 13) % 24);
-      px(g, x, y + 2, w, 4, col); px(g, x + 4, y, w - 10, 3, col); px(g, x + 8, y - 2, w - 18, 3, col); px(g, x + 2, y + 6, w - 4, 1, sh);
-    }
-  }
-  function beams(g, t) {  // two searchlights behind the lot, for the night premiere
-    g.save(); g.globalCompositeOperation = "lighter";
-    [P(-1.5, 15, 10), P(15, -1.5, 10)].forEach((b, i) => {
-      const ang = -Math.PI / 2 + (i ? 0.32 : -0.32) + (reduced ? 0 : Math.sin(t / 3400 + i * 2.2) * 0.42);
-      for (const [w, a] of [[0.09, 0.06], [0.045, 0.08]]) {
-        g.globalAlpha = a;
-        poly(g, [b, [b[0] + Math.cos(ang - w) * 300, b[1] + Math.sin(ang - w) * 300], [b[0] + Math.cos(ang + w) * 300, b[1] + Math.sin(ang + w) * 300]], "#c9d8ff");
-      }
-    });
-    g.restore();
-  }
-  function effects(g, t, per) {
-    for (const m of cast) {
-      const p = m._p;
-      if (!p || p.hidden) continue;
-      const s = P(p.gx, p.gy, p.z || 0);
-      if (m.zzz) {
-        const k = reduced ? 0.4 : ((t + m.phase) % 2600) / 2600;
-        text(g, "Z", s[0] + 3 + Math.round(k * 3), s[1] - 21 - Math.round(k * 7), "#f7f4ec");
-        if (k > 0.45) text(g, "Z", s[0] + 7, s[1] - 27 - Math.round((k - 0.45) * 8), "#cfcabd");
-      }
-      if (m.bubble) bubble(g, s[0], s[1] - 19, m.bubble === "…" ? "..." : m.bubble);
-      if (m.sparks && !reduced && (t + m.phase) % 1700 < 280) {
-        for (let i = 0; i < 6; i++) px(g, s[0] - 5 + Math.floor((t / 37 + i * 7) % 10), s[1] - 17 + Math.floor((t / 23 + i * 5) % 8), 1, 1, i % 2 ? "#fff3a0" : "#ffb347");
-      }
-    }
-    const v = courierAt(t);
-    if (v && v.step && v.step.stop) {  // the courier counts the cans at the door
-      const c = castBy.get(v.step.stop.key + ":cans");
-      if (c && !reduced && t % 900 < 450) { const p = P(c.at[0], c.at[1]); px(g, p[0] + 2, p[1] - 14, 1, 2, "#f2c12e"); }
-    }
+  function stuff(g, t) {  // smoke from the rooftop units, fog over a stage nobody can reach, the fountain
     for (const st of stagesNow) {
       const um = castBy.get(st.key + ":unit"), puffs = um && st.unit ? Math.min(5, Math.round(um.busy * 4 + 0.4)) : 0;
       for (let i = 0; i < puffs; i++) {
@@ -1452,7 +2497,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
         const x = st.unit[0] + Math.round(Math.sin(k * 6 + i) * 2 + k * 4), y = st.unit[1] - Math.round(k * 16), r = 1 + Math.round(k * 2);
         g.globalAlpha = 0.7 * (1 - k); px(g, x - r, y - r, 2 * r, 2 * r, "#f4f6f6"); g.globalAlpha = 1;
       }
-      if (st.ss.state === "offline") {  // fog over a stage nobody can reach
+      if (st.ss.state === "offline") {
         const r = rng(hash(st.key + "fog"));
         g.globalAlpha = 0.33;
         for (let i = 0; i < 40; i++) {
@@ -1471,31 +2516,51 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
     for (let i = 3; i >= 1; i--) { g.globalAlpha = a / 3; ellipse(g, x, y, (rx * i) / 3, (rx * i) / 6, col); }
     g.globalAlpha = 1;
   }
-  function glow(g, t, per) {
-    const night = per === "night", A = night ? 1 : 0.55;
+  function lotGlows(g, t, Lt, cones) {  // headlight beams, the marquee, the fountain, a flashlight
+    const k = clamp01((Lt.dark - 0.2) / 0.25);
+    if (k <= 0) return;
     g.save(); g.globalCompositeOperation = "lighter";
-    for (const st of lights.doors) {
-      const p = S(st, 2.1, 1.3);
-      pool(g, p[0], p[1], 26, "#ffcf7a", 0.42 * A);
-      g.globalAlpha = 0.28 * A; spoly(g, st, [[1.2, 0, 0], [3.0, 0, 0], [3.0, 0, 22], [1.2, 0, 22]], "#ffd98a"); g.globalAlpha = 1;
-    }
-    for (const p of lights.posts) pool(g, p[0], p[1], 18, "#ffe2a0", 0.3 * A);
-    if (lights.marquee) { const [x, y, w, h] = lights.marquee; g.globalAlpha = 0.22 * A; px(g, x - 3, y - 3, w + 6, h + 6, "#ffd88a"); g.globalAlpha = 1; const c = P(G - 3.4, G - 3.4); pool(g, c[0], c[1], 30, "#ffd27a", 0.25 * A); }
-    if (lights.sign) { const [x, y, w, h] = lights.sign; g.globalAlpha = 0.3 * A; px(g, x - 2, y - 1, w + 4, h + 2, "#ffe9b8"); g.globalAlpha = 1; }
-    if (lights.fountain) pool(g, lights.fountain[0], lights.fountain[1] + 10, 16, "#7fd0ff", 0.18 * A);
-    if (lights.torch) {
-      const { x, y, d } = lights.torch;
-      g.globalAlpha = 0.3 * A; poly(g, [[x, y], [x + d * 26, y - 7], [x + d * 26, y + 9]], "#fff1b0"); g.globalAlpha = 1;
-    }
-    g.restore();
-    g.globalAlpha = night ? 0.9 : 0.6;
-    for (const w of lights.windows) poly(g, w, "#ffd27a");
-    for (const st of stagesNow) if (st.dnd && st.trailerWin) poly(g, st.trailerWin, "#ffd27a");
+    g.globalAlpha = 0.12 * k;
+    for (const c of cones) poly(g, c, "#fff1c0");
     g.globalAlpha = 1;
-    for (const p of lights.posts) px(g, p[0] - 1, p[1] - 20, 3, 1, "#fff1c4");
-    if (lights.tower && (reduced || Math.floor(t / 900) % 2 === 0)) px(g, lights.tower[0], lights.tower[1], 1, 1, "#ff4b3a");
+    if (lights.marquee) { const [x, y, w, h] = lights.marquee; g.globalAlpha = 0.22 * k; px(g, x - 3, y - 3, w + 6, h + 6, "#ffd88a"); g.globalAlpha = 1; const c = P(G - 3.4, G - 3.4); pool(g, c[0], c[1], 30, "#ffd27a", 0.25 * k); }
+    if (lights.fountain) pool(g, lights.fountain[0], lights.fountain[1] + 10, 16, "#7fd0ff", 0.18 * k);
+    if (lights.torch) { const { x, y, d } = lights.torch; g.globalAlpha = 0.3 * k; poly(g, [[x, y], [x + d * 26, y - 7], [x + d * 26, y + 9]], "#fff1b0"); }
+    g.restore();
+    g.globalAlpha = k; marquee(g, t); g.globalAlpha = 1;  // the marquee in its own light
   }
-  function lamps(g, t, per) {  // the lamp over every door: its colour is the stage's state
+  function overlays(g, t, Lt) {
+    lamps(g, t, Lt);
+    const k = clamp01((Lt.dark - 0.25) / 0.2);
+    if (k > 0) {
+      g.globalAlpha = k; for (const [gx, gy] of lights.posts) { const q = P(gx, gy); px(g, q[0] - 1, q[1] - 20, 3, 1, "#fff1c4"); } g.globalAlpha = 1;
+      halos(g, lights.posts.map(([gx, gy]) => { const q = P(gx, gy); return { x: q[0], y: q[1] - 20, r: 5, thr: 0.25, c: "#ffc46b" }; }), Lt);
+    }
+    if (lights.tower && (reduced || Math.floor(t / 900) % 2 === 0)) px(g, lights.tower[0], lights.tower[1], 1, 1, "#ff4b3a");
+    for (const m of cast) {
+      const p = m._p;
+      if (!p || p.hidden) continue;
+      const s = P(p.gx, p.gy, p.z || 0);
+      if (m.zzz) {
+        const kk = reduced ? 0.4 : ((t + m.phase) % 2600) / 2600;
+        text(g, "Z", s[0] + 3 + Math.round(kk * 3), s[1] - 21 - Math.round(kk * 7), "#f7f4ec");
+        if (kk > 0.45) text(g, "Z", s[0] + 7, s[1] - 27 - Math.round((kk - 0.45) * 8), "#cfcabd");
+      }
+      if (m.bubble) bubble(g, s[0], s[1] - 19, m.bubble === "…" ? "..." : m.bubble);
+      if (m.sparks && !reduced && (t + m.phase) % 1700 < 280) {
+        for (let i = 0; i < 6; i++) px(g, s[0] - 5 + Math.floor((t / 37 + i * 7) % 10), s[1] - 17 + Math.floor((t / 23 + i * 5) % 8), 1, 1, i % 2 ? "#fff3a0" : "#ffb347");
+      }
+    }
+    const v = courierAt(t);
+    if (v && v.step && v.step.stop) {  // the courier counts the cans at the door
+      const c = castBy.get(v.step.stop.key + ":cans");
+      if (c && !reduced && t % 900 < 450) { const p = P(c.at[0], c.at[1]); px(g, p[0] + 2, p[1] - 14, 1, 2, "#f2c12e"); }
+    }
+    for (const f of overlayQ) f(g);
+    const r = selected && rectOf(selected);
+    if (r) arrow(g, r.x + r.w / 2, r.y - 2 - (reduced ? 0 : Math.floor(t / 320) % 2));
+  }
+  function lamps(g, t, Lt) {  // the lamp over every door: its colour is the stage's state
     for (const st of stagesNow) {
       const col = LAMP[st.ss.state];
       if (!col || !st.lamp) continue;
@@ -1504,7 +2569,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       px(g, x - 1, y - 1, 3, 2, on ? col : shade(col, -0.55));
       if (on) {
         px(g, x, y - 1, 1, 1, shade(col, 0.55));
-        if (per !== "day") { g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.35; disc(g, x, y, 4, col); g.globalAlpha = 0.15; disc(g, x, y, 8, col); g.restore(); }
+        if (Lt.dark > 0.12) { g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.35 * Lt.dark; disc(g, x, y, 4, col); g.globalAlpha = 0.15 * Lt.dark; disc(g, x, y, 8, col); g.restore(); }
       }
     }
   }
@@ -1514,18 +2579,22 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   const film = $("film"), screenEl = $("screen"), labelsEl = $("labels"), tagEl = $("nametag"), dialog = $("dialog");
   const coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
   let scale = 1;
+  // The size of the world follows the screen: whole pixels when they fit (2, 3 or more screen
+  // pixels to one), more town and more sky on a bigger screen, the lot always whole in the middle.
   function fit() {
-    if (!W) return;
-    const avail = Math.max(200, film.clientWidth - 20), dpr = window.devicePixelRatio || 1;
-    let cssW = avail;
-    const k = Math.floor((avail * dpr) / W);
-    if (k >= 2) cssW = (k * W) / dpr;
-    const maxH = Math.max(300, window.innerHeight * 0.84);
-    if ((cssW * H) / W > maxH) { const kk = Math.floor((maxH * dpr) / H); cssW = kk >= 2 ? (kk * W) / dpr : (maxH * W) / H; }
-    cv.style.width = cssW + "px"; cv.style.height = (cssW * H) / W + "px";
-    scale = cssW / W;
-    screenEl.classList.toggle("small", cssW < 700);
-    film.classList.toggle("stacked", cssW < 860 || (cssW * H) / W < 500);
+    const full = isFull(), dpr = window.devicePixelRatio || 1, [LW, LH] = lotFrame();
+    let cw, ch;
+    if (full) { cw = window.innerWidth; ch = window.innerHeight; }
+    else { cw = Math.max(260, film.clientWidth - 20); ch = Math.max(220, Math.min(window.innerHeight * 0.84, cw * 0.72)); }
+    const k = Math.min(Math.floor((cw * dpr) / LW), Math.floor((ch * dpr) / LH));
+    let w, h, s;
+    if (k >= 2) { w = Math.floor((cw * dpr) / k); h = Math.floor((ch * dpr) / k); s = k / dpr; }
+    else { s = Math.min(cw / LW, ch / LH); w = Math.max(LW, Math.floor(cw / s)); h = Math.max(LH, Math.floor(ch / s)); }
+    if (w !== W || h !== H || OX !== Math.round(w / 2)) setFrame(w, h);
+    cv.style.width = (w * s).toFixed(2) + "px"; cv.style.height = (h * s).toFixed(2) + "px"; labelsEl.style.height = cv.style.height;
+    scale = s;
+    screenEl.classList.toggle("small", w * s < 700);
+    film.classList.toggle("stacked", !full && (w * s < 860 || h * s < 500));
     placeLabels();
   }
   function placeLabels() {
@@ -1617,7 +2686,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   $("d-next").addEventListener("click", () => step(1));
   $("d-close").addEventListener("click", closeDialog);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !dialog.hidden) closeDialog();
+    if (e.key === "Escape" && !dialog.hidden) { closeDialog(); e.preventDefault(); }
     else if (!dialog.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(document.activeElement)) {
       step(e.key === "ArrowRight" ? 1 : -1); e.preventDefault();
     }
@@ -1696,19 +2765,81 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   });
   cv.addEventListener("pointerleave", () => { hover = null; showTag(null); cv.classList.remove("point"); });
   cv.addEventListener("click", (e) => { const [x, y] = worldAt(e), key = pickAt(x, y); if (key) select(key); else closeDialog(); });
-  document.querySelectorAll(".sky button").forEach((b) => {
-    b.setAttribute("aria-pressed", String(b.dataset.sky === skyMode));
-    b.addEventListener("click", () => {
-      skyMode = b.dataset.sky;
-      try { localStorage.setItem("fleet-lot-sky", skyMode); } catch (e) { /* remembered for this visit only */ }
-      document.querySelectorAll(".sky button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-      dirty = true;
-    });
+  // ---------------------------------------------------------------- the time of day and full screen
+  // Auto follows this device's clock; the slider holds the lot at one minute of the day; the
+  // time-lapse runs a whole day in a minute from where it is. Full screen fills the screen with
+  // the lot and keeps it awake; the controls fade after a few seconds without the mouse.
+  const T = { auto: $("t-auto"), slider: $("t-slider"), lapse: $("t-lapse"), full: $("t-full"), clock: $("t-clock") };
+  let shownMin = -1;
+  function setLight(mode) {
+    lightMode = mode; lapse = null;
+    try { localStorage.setItem("fleet-lot-light", mode); } catch (e) { /* remembered for this visit only */ }
+    syncTime(true);
+  }
+  function syncTime(force) {
+    const m = Math.floor(nowMin());
+    if (!force && m === shownMin) return;
+    shownMin = m;
+    T.auto.setAttribute("aria-pressed", String(lightMode === "auto" && !lapse));
+    T.lapse.setAttribute("aria-pressed", String(!!lapse));
+    if (document.activeElement !== T.slider || lapse) T.slider.value = String((Math.round(m / 5) * 5) % 1440);
+    T.clock.textContent = hhmmOf(m) + " · " + momentOf(m);
+    T.slider.setAttribute("aria-valuetext", hhmmOf(m) + ", " + momentOf(m));
+  }
+  T.auto.addEventListener("click", () => setLight("auto"));
+  T.slider.addEventListener("input", () => setLight(String(T.slider.value)));
+  T.lapse.addEventListener("click", () => {
+    if (lapse) { lapse = null; syncTime(true); return; }
+    lapse = { from: nowMin(), at: performance.now() };
+    syncTime(true);
+  });
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  const isFull = () => fsEl() === film || film.classList.contains("full");
+  function enterFull() {
+    const req = film.requestFullscreen || film.webkitRequestFullscreen;
+    const fallback = () => { film.classList.add("full"); document.documentElement.classList.add("lot-full"); onFull(); };
+    if (!req) { fallback(); return; }
+    try { const pr = req.call(film, { navigationUI: "hide" }); if (pr && pr.catch) pr.catch(fallback); } catch (e) { fallback(); }
+  }
+  function exitFull() {
+    if (fsEl()) { const ex = document.exitFullscreen || document.webkitExitFullscreen; if (ex) ex.call(document); }
+    film.classList.remove("full"); document.documentElement.classList.remove("lot-full");
+    onFull();
+  }
+  let lock = null, idleT = 0;
+  function wake(on) {  // keep the screen on while the lot fills it
+    if (on && !lock && navigator.wakeLock && document.visibilityState === "visible") {
+      navigator.wakeLock.request("screen").then((l) => { lock = l; lock.addEventListener("release", () => { lock = null; }); if (!isFull()) lock.release(); }, () => { lock = null; });
+    } else if (!on && lock) { lock.release().catch(() => {}); lock = null; }
+  }
+  function onFull() {
+    const on = isFull();
+    film.classList.toggle("is-full", on);
+    T.full.textContent = on ? "Exit full screen" : "Full screen";
+    T.full.setAttribute("aria-pressed", String(on));
+    wake(on); idle(); fit();
+  }
+  function idle() {
+    film.classList.remove("idle");
+    clearTimeout(idleT);
+    if (isFull()) idleT = setTimeout(() => { if (isFull() && dialog.hidden) film.classList.add("idle"); }, 3000);
+  }
+  T.full.addEventListener("click", () => (isFull() ? exitFull() : enterFull()));
+  document.addEventListener("fullscreenchange", onFull);
+  document.addEventListener("webkitfullscreenchange", onFull);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && isFull()) wake(true); });
+  for (const ev of ["pointermove", "pointerdown", "wheel"]) film.addEventListener(ev, idle, { passive: true });
+  document.addEventListener("keydown", (e) => {
+    idle();
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "") && document.activeElement !== T.slider;
+    if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) { isFull() ? exitFull() : enterFull(); e.preventDefault(); }
+    else if (e.key === "Escape" && !e.defaultPrevented && film.classList.contains("full")) exitFull();
   });
 
   // ---------------------------------------------------------------- rolling
   function refresh() {
     build(); dirty = true;
+    fit();
     status(); tally(); renderSheet(); tick();
     if (selected) {
       const m = castBy.get(selected);
@@ -1716,12 +2847,15 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
       else { const st = selected.split(":")[0] + ":stage"; if (castBy.has(st)) select(st); else closeDialog(); }
     }
   }
+  // About 24 frames a second, one a second when motion is reduced, none while the page is hidden.
   let lastT = 0;
   function loop(now) {
     requestAnimationFrame(loop);
-    if (document.hidden || !snap || now - lastT < (reduced ? 1000 : 33)) return;
-    lastT = now;
+    const step = reduced ? 1000 : 1000 / 24;
+    if (document.hidden || !snap || now - lastT < step - 2) return;
+    lastT = now - lastT > 4 * step ? now : lastT + step;
     frame(now);
+    syncTime(false);
   }
   // Opened as a plain file from the repository, the board sits next to this page as studio.html.
   if (location.protocol === "file:") document.querySelectorAll('a[href="index.html"]').forEach((a) => { a.href = "studio.html"; });
@@ -1733,6 +2867,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
   setInterval(() => { if (snap) refresh(); }, 5000);
   setInterval(tick, 1000);
   window.addEventListener("resize", fit);
+  syncTime(true);
   requestAnimationFrame(loop);
 })();
 </script>

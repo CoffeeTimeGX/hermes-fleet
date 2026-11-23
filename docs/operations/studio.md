@@ -77,6 +77,12 @@ Click **Pixel lot** at the top of the board. You see the same fleet as a still f
 video game: a film lot in pixel art, seen from above at an angle. People walk, the van
 drives its rounds and the lamps blink, all following what the VPSs do.
 
+The lot sits in a small town: mountains and a downtown skyline far off, hills with the
+HERMES FLEET sign, blocks of offices, flats and warehouses behind the walls, a boulevard
+along the front, and shops, houses and a diner beyond it. The town stands for nothing.
+Its cars and passers-by follow the time of day, with more of them at rush hour. Only the
+lot and the people on it stand for your fleet.
+
 ![The pixel lot with an example fleet](../assets/studio-pixel.png)
 
 Everyone on the lot stands for something real:
@@ -138,15 +144,39 @@ The crew's trade shows what the session does right now:
 | Assistant director | It updates its plan. |
 | Second unit | It hands a part of the work to a helper. |
 
-### Day and night
+### All day and all night
 
-The light on the lot follows the clock of the device you watch on: day, dusk, then night
-with the lamps, windows and searchlights on. The **Day** and **Night** buttons at the top
-right of the picture keep it one way; **Auto** follows the clock again. Your browser
-remembers the choice.
+The light on the lot follows the clock of the device you watch on, minute by minute. The
+sun and the moon cross the sky, and the moon shows its real phase. At dusk the windows,
+street lamps and signs come on one by one. Late at night most windows go dark again, and
+at dawn the lamps go out. In the evening, searchlights sweep the sky.
 
-If your device is set to reduce motion, nobody walks and nothing blinks. The picture
-still follows the fleet.
+![The pixel lot at dawn, midday, sunset and night](../assets/studio-pixel-day.png)
+
+The clock at the top left of the picture shows the time on the lot. The controls are at
+the top right, or under the picture on a phone:
+
+| Control | What it does |
+| --- | --- |
+| **Auto** | The light follows your device's clock. This is how the lot starts. |
+| The slider | Holds the lot at the time of day you pick. A phone does not show it. |
+| **Day in 1 min** | Runs a whole day in one minute, and keeps going. Click it again to stop. |
+
+Your browser remembers **Auto** or the time you picked.
+
+If your device is set to reduce motion, nobody walks and nothing blinks. The light still
+follows the clock, and the picture still follows the fleet.
+
+### Full screen
+
+Click **Full screen** at the top right of the picture, or press F. The lot fills the
+screen. After three seconds without the mouse, the controls on the right fade; move the
+mouse to bring them back. To leave, click **Exit full screen**, or press F or Esc.
+
+While the lot fills the screen, your PC's screen stays on, so you can leave the lot open
+on a spare screen day and night. Browsers allow that only on your PC's own address
+(`127.0.0.1`). On a phone opened with `--tailnet`, set the phone's screen to stay on
+yourself. Turn the phone sideways for a bigger lot.
 
 ## Watch from your phone
 

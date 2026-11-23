@@ -1208,6 +1208,8 @@ class StudioTest(TempDirTest):
             self.assertLess(page.index('<script src="studio-data.js"></script>'), page.index("FleetStudio"))
         self.assertIn('href="pixel.html"', board)
         self.assertIn('href="index.html"', pixel)
+        for control in ('id="t-auto"', 'id="t-slider"', 'id="t-lapse"', 'id="t-full"', "requestFullscreen", "wakeLock"):
+            self.assertIn(control, pixel)  # the lot keeps time all day and goes full screen
         self.assertIn('fetch("api/studio"', shared)
         for text in (board, pixel, shared):
             self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?)]+)", text)),

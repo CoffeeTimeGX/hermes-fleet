@@ -38,7 +38,7 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 | --- | --- |
 | `home/bin/fleet` | The CLI. One Python file, standard library only, Python 3.9+, Windows, Linux and macOS. |
 | `home/studio/studio.html` | The studio board, a page fragment. `fleet studio` serves it in a full page from the PC with live data. Opened as a plain file, it shows an example lot. |
-| `home/studio/pixel.html` | The pixel lot: the same fleet drawn on a canvas in isometric pixel art, every character tied to a real value. A full page, served as `/pixel.html`. |
+| `home/studio/pixel.html` | The pixel lot: the same fleet drawn on a canvas in isometric pixel art, every character on the lot tied to a real value, in a town that is only scenery. The light follows the viewer's clock minute by minute, and full screen keeps the screen on. A full page, served as `/pixel.html`. |
 | `home/studio/studio-data.js` | What both views share: the example lot, the polling of `/api/studio`, and the meaning of each state. `fleet studio` serves it with `FLEET_STUDIO_LIVE` set. |
 | `home/install.ps1`, `home/install.sh` | The PC installers: Git (Windows), Python, Tailscale, Hermes, then `fleet init`. |
 | `home/hermes/SOUL.md`, `home/hermes/skills/fleet/*/SKILL.md` | Hermes' personality and its `fleet-ops` and `fleet-provision` skills. |
@@ -87,7 +87,8 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 - **The studio only reads.** `fleet studio` listens on `127.0.0.1`, or on the PC's
   Tailscale address with `--tailnet`, answers only requests addressed to those names,
   and has nothing that changes the fleet. Actions go through `fleet` commands and the
-  director.
+  director. On the pixel lot, only the lot stands for the fleet: the town around it,
+  its traffic and its passers-by stand for nothing.
 - **The scheduled checks stay quiet when all is well.** `fleet health --changes-only` and
   `fleet pull --quiet` print nothing then; Hermes delivers only what they print.
 - **Hermes asks before anything irreversible**: lockdown, rebuilds, reboots with jobs,
