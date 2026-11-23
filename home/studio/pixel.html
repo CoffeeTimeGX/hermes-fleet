@@ -1,0 +1,1740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Hermes Fleet Lot</title>
+<meta name="description" content="Your video fleet as a pixel-art film lot: every VPS a sound stage, every job a crew at work.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Pixelify+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* The pixel lot: the same fleet as the board, drawn as a film lot in isometric pixel art.
+   Every person and object on the lot stands for something real; click one to see it. */
+:root {
+  --page: #e8e2d4;
+  --panel: #fbf8f0;
+  --ink: #1d1a15;
+  --ink-soft: #5e574b;
+  --edge: #bcb19c;
+  --film: #16140f;
+  --hole: #efe7d3;
+  --box: #1a1b2e;
+  --box-edge: #f2e4bd;
+  --box-ink: #f6f1e3;
+  --box-soft: #b9b5cc;
+  --gold: #e3b54b;
+  --rolling: #d6402f;
+  --standby: #2e9a5e;
+  --hold: #c78a10;
+  --dark: #757a76;
+  --trouble: #cc6317;
+  --font-pixel: "Pixelify Sans", "Courier New", monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #13120f; --panel: #1d1b17; --ink: #f0eadc; --ink-soft: #aaa192; --edge: #403a30;
+    --film: #050504; --hole: #2b271f; --box: #15162a; --box-edge: #e9dab0; --box-ink: #f6f1e3;
+    --box-soft: #b3afc6; --gold: #ebc061; --rolling: #ff5b4b; --standby: #4cc184; --hold: #f0b23e;
+    --dark: #8b918d; --trouble: #ff8c42;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #13120f; --panel: #1d1b17; --ink: #f0eadc; --ink-soft: #aaa192; --edge: #403a30;
+  --film: #050504; --hole: #2b271f; --box: #15162a; --box-edge: #e9dab0; --box-ink: #f6f1e3;
+  --box-soft: #b3afc6; --gold: #ebc061; --rolling: #ff5b4b; --standby: #4cc184; --hold: #f0b23e;
+  --dark: #8b918d; --trouble: #ff8c42;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.45 var(--font-mono);
+}
+.wrap {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 18px max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+h1, h2, h3, p, dl, dd, ul { margin: 0; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; }
+.eyebrow { font: 600 12px/1 var(--font-pixel); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 6px; }
+h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01em; }
+.lede { margin-top: 6px; color: var(--ink-soft); max-width: 62ch; }
+.views { display: inline-flex; border: 2px solid var(--ink); background: var(--panel); box-shadow: 3px 3px 0 var(--ink); }
+.views a, .views span { font: 600 15px/1 var(--font-pixel); padding: 9px 14px; color: var(--ink); text-decoration: none; }
+.views a:hover { background: var(--hole); }
+.views span[aria-current] { background: var(--ink); color: var(--page); }
+.tally { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.tally li { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border: 2px solid var(--edge); padding: 5px 10px; font-size: 13px; }
+.tally b { font: 700 18px/1 var(--font-pixel); }
+.tally i { width: 10px; height: 10px; background: var(--c, var(--ink-soft)); flex: none; }
+.notice { padding: 9px 12px; border: 2px dashed var(--edge); background: var(--panel); font-size: 13px; }
+.notice.lost { border: 2px solid var(--rolling); }
+.notice[hidden] { display: none; }
+
+/* The still: a frame of film with the lot in it. */
+.still { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.film { position: relative; background: var(--film); padding: 24px 10px; border-radius: 4px; }
+.film::before, .film::after {
+  content: ""; position: absolute; left: 12px; right: 12px; height: 8px; border-radius: 1px;
+  background: repeating-linear-gradient(90deg, var(--hole) 0 11px, transparent 11px 24px);
+  opacity: .85; pointer-events: none;
+}
+.film::before { top: 8px; }
+.film::after { bottom: 8px; }
+.screen { position: relative; margin: 0 auto; width: fit-content; max-width: 100%; }
+#scene { display: block; image-rendering: crisp-edges; image-rendering: pixelated; touch-action: manipulation; }
+#scene.point { cursor: pointer; }
+.labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.tag {
+  position: absolute; transform: translate(-50%, -100%); white-space: nowrap;
+  font: 600 12px/1 var(--font-pixel); color: #fff; background: rgba(16, 14, 12, .82);
+  padding: 4px 6px 3px; border: 1px solid rgba(255, 255, 255, .28);
+}
+.tag i { display: inline-block; width: 7px; height: 7px; margin-right: 5px; background: var(--c); }
+.tag span { color: #d9d3c4; font-weight: 500; }
+.screen.small .tag { font-size: 10px; padding: 3px 4px 2px; }
+.screen.small .tag span { display: none; }
+.screen.small .hud { top: 4px; }
+.screen.small .hud-l { left: 4px; }
+.screen.small .hud-r { right: 4px; }
+.screen.small .badge, .screen.small .sky button { font-size: 10px; padding: 3px 5px 2px; }
+.hud { position: absolute; top: 8px; display: flex; gap: 6px; align-items: center; }
+.hud-l { left: 8px; }
+.hud-r { right: 8px; }
+.badge { font: 600 12px/1 var(--font-pixel); background: #111; color: #fff; padding: 5px 7px 4px; border: 2px solid #fff; letter-spacing: .06em; text-transform: uppercase; }
+.badge.live::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: #ff4b3a; animation: blink 1.2s steps(2, jump-none) infinite; }
+.badge.lost { background: #6b1d16; }
+.sky { display: inline-flex; border: 2px solid #fff; background: #111; }
+.sky button { font: 600 12px/1 var(--font-pixel); color: #cfc9bb; background: transparent; border: 0; padding: 5px 7px 4px; cursor: pointer; }
+.sky button[aria-pressed="true"] { background: #fff; color: #111; }
+.nametag {
+  position: absolute; z-index: 3; pointer-events: none; transform: translate(-50%, calc(-100% - 6px)); white-space: nowrap;
+  font: 600 12px/1.1 var(--font-pixel); background: var(--box); color: var(--box-ink); border: 2px solid var(--box-edge); padding: 4px 6px 3px;
+}
+.nametag span { color: var(--gold); font-weight: 500; }
+.nametag[hidden] { display: none; }
+@keyframes blink { 50% { opacity: .15; } }
+
+/* The dialog box: who you picked and the real values they stand for. */
+.dialog {
+  position: absolute; left: 22px; bottom: 30px; z-index: 4; width: min(480px, calc(100% - 44px));
+  background: var(--box); color: var(--box-ink); border: 3px solid var(--box-edge);
+  box-shadow: 0 0 0 3px var(--box), 6px 6px 0 3px rgba(0, 0, 0, .35);
+  padding: 12px; display: grid; grid-template-columns: auto 1fr; gap: 10px 12px;
+}
+.dialog[hidden] { display: none; }
+.dialog.right { left: auto; right: 22px; }
+.film.stacked .dialog { position: relative; left: auto; right: auto; bottom: auto; width: auto; margin: 14px 2px 0; box-shadow: 0 0 0 3px var(--box); }
+.portrait { width: 56px; height: 96px; image-rendering: pixelated; background: #2a2c46; border: 2px solid var(--box-edge); }
+.who { font: 700 18px/1.1 var(--font-pixel); padding-right: 78px; }
+.who span { font-weight: 500; color: var(--gold); }
+.where { margin-top: 3px; color: var(--box-soft); font-size: 12px; }
+.quote { margin-top: 8px; font: 500 15px/1.35 var(--font-pixel); min-height: 2.7em; }
+.quote .typed::after { content: "▌"; color: var(--gold); animation: blink 1s steps(2, jump-none) infinite; }
+.quote .typed.done::after { content: ""; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.params { grid-column: 1 / -1; display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 12.5px; max-height: 190px; overflow: auto; }
+.film.stacked .params { max-height: none; }
+.params dt { color: var(--box-soft); }
+.params dd { overflow-wrap: anywhere; }
+.cmd { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: rgba(255, 255, 255, .06); border: 1px dashed rgba(255, 255, 255, .28); }
+.cmd[hidden] { display: none; }
+.cmd code { flex: 1; font: 500 12.5px/1.3 var(--font-mono); overflow-wrap: anywhere; }
+.dialog button { font: 600 12px/1 var(--font-pixel); color: var(--box); background: var(--box-edge); border: 0; padding: 6px 8px 5px; cursor: pointer; }
+.dialog button:hover { background: #fff; }
+.dnav { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
+.dnav button { min-width: 24px; }
+
+.caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; color: var(--ink-soft); font-size: 12.5px; }
+.caption b { font: 600 13px/1.2 var(--font-pixel); color: var(--ink); letter-spacing: .04em; }
+
+/* The call sheet: everyone on the lot, grouped by where they work. */
+.sheet { background: var(--panel); border: 2px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); padding: 14px; display: grid; gap: 10px; }
+.sheet h2 { font: 700 21px/1 var(--font-pixel); }
+.sheet .lede { margin-top: 0; }
+.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px 16px; }
+.group h3 { font: 700 15px/1.2 var(--font-pixel); display: flex; align-items: center; gap: 7px; padding-bottom: 5px; margin-bottom: 4px; border-bottom: 2px solid var(--edge); }
+.group h3 i { width: 9px; height: 9px; background: var(--c, var(--ink-soft)); flex: none; }
+.group h3 span { font: 500 12px/1 var(--font-mono); color: var(--ink-soft); margin-left: auto; }
+.group ul { list-style: none; padding: 0; display: grid; gap: 2px; }
+.person {
+  display: grid; grid-template-columns: 20px 1fr; gap: 8px; align-items: center; width: 100%; text-align: left;
+  background: transparent; border: 1px solid transparent; padding: 4px 6px; font: inherit; color: inherit; cursor: pointer;
+}
+.person:hover, .person[aria-pressed="true"] { background: var(--hole); border-color: var(--edge); }
+.person canvas { width: 18px; height: 32px; image-rendering: pixelated; }
+.person b { font: 600 14px/1.15 var(--font-pixel); }
+.person b span { font-weight: 500; color: var(--ink-soft); }
+.person small { display: block; color: var(--ink-soft); font-size: 12px; line-height: 1.3; overflow-wrap: anywhere; }
+.foot { color: var(--ink-soft); font-size: 12.5px; }
+.foot code, .lede code { font-size: .95em; }
+@media (prefers-reduced-motion: reduce) {
+  .badge.live::before, .quote .typed::after { animation: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <p class="eyebrow">Hermes Fleet Studio · the lot</p>
+      <h1>Everyone at work</h1>
+      <p class="lede">Each VPS is a sound stage and each job a crew. Click anyone on the lot to see what they stand for.</p>
+    </div>
+    <nav class="views" aria-label="Views">
+      <a href="index.html">Board</a>
+      <span aria-current="page">Pixel lot</span>
+    </nav>
+  </header>
+  <ul class="tally" id="tally" aria-label="The lot right now"></ul>
+  <p class="notice" id="notice" hidden></p>
+  <figure class="still">
+    <div class="film" id="film">
+      <div class="screen" id="screen">
+        <canvas id="scene" width="544" height="320" role="img" aria-label="The film lot, drawn in pixel art"></canvas>
+        <div class="labels" id="labels" aria-hidden="true"></div>
+        <div class="hud hud-l"><span class="badge" id="badge">Example</span></div>
+        <div class="hud hud-r">
+          <div class="sky" role="group" aria-label="Light on the lot">
+            <button type="button" data-sky="auto" aria-pressed="true">Auto</button><button type="button" data-sky="day" aria-pressed="false">Day</button><button type="button" data-sky="night" aria-pressed="false">Night</button>
+          </div>
+        </div>
+        <div class="nametag" id="nametag" hidden></div>
+      </div>
+      <section class="dialog" id="dialog" hidden aria-label="Who you picked">
+        <canvas class="portrait" id="portrait" width="14" height="24" aria-hidden="true"></canvas>
+        <div>
+          <p class="who"><b id="d-name"></b> <span id="d-role"></span></p>
+          <p class="where" id="d-where"></p>
+          <p class="quote"><span class="sr" id="d-said"></span><span class="typed" id="d-typed" aria-hidden="true"></span></p>
+        </div>
+        <dl class="params" id="d-params"></dl>
+        <div class="cmd" id="d-cmd" hidden><code id="d-code"></code><button type="button" id="d-copy">Copy</button></div>
+        <div class="dnav">
+          <button type="button" id="d-prev" aria-label="Previous person">&lt;</button><button type="button" id="d-next" aria-label="Next person">&gt;</button><button type="button" id="d-close" aria-label="Close">X</button>
+        </div>
+      </section>
+    </div>
+    <figcaption class="caption"><b id="take">Production still</b><span id="looked">Looking at the lot…</span></figcaption>
+  </figure>
+  <section class="sheet" aria-labelledby="sheet-h">
+    <h2 id="sheet-h">Call sheet</h2>
+    <p class="lede">Everyone on the lot today and what they stand for. Pick a name to find them and see the real values.</p>
+    <div class="groups" id="sheet"></div>
+  </section>
+  <p class="foot">This page only watches. To change anything, ask the director, or use the <code>fleet</code> command. Times are in this device's local time.</p>
+</div>
+<script src="studio-data.js"></script>
+<script>
+(function () {
+  "use strict";
+  const FS = window.FleetStudio;
+  const { LIVE, DAY_MS, when, ago, span, timecode, clock, localTimes, stageNo, plural,
+    activityText, jobsOf, claudeOf, limitOf, finishedSince, stageState } = FS;
+  const reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+  // ---------------------------------------------------------------- the lot's measures
+  // One tile is 16 x 8 pixels. A sound stage is SW tiles wide and SD deep, its walls WH
+  // pixels high under an arched roof RH high. In front of its door: an apron AD tiles deep,
+  // then a lane. Stages stand along the two back edges of a square lot, one every SLOT tiles
+  // from B on, so the doors of all of them face you.
+  const SW = 5, SD = 4, AD = 3, SLOT = 7, B = 9, WH = 34, RH = 8;
+  let G = 20, OX = 0, OY = 46, W = 0, H = 0, towerBase = B;
+
+  function plan(n) {
+    const R = Math.ceil(n / 2), Lc = Math.floor(n / 2);
+    G = Math.max(22, B + Math.max(R, Lc + 1) * SLOT + 5);
+    OX = G * 8 + 8; OY = 46; W = G * 16 + 16; H = OY + G * 8 + 22;
+    towerBase = B + Lc * SLOT;
+    const out = [];  // read from left to right: the left edge from the outside in, then the right edge
+    for (let j = Lc - 1; j >= 0; j--) out.push({ edge: "L", base: B + j * SLOT });
+    for (let j = 0; j < R; j++) out.push({ edge: "R", base: B + j * SLOT });
+    return out;
+  }
+  const P = (gx, gy, z) => [Math.round(OX + (gx - gy) * 8), Math.round(OY + (gx + gy) * 4 - (z || 0))];
+  // A point in a stage's own measures: a along its front from the corner side, v out from its door.
+  const SG = (st, a, v) => (st.edge === "R" ? [st.base + a, SD + v] : [SD + v, st.base + a]);
+  const S = (st, a, v, z) => { const g = SG(st, a, v); return P(g[0], g[1], z); };
+
+  // ---------------------------------------------------------------- small helpers
+  function hash(s) {
+    let h = 2166136261; s = String(s);
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  function rng(seed) {
+    let x = (seed >>> 0) || 1;
+    return () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x / 4294967296; };
+  }
+  const pick = (arr, h) => arr[h % arr.length];
+  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  const rgb = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const hex = (r, g, b) => "#" + ((1 << 24) | (clamp(r) << 16) | (clamp(g) << 8) | clamp(b)).toString(16).slice(1);
+  function shade(h, f) {
+    const [r, g, b] = rgb(h);
+    return f >= 0 ? hex(r + (255 - r) * f, g + (255 - g) * f, b + (255 - b) * f) : hex(r * (1 + f), g * (1 + f), b * (1 + f));
+  }
+  function mix(a, b, t) { const A = rgb(a), C = rgb(b); return hex(A[0] + (C[0] - A[0]) * t, A[1] + (C[1] - A[1]) * t, A[2] + (C[2] - A[2]) * t); }
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const gb = (x) => (x == null || x === "" ? "?" : Number(x).toFixed(Number(x) < 10 ? 1 : 0) + " GB");
+  function upFor(sec) {
+    const s = Number(sec) || 0;
+    if (s < 3600) return Math.round(s / 60) + " min";
+    if (s < 2 * 86400) return Math.round(s / 3600) + " h";
+    return Math.round(s / 86400) + " days";
+  }
+
+  const PAL = {
+    wall: "#eadcbf", wallShade: "#cdbb98", trim: "#8e7c5d", base: "#b8a582",
+    roof: "#c3c6c0", roofLit: "#dadcd5", roofDark: "#a2a7a1", rib: "#aeb3ad",
+    door: "#7f8c90", doorLine: "#5f6c71", number: "#a3322a",
+    concrete: "#d3cab6", concrete2: "#c9bfaa", asphalt: "#4c4e56", asphalt2: "#45474f", paint: "#e9c64a", stripe: "#f2efe6",
+    grass: "#6ea255", grass2: "#659a4d", field: "#5c8b45", field2: "#55823f",
+    stone: "#ddcca5", stone2: "#d1bf98", carpet: "#b3262e", carpet2: "#cf3b3d",
+    hedge: "#3f7a3a", hedge2: "#33672f", trunk: "#7a5536", palm: "#3f8f45", palm2: "#2e7336",
+    wood: "#9b6b43", wood2: "#7a5132", brick: "#b8664b", brick2: "#9a523f",
+    glass: "#94c6da", glassDark: "#3b5a6a", metal: "#9ba4a9", metal2: "#737c82", ink: "#1f1c19", white: "#f7f4ec",
+    red: "#e0402f", green: "#36c06f", amber: "#f3a51f", orange: "#ff8a2a", tapeA: "#e7b72b", tapeB: "#27261f",
+  };
+  const LAMP = { rolling: PAL.red, standby: PAL.green, hold: PAL.amber, trouble: PAL.orange, pending: "#c9c4b8" };
+  const CSSC = { rolling: "var(--rolling)", standby: "var(--standby)", hold: "var(--hold)", trouble: "var(--trouble)",
+    dark: "var(--dark)", offline: "var(--dark)", pending: "var(--ink-soft)" };
+
+  // ---------------------------------------------------------------- drawing by the pixel
+  const cv = document.getElementById("scene");
+  const ctx = cv.getContext("2d");
+  function mk(w, h) {
+    const c = document.createElement("canvas"); c.width = Math.max(1, w); c.height = Math.max(1, h);
+    const g = c.getContext("2d"); g.imageSmoothingEnabled = false;
+    return [c, g];
+  }
+  function px(g, x, y, w, h, col) { g.fillStyle = col; g.fillRect(Math.round(x), Math.round(y), w, h); }
+  // A filled polygon, one row of pixels at a time, so its edges stay crisp.
+  function poly(g, pts, col) {
+    let y0 = Infinity, y1 = -Infinity;
+    for (const p of pts) { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+    g.fillStyle = col;
+    for (let y = Math.floor(y0); y < Math.ceil(y1); y++) {
+      const yc = y + 0.5, xs = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        if ((a[1] <= yc && b[1] > yc) || (b[1] <= yc && a[1] > yc)) xs.push(a[0] + (yc - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+      }
+      xs.sort((p, q) => p - q);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const xa = Math.round(xs[k]), xb = Math.round(xs[k + 1]);
+        if (xb > xa) g.fillRect(xa, y, xb - xa, 1);
+      }
+    }
+  }
+  function line(g, x0, y0, x1, y1, col) {
+    g.fillStyle = col;
+    x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+    const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    for (let n = 0; n < 4000; n++) {
+      g.fillRect(x0, y0, 1, 1);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  }
+  const seg = (g, a, b, col) => line(g, a[0], a[1], b[0], b[1], col);
+  // A flat patch of ground from (x0, y0) to (x1, y1) in tiles, at height z.
+  const flat = (g, x0, y0, x1, y1, col, z) => poly(g, [P(x0, y0, z), P(x1, y0, z), P(x1, y1, z), P(x0, y1, z)], col);
+  // A box on the ground: the face toward the lower left, the one toward the lower right, the top.
+  function box(g, x0, y0, x1, y1, z0, z1, top, left, right) {
+    poly(g, [P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)], left);
+    poly(g, [P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)], right);
+    poly(g, [P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)], top);
+  }
+  const box3 = (g, x0, y0, x1, y1, z0, z1, col) => box(g, x0, y0, x1, y1, z0, z1, shade(col, 0.18), col, shade(col, -0.2));
+
+  // ---------------------------------------------------------------- pixel letters
+  const F3 = {  // 3 x 5, one octal digit per row
+    "0": "75557", "1": "26227", "2": "71747", "3": "71317", "4": "55711", "5": "74717", "6": "74757", "7": "71222",
+    "8": "75757", "9": "75717", A: "25755", B: "65656", C: "34443", D: "65556", E: "74647", F: "74644", G: "34553",
+    H: "55755", I: "72227", J: "11152", K: "55655", L: "44447", M: "57755", N: "65555", O: "25552", P: "65644",
+    Q: "25563", R: "65655", S: "34216", T: "72222", U: "55557", V: "55552", W: "55775", X: "55255", Y: "55222",
+    Z: "71247", ".": "00002", ",": "00024", "!": "22202", "?": "71202", "'": "22000", ":": "02020", "-": "00700",
+    "/": "11244", "&": "25253", "#": "57575", "+": "02720", "(": "24442", ")": "21112", " ": "00000",
+  };
+  const F5 = {  // 5 x 7: the digits and the letters of the hill sign
+    "0": [14, 17, 19, 21, 25, 17, 14], "1": [4, 12, 4, 4, 4, 4, 14], "2": [14, 17, 1, 2, 4, 8, 31], "3": [31, 2, 4, 2, 1, 17, 14],
+    "4": [2, 6, 10, 18, 31, 2, 2], "5": [31, 16, 30, 1, 1, 17, 14], "6": [6, 8, 16, 30, 17, 17, 14], "7": [31, 1, 2, 4, 8, 8, 8],
+    "8": [14, 17, 17, 14, 17, 17, 14], "9": [14, 17, 17, 15, 1, 2, 12], H: [17, 17, 17, 31, 17, 17, 17],
+    E: [31, 16, 16, 30, 16, 16, 31], R: [30, 17, 17, 30, 20, 18, 17], M: [17, 27, 21, 21, 17, 17, 17],
+    S: [15, 16, 16, 14, 1, 1, 30], F: [31, 16, 16, 30, 16, 16, 16], L: [16, 16, 16, 16, 16, 16, 31], T: [31, 4, 4, 4, 4, 4, 4],
+    " ": [0, 0, 0, 0, 0, 0, 0],
+  };
+  // Pixel text from (x, y). shear 1 or -1 slants it along a wall that runs down or up to the right.
+  function text(g, str, x, y, col, o) {
+    o = o || {};
+    const big = !!o.big, s = o.scale || 1, sh = o.shear || 0, cw = big ? 5 : 3, ch = big ? 7 : 5;
+    g.fillStyle = col;
+    let cx = 0;
+    for (const chr of String(str).toUpperCase()) {
+      const gl = big ? F5[chr] : F3[chr];
+      if (gl) {
+        for (let r = 0; r < ch; r++) {
+          const bits = big ? gl[r] : parseInt(gl[r], 8);
+          for (let c = 0; c < cw; c++) {
+            if (bits & (1 << (cw - 1 - c))) {
+              const X = Math.round(x) + (cx + c) * s;
+              g.fillRect(X, Math.round(y) + r * s + Math.floor((X - Math.round(x)) * sh / 2), s, s);
+            }
+          }
+        }
+      }
+      cx += cw + 1;
+    }
+    return cx * s - s;
+  }
+  const textW = (str, o) => String(str).length * ((o && o.big ? 6 : 4) * ((o && o.scale) || 1)) - ((o && o.scale) || 1);
+
+  // ---------------------------------------------------------------- day and night
+  let skyMode = "auto";
+  try { skyMode = localStorage.getItem("fleet-lot-sky") || "auto"; } catch (e) { skyMode = "auto"; }
+  if (!/^(auto|day|night)$/.test(skyMode)) skyMode = "auto";
+  function period() {
+    if (skyMode !== "auto") return skyMode;
+    const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
+    if (h >= 7 && h < 18) return "day";
+    if ((h >= 18 && h < 19.5) || (h >= 6 && h < 7)) return "dusk";
+    return "night";
+  }
+
+  // ---------------------------------------------------------------- the sky, the hills and the sign
+  const TINT = { day: null, dusk: ["#5d2c4c", 0.28], night: ["#0a0e2c", 0.6] };
+  const BANDS = {
+    day: ["#7cbfe9", "#8fc9ed", "#a3d3ef", "#b7dcf0", "#cbe5ef"],
+    dusk: ["#2e3062", "#57437b", "#98597b", "#d57a69", "#f0ab72"],
+    night: ["#080c22", "#0c122e", "#11193a", "#162045", "#1b274f"],
+  };
+  const tinted = (col, per) => (TINT[per] ? mix(col, TINT[per][0], TINT[per][1]) : col);
+  function disc(g, cx, cy, r, col) {
+    g.fillStyle = col;
+    for (let dy = -r; dy <= r; dy++) { const w = Math.floor(Math.sqrt(r * r - dy * dy + r * 0.8)); g.fillRect(cx - w, cy + dy, 2 * w + 1, 1); }
+  }
+  const nearTop = (x) => OY - 7 + 3 * Math.sin(x / 31 + 2.1) + 2 * Math.sin(x / 11 + 0.7);
+  function drawSky(g, per) {
+    const bands = BANDS[per], bh = Math.ceil((OY - 4) / bands.length);
+    px(g, 0, 0, W, H, bands[bands.length - 1]);
+    bands.forEach((c, i) => px(g, 0, i * bh, W, bh, c));
+    for (let i = 1; i < bands.length; i++) {  // dither the seams
+      g.fillStyle = bands[i];
+      for (let x = i % 2; x < W; x += 2) g.fillRect(x, i * bh - 1, 1, 1);
+      g.fillStyle = bands[i - 1];
+      for (let x = (i + 1) % 2; x < W; x += 2) g.fillRect(x, i * bh, 1, 1);
+    }
+    const r = rng(7);
+    if (per === "night") {
+      for (let i = 0; i < 90; i++) px(g, Math.floor(r() * W), Math.floor(r() * (OY - 10)), 1, 1, r() < 0.3 ? "#fff6d8" : "#8f9bd0");
+      const mx = Math.round(W * 0.86);
+      disc(g, mx, 18, 6, "#f3efd9"); disc(g, mx + 3, 16, 5, bands[0]);
+    } else if (per === "dusk") {
+      disc(g, Math.round(W * 0.15), OY - 12, 10, "#ffb56c"); disc(g, Math.round(W * 0.15), OY - 12, 7, "#ffd08a");
+    } else {
+      disc(g, Math.round(W * 0.1), 20, 9, "#fff1bd"); disc(g, Math.round(W * 0.1), 20, 6, "#fffbe8");
+    }
+    const far = tinted("#9cb7c3", per), farTop = tinted("#b4cad2", per);
+    for (let x = 0; x < W; x++) {
+      const t = Math.round(OY - 22 + 9 * Math.sin(x / 41 + 1.3) + 5 * Math.sin(x / 17 + 0.4));
+      px(g, x, t, 1, OY + 30 - t, far); px(g, x, t, 1, 1, farTop);
+    }
+    const field = tinted(PAL.field, per), field2 = tinted(PAL.field2, per), ridge = tinted("#79aa5f", per);
+    for (let x = 0; x < W; x++) { const t = Math.round(nearTop(x)); px(g, x, t, 1, H - t, field); px(g, x, t, 1, 1, ridge); }
+    for (let i = 0; i < (W * H) / 70; i++) {
+      const x = Math.floor(r() * W), y = Math.floor(nearTop(x) + 3 + r() * (H - OY));
+      px(g, x, y, 1, 1, field2);
+    }
+    // the sign on the hill
+    const label = "HERMES FLEET", tw = textW(label, { big: true }), sx = W - tw - 26;
+    let sy = 0;
+    for (let x = sx; x < sx + tw; x++) sy = Math.max(sy, Math.round(nearTop(x)) - 10);
+    for (let x = sx + 2; x < sx + tw; x += 6) px(g, x, sy + 7, 1, 3, tinted("#6b5a44", per));
+    text(g, label, sx + 1, sy + 1, tinted("#55704f", per), { big: true });
+    text(g, label, sx, sy, per === "night" ? "#d5d8e8" : tinted("#f7f4ec", per), { big: true });
+    lights.sign = [sx, sy, tw, 7];
+  }
+
+  // ---------------------------------------------------------------- the lot
+  const spoly = (g, st, pts, col) => poly(g, pts.map((p) => S(st, p[0], p[1], p[2] || 0)), col);
+  const sflat = (g, st, a0, v0, a1, v1, col, z) => spoly(g, st, [[a0, v0, z], [a1, v0, z], [a1, v1, z], [a0, v1, z]], col);
+  function sbox(g, st, a0, v0, a1, v1, z0, z1, col) {
+    const p = SG(st, a0, v0), q = SG(st, a1, v1);
+    box3(g, Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1]), z0, z1, col);
+  }
+  function bbox(pts) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  const lights = { sign: null, lamps: [], windows: [], doors: [], posts: [] };
+  let staticHits = [];  // { x, y, w, h, key, pri }: smaller pri wins
+
+  function drawGround(g) {
+    flat(g, 0, 0, G, G, PAL.concrete);
+    for (let k = 2; k < G; k += 2) { seg(g, P(k, 0), P(k, G), PAL.concrete2); seg(g, P(0, k), P(G, k), PAL.concrete2); }
+    box(g, -0.5, -0.5, G, 0, 0, 9, "#c98d6b", PAL.brick, PAL.brick2);        // the back walls
+    box(g, -0.5, 0, 0, G, 0, 9, "#c98d6b", PAL.brick, PAL.brick2);
+    const laneEnd = G - 1.2;
+    flat(g, 7, 7, G + 9, 9, PAL.asphalt);                                    // the lane to the gate, and the road outside
+    flat(g, 7, 7, 9, laneEnd, PAL.asphalt);                                  // the lane along the left stages
+    for (let x = 9.6; x < G + 9; x += 1.25) seg(g, P(x, 8), P(x + 0.55, 8), PAL.paint);
+    for (let y = 9.6; y < laneEnd - 0.4; y += 1.25) seg(g, P(8, y), P(8, y + 0.55), PAL.paint);
+    seg(g, P(9, 9), P(G, 9), PAL.stripe); seg(g, P(9, 9), P(9, laneEnd), PAL.stripe);
+    // the plaza: a mown lawn, the promenade, the fountain, the carpet
+    const L0 = 9.3, L1 = G - 0.35;
+    for (let k = 0; L0 + k < L1; k++) flat(g, L0 + k, L0, Math.min(L1, L0 + k + 1), L1, k % 2 ? PAL.grass : PAL.grass2);
+    const band = (d0, d1, w, col) => poly(g, [P((d0 + w) / 2, (d0 - w) / 2), P((d1 + w) / 2, (d1 - w) / 2), P((d1 - w) / 2, (d1 + w) / 2), P((d0 - w) / 2, (d0 + w) / 2)], col);
+    const d1 = 2 * G - 3.6;
+    band(18, d1, 3.4, PAL.stone);
+    for (let d = 19; d < d1; d += 1) seg(g, P((d + 1.7) / 2, (d - 1.7) / 2), P((d - 1.7) / 2, (d + 1.7) / 2), PAL.stone2);
+    const fc = (G + 8) / 2, fp = P(fc, fc);
+    for (let r = 3.2; r > 0; r -= 0.5) ellipse(g, fp[0], fp[1], r * 11.3, r * 5.66, PAL.stone);
+    band(2 * G - 17, 2 * G - 7.2, 1.3, PAL.carpet);
+    band(2 * G - 16.6, 2 * G - 7.6, 0.8, PAL.carpet2);
+    for (let d = 2 * G - 16.5; d < 2 * G - 8; d += 1.6) {
+      for (const sgn of [-1, 1]) { const p = P((d + sgn * 1.15) / 2, (d - sgn * 1.15) / 2); px(g, p[0], p[1] - 4, 1, 4, "#d8b04a"); }
+    }
+    // flower beds by the marquee, the parking lot, the pickup pad
+    for (const sgn of [-1, 1]) {
+      const c = G - 3.2 + sgn * 2.6, cc = G - 3.2 - sgn * 2.6;
+      const bx = sgn > 0 ? c : cc, by = sgn > 0 ? cc : c;
+      flat(g, bx - 1, by - 1, bx + 1, by + 1, PAL.hedge2);
+      const r = rng(hash("bed" + sgn));
+      for (let i = 0; i < 14; i++) { const p = P(bx - 0.9 + r() * 1.8, by - 0.9 + r() * 1.8); px(g, p[0], p[1], 1, 1, pick(["#f4d35e", "#ee6c8a", "#f7f4ec", "#c77dff"], i)); }
+    }
+    flat(g, 9.3, G - 9, 12.2, laneEnd, PAL.asphalt2);
+    for (let y = G - 9; y <= laneEnd + 0.01; y += 1.55) seg(g, P(9.4, y), P(12.1, y), PAL.stripe);
+    flat(g, G - 10.4, 9.25, G - 4.4, 11.4, PAL.asphalt2);
+    seg(g, P(G - 10.4, 11.4), P(G - 4.4, 11.4), PAL.stripe); seg(g, P(G - 4.4, 9.25), P(G - 4.4, 11.4), PAL.stripe);
+    const pk = P(G - 10.1, 11.05);
+    text(g, "PICKUP", pk[0], pk[1] - 4, PAL.stripe, { shear: 1 });
+  }
+  function ellipse(g, cx, cy, rx, ry, col) {
+    const pts = [];
+    for (let i = 0; i < 24; i++) { const t = (i / 24) * Math.PI * 2; pts.push([cx + Math.cos(t) * rx, cy + Math.sin(t) * ry]); }
+    poly(g, pts, col);
+  }
+
+  function drawOffice(g) {  // the director's bungalow, in the back corner
+    box3(g, 1.0, 5.5, 5.7, 7.0, 0, 2, PAL.wood);
+    for (let x = 1.4; x < 5.7; x += 0.5) seg(g, P(x, 5.5, 2), P(x, 7.0, 2), PAL.wood2);
+    box(g, 0.5, 0.5, 5.5, 5.5, 0, 18, "#efe7da", "#f1ebdf", "#d6ccbb");
+    const win = (pts, key) => { poly(g, pts, PAL.glassDark); lights.windows.push(pts); };
+    win([P(1.2, 5.5, 6), P(2.3, 5.5, 6), P(2.3, 5.5, 13), P(1.2, 5.5, 13)]);
+    win([P(2.8, 5.5, 6), P(3.6, 5.5, 6), P(3.6, 5.5, 13), P(2.8, 5.5, 13)]);
+    win([P(5.5, 1.2, 4), P(5.5, 2.4, 4), P(5.5, 2.4, 10), P(5.5, 1.2, 10)]);
+    win([P(5.5, 3.0, 4), P(5.5, 4.4, 4), P(5.5, 4.4, 10), P(5.5, 3.0, 10)]);
+    const t0 = P(5.5, 5.15, 16);
+    text(g, "DIRECTOR", t0[0], t0[1], "#7d3424", { shear: -1 });
+    poly(g, [P(4.0, 5.5, 2), P(4.9, 5.5, 2), P(4.9, 5.5, 15), P(4.0, 5.5, 15)], "#5c7a5a");
+    px(g, P(4.75, 5.5, 8)[0], P(4.75, 5.5, 8)[1], 1, 1, PAL.paint);
+    const ap = P(3, 3, 31);
+    poly(g, [P(0.1, 5.9, 17), P(5.9, 5.9, 17), ap], "#c65a3e");
+    poly(g, [P(5.9, 0.1, 17), P(5.9, 5.9, 17), ap], "#a04631");
+    for (let k = 1; k < 5; k++) { seg(g, P(0.1 + k * 1.16, 5.9, 17), ap, "#b44f37"); seg(g, P(5.9, 0.1 + k * 1.16, 17), ap, "#8e3d2b"); }
+    seg(g, P(0.1, 5.9, 17), P(5.9, 5.9, 17), "#7d3424"); seg(g, P(5.9, 0.1, 17), P(5.9, 5.9, 17), "#6d2d1f");
+    for (let i = 0; i < 9; i++) {  // a striped awning over the porch
+      const x0 = 1.0 + i * 0.52, x1 = x0 + 0.52;
+      poly(g, [P(x0, 5.9, 16), P(x1, 5.9, 16), P(x1, 7.0, 12), P(x0, 7.0, 12)], i % 2 ? "#f4efe4" : "#c8423a");
+    }
+    for (const x of [1.1, 5.6]) seg(g, P(x, 6.95, 2), P(x, 6.95, 12), "#e8dfcf");
+    staticHits.push(Object.assign(bbox([P(0.5, 5.9, 0), P(5.9, 0.1, 0), ap, P(0.1, 5.9, 17), P(5.9, 0.1, 17), P(5.5, 7, 0)]), { key: "director", pri: 5 }));
+  }
+
+  function drawTower(g) {  // the water tower, where the lookout keeps watch
+    const cx = 2.3, cy = towerBase + 2.6, r = 1.45, zb = 54, zt = 78;
+    const legC = "#6f4b3a", braceC = "#8a6450";
+    const legs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([dx, dy]) => [cx + dx * 1.0, cy + dy * 1.0]);
+    const leg = (l) => { const a = P(l[0], l[1], 0), b = P(l[0], l[1], zb); seg(g, a, b, legC); seg(g, [a[0] + 1, a[1]], [b[0] + 1, b[1]], shade(legC, -0.25)); };
+    leg(legs[0]); leg(legs[1]); leg(legs[2]);
+    for (let z = 8; z < zb; z += 15) { seg(g, P(legs[2][0], legs[2][1], z), P(legs[3][0], legs[3][1], z + 13), braceC); seg(g, P(legs[3][0], legs[3][1], z), P(legs[1][0], legs[1][1], z + 13), braceC); }
+    leg(legs[3]);
+    for (let z = 4; z < zb - 2; z += 3) { const p = P(cx + 1.0, cy + 1.0, z); px(g, p[0] + 2, p[1], 2, 1, "#a7a29a"); }
+    const C = P(cx, cy, 0), rx = Math.round(r * 11.3), ry = Math.round(r * 5.66);
+    ellipse(g, C[0], C[1] - zb, rx + 5, ry + 3, "#55463d");
+    const tank = "#b9c3c4";
+    for (let dx = -rx; dx <= rx; dx++) {
+      const e = Math.sqrt(Math.max(0, 1 - (dx / rx) ** 2)) * ry, f = dx / rx;
+      const col = shade(tank, f < -0.45 ? 0.16 : f < 0.15 ? 0.02 : f < 0.65 ? -0.12 : -0.25);
+      const yt = Math.round(C[1] - zt + e), yb = Math.round(C[1] - zb + e);
+      px(g, C[0] + dx, yt, 1, yb - yt + 1, col);
+      for (const z of [60, 72]) px(g, C[0] + dx, Math.round(C[1] - z + e), 1, 1, shade(col, -0.18));
+    }
+    ellipse(g, C[0], C[1] - zt, rx, ry, shade(tank, 0.12));
+    const apex = [C[0], C[1] - zt - 11];
+    poly(g, [apex, [C[0] - rx - 1, C[1] - zt], [C[0], C[1] - zt + ry]], "#8e9a9b");
+    poly(g, [apex, [C[0], C[1] - zt + ry], [C[0] + rx + 1, C[1] - zt]], "#6f7a7b");
+    const nm = "HERMES", tw = textW(nm);
+    text(g, nm, C[0] - Math.floor(tw / 2), C[1] - 70 + ry - 2, "#8f2f27");
+    for (let dx = -rx - 4; dx <= rx + 4; dx++) {  // the railing of the catwalk, in front
+      const e = Math.sqrt(Math.max(0, 1 - (dx / (rx + 5)) ** 2)) * (ry + 3);
+      px(g, C[0] + dx, Math.round(C[1] - zb + e - 4), 1, 1, "#3e332c");
+      if (dx % 4 === 0) px(g, C[0] + dx, Math.round(C[1] - zb + e - 3), 1, 3, "#3e332c");
+    }
+    lights.tower = [apex[0], apex[1] - 1];
+    staticHits.push(Object.assign(bbox([[C[0] - rx - 5, apex[1]], [C[0] + rx + 5, C[1]]]), { key: "lookout", pri: 6 }));
+  }
+
+  // The backdrop on each stage's set: a colour from its channel's name.
+  const SETS = ["#20305f", "#6b3f2a", "#2f5b3c", "#5a2b4f", "#2c5e6e", "#7a5a1f", "#3b3b6b", "#6a2f2f"];
+  function drawStage(g, st) {
+    const s = st.ss.state, R = st.edge === "R";
+    const dim = s === "dark" ? 0.28 : s === "offline" ? 0.5 : 0;
+    const wall = dim ? mix(PAL.wall, "#57534e", dim) : PAL.wall, shd = shade(wall, -0.17);
+    const doorWall = R ? wall : shd, endWall = R ? shd : wall;
+    spoly(g, st, [[0, 0, 0], [SW, 0, 0], [SW, 0, WH], [0, 0, WH]], doorWall);
+    const end = [[SW, -SD, 0], [SW, 0, 0]];
+    for (let i = 12; i >= 0; i--) { const t = i / 12; end.push([SW, -SD * (1 - t), WH + RH * Math.sin(Math.PI * t)]); }
+    spoly(g, st, end, endWall);
+    spoly(g, st, [[0, 0, 0], [SW, 0, 0], [SW, 0, 3], [0, 0, 3]], shade(doorWall, -0.22));
+    spoly(g, st, [[SW, -SD, 0], [SW, 0, 0], [SW, 0, 3], [SW, -SD, 3]], shade(endWall, -0.22));
+    for (const a of [0.12, SW - 0.12]) seg(g, S(st, a, 0, 3), S(st, a, 0, WH - 1), shade(doorWall, -0.1));
+    for (const v of [-SD + 0.12, -0.12]) seg(g, S(st, SW, v, 3), S(st, SW, v, WH - 1), shade(endWall, -0.1));
+    const roofC = dim ? mix(PAL.roof, "#4f5054", dim) : PAL.roof;
+    for (let i = 0; i < 6; i++) {
+      const t0 = i / 6, t1 = (i + 1) / 6, z0 = WH + RH * Math.sin(Math.PI * t0), z1 = WH + RH * Math.sin(Math.PI * t1);
+      const rising = z1 > z0, mid = i === 2 || i === 3;
+      const f = (R ? (rising ? -0.13 : 0.13) : (rising ? 0.11 : -0.05)) * (mid ? 0.4 : 1);
+      spoly(g, st, [[0, -SD * (1 - t0), z0], [SW, -SD * (1 - t0), z0], [SW, -SD * (1 - t1), z1], [0, -SD * (1 - t1), z1]], shade(roofC, f));
+    }
+    for (let a = 0; a <= SW + 0.01; a += 1) {
+      let prev = null;
+      for (let i = 0; i <= 12; i++) {
+        const t = i / 12, p = S(st, a, -SD * (1 - t), WH + RH * Math.sin(Math.PI * t));
+        if (prev) seg(g, prev, p, shade(roofC, a === 0 || a >= SW ? -0.3 : -0.12));
+        prev = p;
+      }
+    }
+    seg(g, S(st, 0, 0, WH), S(st, SW, 0, WH), shade(doorWall, -0.32));
+    // the rooftop unit: how hard this VPS works
+    sbox(g, st, 0.7, -2.5, 1.7, -1.6, WH + RH - 1, WH + RH + 5, dim ? "#77797a" : PAL.metal);
+    const fan = S(st, 1.2, -2.05, WH + RH + 5);
+    px(g, fan[0] - 2, fan[1] - 1, 5, 2, "#4b5054");
+    st.unit = S(st, 1.2, -2.05, WH + RH + 7);
+    staticHits.push(Object.assign(bbox([S(st, 0.7, -1.6, WH + RH - 2), S(st, 1.7, -2.5, WH + RH + 7), S(st, 0.7, -2.5, WH + RH + 7), S(st, 1.7, -1.6, WH + RH - 2)]), { key: st.key + ":unit", pri: 2 }));
+    // the big door: open and lit while it rolls, half open while it waits, shut otherwise
+    const dq = (a0, a1, z0, z1, col) => spoly(g, st, [[a0, 0, z0], [a1, 0, z0], [a1, 0, z1], [a0, 0, z1]], col);
+    dq(1.08, 3.12, 0, 24, shade(doorWall, -0.3));
+    const closed = (a0, a1) => {
+      const dc = dim ? mix(PAL.door, "#3d4245", dim) : PAL.door;
+      dq(a0, a1, 0, 22, dc);
+      for (let a = a0 + 0.3; a < a1 - 0.1; a += 0.3) seg(g, S(st, a, 0, 1), S(st, a, 0, 21), shade(dc, -0.2));
+    };
+    if (s === "rolling") {
+      dq(1.2, 3.0, 0, 22, "#f6dfa4");
+      dq(1.2, 3.0, 5, 21, st.set);
+      const r = rng(hash(st.key + "set"));
+      for (let i = 0; i < 7; i++) { const p = S(st, 1.3 + r() * 1.6, 0, 7 + r() * 13); px(g, p[0], p[1], 1, 1, shade(st.set, 0.55)); }
+      dq(1.2, 3.0, 0, 5, "#efd29a");
+      lights.doors.push(st);
+    } else if (s === "standby") {
+      dq(1.2, 3.0, 0, 22, "#2f2b27");
+      closed(1.2, 2.1);
+    } else closed(1.2, 3.0);
+    // the lamp over the door, the number, the breaker box
+    dq(1.93, 2.27, 25, 29, "#2b2a28");
+    st.lamp = S(st, 2.1, 0.15, 27);
+    const no = String(st.no), sc = no.length === 1 ? 2 : 1, nc = dim ? mix(PAL.number, "#45413e", dim) : PAL.number;
+    const np = S(st, R ? 3.55 : 4.9, 0, 30);
+    text(g, no, np[0], np[1], nc, { big: true, scale: sc, shear: R ? 1 : -1 });
+    dq(3.95, 4.45, 8, 13, "#80888b");
+    const bolt = S(st, 4.2, 0, 12);
+    px(g, bolt[0], bolt[1], 1, 2, PAL.paint);
+    // the trailer of this stage's star
+    sbox(g, st, 5.25, 0.25, 6.75, 2.65, 3, 15, "#f0ece2");
+    spoly(g, st, [[5.25, 2.65, 8], [6.75, 2.65, 8], [6.75, 2.65, 10], [5.25, 2.65, 10]], st.color);
+    spoly(g, st, [[6.75, 0.25, 8], [6.75, 2.65, 8], [6.75, 2.65, 10], [6.75, 0.25, 10]], shade(st.color, -0.2));
+    spoly(g, st, [[5.6, 2.65, 3], [6.3, 2.65, 3], [6.3, 2.65, 13], [5.6, 2.65, 13]], "#cfc7b6");
+    const star = S(st, 5.95, 2.65, 11.5);
+    px(g, star[0] - 1, star[1], 3, 1, "#e9b93c"); px(g, star[0], star[1] - 1, 1, 3, "#e9b93c");
+    const tw = [[6.75, 0.6, 10], [6.75, 1.5, 10], [6.75, 1.5, 13], [6.75, 0.6, 13]];
+    spoly(g, st, tw, PAL.glassDark);
+    st.trailerWin = tw.map((p) => S(st, p[0], p[1], p[2]));
+    for (const w of [[5.45, 0.5], [6.55, 0.5], [6.55, 2.4]]) { const p = S(st, w[0], w[1], 3); px(g, p[0] - 1, p[1] - 1, 3, 2, "#2a2724"); }
+    if (st.dnd) { const p = S(st, 6.22, 2.65, 8); px(g, p[0], p[1], 2, 3, "#d6402f"); }
+    staticHits.push(Object.assign(bbox([S(st, 5.25, 2.65, 0), S(st, 6.75, 0.25, 0), S(st, 5.25, 0.25, 15), S(st, 6.75, 2.65, 15), S(st, 6.75, 0.25, 15)]), { key: st.key + ":star", pri: 3 }));
+    if (s === "trouble") {  // tape across the apron
+      for (const a of [-0.1, SW + 0.1]) { const p = S(st, a, 2.75, 0); px(g, p[0], p[1] - 8, 1, 8, "#3b3a35"); }
+      const a = S(st, -0.1, 2.75, 7), b = S(st, SW + 0.1, 2.75, 7), n = Math.abs(b[0] - a[0]);
+      for (let i = 0; i <= n; i++) {
+        const x = a[0] + Math.sign(b[0] - a[0]) * i, y = Math.round(a[1] + ((b[1] - a[1]) * i) / n);
+        px(g, x, y, 1, 2, Math.floor(i / 3) % 2 ? PAL.tapeB : PAL.tapeA);
+      }
+    }
+    staticHits.push(Object.assign(bbox([S(st, 0, 0, 0), S(st, SW, 0, 0), S(st, SW, -SD, 0), S(st, 0, -SD, WH), S(st, 0, -SD / 2, WH + RH), S(st, SW, -SD / 2, WH + RH)]), { key: st.key + ":stage", pri: 9 }));
+    st.top = S(st, SW * 0.62, -SD / 2, WH + RH + 3);
+  }
+
+  function drawFront(g) {  // the guard booth, the back post of the gate, the fountain, the parked cars, the hedges
+    box3(g, G - 1.45, 6.2, G - 0.95, 6.7, 0, 24, "#e8e0cf");
+    box(g, G - 3.75, 10.05, G - 2.45, 11.35, 0, 13, "#ece6d8", "#f2ede2", "#d4cbb9");
+    const bw = [P(G - 3.55, 11.35, 6), P(G - 2.65, 11.35, 6), P(G - 2.65, 11.35, 11), P(G - 3.55, 11.35, 11)];
+    poly(g, bw, PAL.glassDark); lights.windows.push(bw);
+    poly(g, [P(G - 2.45, 10.25, 6), P(G - 2.45, 11.15, 6), P(G - 2.45, 11.15, 11), P(G - 2.45, 10.25, 11)], PAL.glassDark);
+    box(g, G - 3.95, 9.85, G - 2.25, 11.55, 13, 15, "#a0453a", "#b44f42", "#8e3b32");
+    const fc = (G + 8) / 2, C = P(fc, fc);
+    ellipse(g, C[0], C[1] - 2, 19, 9.5, "#cdbb94"); ellipse(g, C[0], C[1] - 4, 18, 9, "#bfae88");
+    ellipse(g, C[0], C[1] - 4, 15, 7.5, "#4f8fb8"); ellipse(g, C[0] - 2, C[1] - 5, 9, 4, "#6aa6cc");
+    px(g, C[0] - 1, C[1] - 13, 3, 9, "#cdbb94"); ellipse(g, C[0], C[1] - 13, 5, 2.5, "#bfae88"); ellipse(g, C[0], C[1] - 13, 3.5, 1.6, "#6aa6cc");
+    lights.fountain = [C[0], C[1] - 14];
+    const r = rng(hash("cars"));
+    for (let y = G - 8.2, i = 0; y < G - 1.6; y += 1.55, i++) {
+      if (r() < 0.3) continue;
+      const col = pick(["#c0392b", "#2e86c1", "#f4d03f", "#ecf0f1", "#27ae60", "#7d3c98"], Math.floor(r() * 6));
+      box(g, 9.6, y + 0.25, 11.7, y + 1.3, 1, 5, shade(col, 0.15), col, shade(col, -0.25));
+      box(g, 10.1, y + 0.35, 11.1, y + 1.2, 5, 8, shade(col, 0.2), PAL.glassDark, shade(PAL.glassDark, -0.2));
+      for (const wx of [9.9, 11.4]) { const p = P(wx, y + 1.3, 1); px(g, p[0] - 1, p[1] - 1, 2, 2, "#1d1c1b"); }
+    }
+    const hedge = (x0, y0, x1, y1) => {
+      box(g, x0, y0, x1, y1, 0, 5, PAL.hedge, shade(PAL.hedge, 0.05), PAL.hedge2);
+      const rr = rng(hash([x0, y0])), a = P(x0, y1, 5), b = P(x1, y1, 5);
+      for (let i = 0; i < 40; i++) { const t = rr(); px(g, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t + rr() * 4, 1, 1, "#5a9a4f"); }
+    };
+    hedge(G - 0.4, 0, G, 6.2); hedge(G - 0.4, 9.8, G, G); hedge(0, G - 0.4, G - 0.4, G);
+  }
+
+  // ---------------------------------------------------------------- people
+  // Everyone is drawn from a few rows of pixels: 9 x 16, feet at the bottom centre.
+  const SKINS = ["#f1c7a5", "#e0ac84", "#c68a5e", "#9c6640", "#7a4a2c", "#f6d5bd"];
+  const HAIRS = ["#2b1d14", "#5a3a22", "#8a5a2b", "#c99a4e", "#e3c27a", "#1c1c1c", "#8a8a8a", "#a3402c"];
+  const sprites = new Map();
+  function personSprite(o, flip) {
+    const key = JSON.stringify(o) + (flip ? "<" : ">");
+    if (sprites.has(key)) return sprites.get(key);
+    const [c, g] = mk(9, 16);
+    const f = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
+    const pose = o.pose || "stand", seated = pose === "sit" || pose === "sleep";
+    const sk = o.skin, hr = o.hair, sh = o.shirt, shD = shade(o.shirt, -0.28), pa = o.pants, paD = shade(o.pants, -0.28);
+    const shoe = o.shoes || "#2a2522", hy = seated ? 4 : 2;
+    // legs
+    if (seated) {
+      f(2, 12, 6, 2, pa); f(2, 12, 6, 1, paD); f(6, 14, 2, 1, paD); f(6, 15, 3, 1, shoe);
+    } else if (pose === "walkA") {
+      f(2, 11, 5, 1, pa); f(1, 12, 2, 2, paD); f(5, 12, 2, 2, pa); f(1, 14, 2, 1, paD); f(6, 14, 2, 1, pa);
+      f(0, 15, 2, 1, shoe); f(6, 15, 3, 1, shoe);
+    } else if (pose === "walkB") {
+      f(2, 11, 5, 1, pa); f(3, 12, 3, 3, pa); f(3, 12, 1, 3, paD); f(3, 15, 4, 1, shoe);
+    } else {
+      f(2, 11, 5, 1, pa); f(2, 12, 2, 3, paD); f(5, 12, 2, 3, pa); f(2, 15, 2, 1, shoe); f(5, 15, 3, 1, shoe);
+    }
+    // body and arms
+    const ty = hy + 5;
+    f(2, ty, 5, seated ? 3 : 4, sh); f(2, ty, 1, seated ? 3 : 4, shD);
+    if (o.vest) { f(2, ty + 1, 5, 1, o.vest); f(4, ty, 1, seated ? 3 : 4, o.vest); }
+    if (pose === "up") {
+      f(1, hy + 2, 1, 3, shD); f(7, hy + 2, 1, 3, sh); f(1, hy + 1, 1, 1, sk); f(7, hy + 1, 1, 1, sk);
+    } else if (pose === "look") {
+      f(1, ty, 1, 3, shD); f(1, ty + 3, 1, 1, sk); f(7, ty - 1, 1, 2, sh); f(6, hy + 2, 3, 1, "#1e1e22");
+    } else if (seated) {
+      f(1, ty, 1, 2, shD); f(7, ty, 1, 2, sh); f(6, ty + 2, 2, 1, sk);
+    } else if (pose === "walkA") {
+      f(1, ty, 1, 3, shD); f(1, ty + 3, 1, 1, sk); f(7, ty, 1, 2, sh); f(8, ty + 2, 1, 1, sk);
+    } else {
+      f(1, ty, 1, 3, shD); f(7, ty, 1, 3, sh); f(1, ty + 3, 1, 1, sk); f(7, ty + 3, 1, 1, sk);
+    }
+    // head
+    f(3, hy + 2, 4, 2, sk); f(3, hy + 4, 3, 1, sk);
+    if (o.style === "bald") { f(3, hy, 3, 1, sk); f(2, hy + 1, 5, 1, sk); f(2, hy + 2, 1, 2, hr); }
+    else { f(3, hy, 3, 1, hr); f(2, hy + 1, 5, 1, hr); f(2, hy + 2, 1, 2, hr); }
+    if (o.style === "long") { f(2, hy + 2, 1, 5, hr); f(3, hy + 4, 1, 2, hr); }
+    if (pose === "sleep") f(5, hy + 3, 1, 1, shade(sk, -0.25)); else if (pose !== "look") f(5, hy + 2, 1, 1, "#1d1a18");
+    // hats
+    const hc = o.hatC || "#2f4a7a";
+    if (o.hat === "cap") { f(3, hy - 1, 3, 1, hc); f(2, hy, 5, 2, hc); f(6, hy + 1, 2, 1, shade(hc, -0.3)); }
+    else if (o.hat === "hard") { f(3, hy - 1, 3, 1, hc); f(2, hy, 5, 2, hc); f(1, hy + 1, 7, 1, shade(hc, -0.2)); }
+    else if (o.hat === "beret") { f(2, hy - 1, 4, 1, hc); f(2, hy, 6, 1, hc); }
+    else if (o.hat === "guard") { f(2, hy - 1, 5, 2, hc); f(4, hy - 1, 1, 1, "#e3b54b"); f(5, hy + 1, 3, 1, "#151515"); }
+    else if (o.hat === "headset") { f(2, hy, 5, 1, "#222"); f(2, hy + 2, 1, 2, "#222"); f(6, hy + 4, 2, 1, "#222"); }
+    else if (o.hat === "hood") { f(2, hy, 5, 1, hc); f(2, hy + 1, 2, 4, hc); f(6, hy + 1, 1, 2, hc); }
+    if (o.shades) f(4, hy + 2, 3, 1, "#111");
+    // what they hold
+    const iy = seated ? ty + 1 : ty + 2;
+    if (o.prop === "clipboard") { f(7, iy, 2, 3, "#c79a5e"); f(7, iy + 1, 2, 1, "#f2efe6"); }
+    else if (o.prop === "script") { f(7, iy, 2, 3, "#f4f1e8"); f(7, iy + 1, 1, 1, "#9a948a"); }
+    else if (o.prop === "megaphone") { f(7, hy + 3, 1, 1, "#ece6d6"); f(8, hy + 2, 1, 3, "#ece6d6"); }
+    else if (o.prop === "broom") { f(8, ty - 2, 1, 10, "#8b5a33"); f(7, 14, 2, 2, "#d8b45a"); }
+    else if (o.prop === "flashlight") { f(8, iy, 1, 2, "#3a3a3a"); f(8, iy, 1, 1, "#fff3b0"); }
+    else if (o.prop === "wrench") { f(8, iy - 1, 1, 3, "#9aa3a8"); }
+    else if (o.prop === "can") { f(7, iy, 2, 2, "#5b5f63"); f(7, iy, 2, 1, "#8d9296"); }
+    else if (o.prop === "coffee") { f(8, iy, 1, 2, "#f4f1e8"); }
+    let out = c;
+    if (flip) { const [c2, g2] = mk(9, 16); g2.scale(-1, 1); g2.drawImage(c, -9, 0); out = c2; }
+    sprites.set(key, out);
+    return out;
+  }
+  function look(seed, o) {  // a face for someone: skin and hair from their seat on the lot
+    const h = hash(seed);
+    return Object.assign({ skin: pick(SKINS, h), hair: pick(HAIRS, h >>> 4), style: pick(["short", "short", "long", "bald", "short", "long"], h >>> 9) }, o);
+  }
+
+  // ---------------------------------------------------------------- things on the lot
+  function chair(g, x, y, col, flip) {  // a director's chair, seat at y - 6
+    const d = flip ? -1 : 1;
+    px(g, x - 3, y - 6, 7, 1, "#6e4a2c");
+    line(g, x - 3, y, x + 2, y - 5, "#6e4a2c"); line(g, x + 3, y, x - 2, y - 5, "#6e4a2c");
+    px(g, x - 3 * d - (d < 0 ? 1 : 0), y - 12, 1, 7, "#6e4a2c");
+    px(g, x - 3 * d - (d < 0 ? 0 : 0), y - 11, d > 0 ? 3 : -3, 3, col || "#2a2a33");
+  }
+  function camera(g, x, y, flip, t, rec) {  // a camera on a tripod, aimed at the door
+    const d = flip ? -1 : 1;
+    line(g, x, y - 8, x - 3, y, "#2b2b2b"); line(g, x, y - 8, x + 3, y, "#2b2b2b"); line(g, x, y - 8, x, y + 1, "#2b2b2b");
+    px(g, x - 3, y - 13, 6, 5, "#26272b"); px(g, x - 3, y - 13, 6, 1, "#45474d");
+    px(g, d > 0 ? x + 3 : x - 5, y - 13, 2, 3, "#3a3c42"); px(g, d > 0 ? x + 4 : x - 5, y - 12, 1, 1, "#7fb0d8");
+    px(g, x - 2, y - 16, 4, 3, "#26272b"); px(g, x - 2, y - 16, 2, 2, "#3d3f45");
+    if (rec && (reduced || Math.floor(t / 600) % 2 === 0)) px(g, d > 0 ? x - 3 : x + 2, y - 15, 1, 1, "#ff3b2f");
+  }
+  function table(g, gx, gy, w, d, z, col) { box(g, gx - w / 2, gy - d / 2, gx + w / 2, gy + d / 2, z - 1, z, shade(col, 0.15), col, shade(col, -0.25)); for (const [a, b] of [[gx - w / 2 + 0.05, gy + d / 2 - 0.05], [gx + w / 2 - 0.05, gy + d / 2 - 0.05], [gx + w / 2 - 0.05, gy - d / 2 + 0.05]]) seg(g, P(a, b, 0), P(a, b, z - 1), shade(col, -0.35)); }
+  // What sits beside a crew member, by the kind of work: an edit bay, a terminal on a road case...
+  function deskProp(g, kind, gx, gy, t, live) {
+    const p = P(gx, gy, 0), blink = reduced ? 0 : Math.floor(t / 400) % 2;
+    if (kind === "editor" || kind === "researcher") {
+      table(g, gx, gy, 0.9, 0.55, 6, "#6b5a4b");
+      const s = P(gx, gy, 6);
+      px(g, s[0] - 4, s[1] - 7, 8, 6, "#1d1f24"); px(g, s[0] - 3, s[1] - 6, 6, 4, kind === "editor" ? "#20252d" : "#dfe9f3");
+      if (kind === "editor") { px(g, s[0] - 3, s[1] - 5, 4, 1, "#e06c4a"); px(g, s[0] - 1, s[1] - 4, 4, 1, "#4ab0e0"); px(g, s[0] - 3, s[1] - 3, 3, 1, "#7ad07a"); if (live) px(g, s[0] - 3 + ((t / 150) | 0) % 6, s[1] - 6, 1, 4, "#f2efe6"); }
+      else { px(g, s[0] - 3, s[1] - 6, 6, 1, "#4a7fd0"); px(g, s[0] - 2, s[1] - 4, 4, 1, "#8a95a3"); px(g, s[0] - 2, s[1] - 3, 3, 1, "#8a95a3"); }
+      px(g, s[0] - 1, s[1] - 1, 2, 1, "#1d1f24");
+    } else if (kind === "technician") {
+      box(g, gx - 0.4, gy - 0.3, gx + 0.4, gy + 0.3, 0, 6, "#3a3c40", "#2a2c30", "#1f2124");
+      const s = P(gx, gy, 6);
+      px(g, s[0] - 3, s[1] - 1, 6, 1, "#9aa3a8"); px(g, s[0] - 3, s[1] - 5, 6, 4, "#9aa3a8"); px(g, s[0] - 2, s[1] - 4, 4, 2, "#111");
+      if (live && blink) px(g, s[0] - 2, s[1] - 3, 2, 1, "#5ef08a"); else px(g, s[0] - 2, s[1] - 4, 3, 1, "#5ef08a");
+      px(g, p[0] + 3, p[1] - 3, 1, 1, blink ? "#ff5a4a" : "#5ef08a");
+    } else if (kind === "screenwriter") {
+      table(g, gx, gy, 0.8, 0.5, 6, "#8b5e3c");
+      const s = P(gx, gy, 6);
+      px(g, s[0] - 3, s[1] - 3, 6, 3, "#2d2e33"); px(g, s[0] - 2, s[1] - 7, 4, 4, "#f6f3ea");
+      if (live) px(g, s[0] - 2 + ((t / 220) | 0) % 4, s[1] - 5, 1, 1, "#2d2e33");
+      px(g, p[0] - 6, p[1] + 2, 2, 2, "#f2efe6"); px(g, p[0] + 5, p[1] + 3, 2, 1, "#f2efe6");
+    } else if (kind === "supervisor") {
+      table(g, gx, gy, 0.7, 0.5, 5, "#7a6a58");
+      const s = P(gx, gy, 5);
+      ["#c0392b", "#2e86c1", "#f4d03f", "#27ae60"].forEach((c, i) => px(g, s[0] - 3, s[1] - 2 - i * 2, 6, 2, c));
+    } else if (kind === "ad") {
+      px(g, p[0] - 6, p[1] - 14, 12, 9, "#e9edf0"); px(g, p[0] - 6, p[1] - 14, 12, 1, "#9aa3a8");
+      line(g, p[0] - 4, p[1] - 5, p[0] - 5, p[1], "#6b6b6b"); line(g, p[0] + 4, p[1] - 5, p[0] + 5, p[1], "#6b6b6b");
+      for (let i = 0; i < 3; i++) { px(g, p[0] - 4, p[1] - 12 + i * 2, 1, 1, i < 2 ? "#2e9a5e" : "#c78a10"); px(g, p[0] - 2, p[1] - 12 + i * 2, 6 - i, 1, "#4a4f57"); }
+    } else if (kind === "second") {
+      camera(g, p[0], p[1], gx < gy, t, live);
+    }
+  }
+  function cans(g, x, y, n) {  // finished films waiting to be collected
+    for (let i = 0; i < Math.min(n, 6); i++) {
+      const cx = x + (i < 3 ? 0 : 7), cy = y - (i % 3) * 3;
+      px(g, cx - 3, cy - 2, 6, 2, "#4a4e53"); px(g, cx - 3, cy - 3, 6, 1, "#9aa0a6"); px(g, cx - 1, cy - 3, 2, 1, "#c9ced3");
+    }
+  }
+  function board(g, x, y, done, failed) {  // the dailies: a chalk mark for each film done or failed today
+    line(g, x - 4, y, x - 2, y - 8, "#6b4a2c"); line(g, x + 4, y, x + 2, y - 8, "#6b4a2c");
+    px(g, x - 5, y - 16, 11, 9, "#6b4a2c"); px(g, x - 4, y - 15, 9, 7, "#2f4a3a");
+    let k = 0;
+    for (let i = 0; i < Math.min(done, 12); i++, k++) px(g, x - 3 + (k % 6) * 1.5, y - 14 + Math.floor(k / 6) * 3, 1, 2, "#f2efe6");
+    for (let i = 0; i < Math.min(failed, 6); i++, k++) px(g, x - 3 + (k % 6) * 1.5, y - 14 + Math.floor(k / 6) * 3, 1, 2, "#ff7a6a");
+  }
+  function clockBoard(g, x, y, label) {  // when the usage limit resets
+    px(g, x - 11, y - 13, 22, 9, "#1c1b1a"); px(g, x - 10, y - 12, 20, 7, "#2a2622");
+    text(g, label, x - Math.floor(textW(label) / 2), y - 11, "#f3a51f");
+    line(g, x - 7, y - 4, x - 8, y, "#3b3a37"); line(g, x + 7, y - 4, x + 8, y, "#3b3a37");
+  }
+  function palm(g, x, y, h, flip) {
+    const d = flip ? -1 : 1;
+    for (let i = 0; i < h; i++) px(g, x + Math.round(d * Math.sin(i / h * 1.4) * 2), y - i, 2, 1, i % 4 === 0 ? "#5e4029" : PAL.trunk);
+    const tx = x + Math.round(d * Math.sin(1.4) * 2), ty = y - h;
+    for (const [dx, dy, len] of [[1, 0.3, 8], [-1, 0.3, 8], [0.8, -0.5, 6], [-0.8, -0.5, 6], [0.3, 0.9, 6], [-0.4, 1, 5]]) {
+      for (let i = 0; i < len; i++) px(g, tx + Math.round(dx * i), ty + Math.round(dy * i + (i * i) / 14), 2, 1, i % 3 ? PAL.palm : PAL.palm2);
+    }
+    px(g, tx - 1, ty, 3, 2, "#6a4a2a");
+  }
+  function lampPost(g, x, y) { px(g, x, y - 20, 1, 20, "#2f3236"); px(g, x - 1, y - 22, 3, 2, "#2f3236"); px(g, x - 1, y - 20, 3, 1, "#f7e7b0"); px(g, x - 1, y, 3, 1, "#2f3236"); }
+  // A van or a cart, along the lanes: dir is the way it faces ("x+", "x-", "y+", "y-").
+  function vehicle(g, gx, gy, dir, kind, col) {
+    const along = dir[0] === "x", L = kind === "van" ? 1.15 : 0.7, Wd = kind === "van" ? 0.55 : 0.42;
+    const [x0, x1, y0, y1] = along ? [gx - L, gx + L, gy - Wd, gy + Wd] : [gx - Wd, gx + Wd, gy - L, gy + L];
+    const fwd = dir[1] === "+" ? 1 : -1;
+    for (const [wx, wy] of along ? [[gx - L * 0.6, y1], [gx + L * 0.6, y1]] : [[x1, gy - L * 0.6], [x1, gy + L * 0.6]]) { const p = P(wx, wy, 0); px(g, p[0] - 1, p[1] - 2, 3, 2, "#1d1c1b"); }
+    if (kind === "van") {
+      const split = along ? gx + (L - 0.7) * fwd : gy + (L - 0.7) * fwd;
+      const body = along ? (fwd > 0 ? [x0, split, y0, y1] : [split, x1, y0, y1]) : (fwd > 0 ? [x0, x1, y0, split] : [x0, x1, split, y1]);
+      const front = along ? (fwd > 0 ? [split, x1, y0, y1] : [x0, split, y0, y1]) : (fwd > 0 ? [x0, x1, split, y1] : [x0, x1, y0, split]);
+      const draw = (r, z1, c) => box(g, r[0], r[2], r[1], r[3], 1, z1, shade(c, 0.16), c, shade(c, -0.22));
+      if (fwd > 0) { draw(body, 13, col); draw(front, 9, shade(col, -0.05)); } else { draw(front, 9, shade(col, -0.05)); draw(body, 13, col); }
+      const c = P(along ? split + 0.35 * fwd : gx, along ? gy : split + 0.35 * fwd, 9);
+      px(g, c[0] - 2, c[1] - 1, 4, 2, PAL.glassDark);
+      const s = along ? [P((body[0] + body[1]) / 2, y1, 7)] : [P(x1, (body[2] + body[3]) / 2, 7)];
+      px(g, s[0][0] - 3, s[0][1], 6, 1, "#e3b54b");
+    } else {
+      box(g, x0, y0, x1, y1, 2, 5, shade(col, 0.15), col, shade(col, -0.25));
+      const back = along ? (fwd > 0 ? [x0, x0 + 0.25] : [x1 - 0.25, x1]) : (fwd > 0 ? [y0, y0 + 0.25] : [y1 - 0.25, y1]);
+      if (along) box(g, back[0], y0, back[1], y1, 5, 9, "#b9312c", "#c8423a", "#9e2b26");
+      else box(g, x0, back[0], x1, back[1], 5, 9, "#b9312c", "#c8423a", "#9e2b26");
+    }
+  }
+
+  // ---------------------------------------------------------------- the cast: who stands for what
+  const NAMES = ["Ada", "Bea", "Cal", "Dot", "Eli", "Fay", "Gus", "Hal", "Ivy", "Jo", "Kai", "Lou", "Mo", "Ned", "Ola", "Pip",
+    "Quin", "Rae", "Sol", "Tess", "Uma", "Vic", "Wren", "Xia", "Yan", "Zed", "Ari", "Bo", "Cleo", "Dev", "Esme", "Finn",
+    "Gio", "Hana", "Ines", "Jules", "Kit", "Lark", "Mika", "Noor", "Otto", "Pia", "Remy", "Sami", "Teo", "Una", "Vera", "Wes",
+    "Abe", "Bex", "Coco", "Dax", "Edie", "Flo", "Gil", "Hugo", "Iggy", "Jaz", "Kofi", "Lia", "Milo", "Nell", "Oz", "Pax",
+    "Rafa", "Suki", "Tam", "Ugo", "Val", "Wim", "Yuki", "Zuri", "Ama", "Bram", "Cruz", "Dina", "Enzo", "Fern", "Gemma", "Huck"];
+  const taken = new Set();
+  function nameOf(key) {  // the same name for the same seat on the lot, never two of the same at once
+    const h = hash(key);
+    for (let i = 0; i < NAMES.length; i++) { const nm = NAMES[(h + i * 7) % NAMES.length]; if (!taken.has(nm)) { taken.add(nm); return nm; } }
+    return NAMES[h % NAMES.length];
+  }
+  const TRAILER = ["#d6402f", "#2e86c1", "#27ae60", "#8e44ad", "#e67e22", "#16a085", "#c0392b", "#d4ac0d"];
+  const sentence = (s) => { s = String(s || "").trim(); return !s || /[.!?…"”]$/.test(s) ? s : s + "."; };
+  const short = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s; };
+  const titled = (j) => "“" + short(j.title || j.id, 60) + "”";
+  const agoAt = (t) => (t ? ago(t) + " (" + clock(t / 1000) + ")" : "not yet");
+
+  let snap = null, contact = true, looks = 0;
+  let cast = [], castBy = new Map(), stagesNow = [], props = [];
+  const lanePt = (st) => (st.edge === "R" ? [st.base + 2.5, 8] : [8, st.base + 2.5]);
+  const apronPt = (st) => SG(st, 2.5, 2.35);
+  function route(pts) {
+    const segs = []; let len = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (d > 0) { segs.push({ a, b, d, from: len }); len += d; }
+    }
+    return { len, at(dist) {
+      const s = segs.find((x) => dist <= x.from + x.d) || segs[segs.length - 1];
+      if (!s) return { gx: pts[0][0], gy: pts[0][1], dir: "x-" };
+      const k = Math.max(0, Math.min(1, (dist - s.from) / s.d)), dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1];
+      return { gx: s.a[0] + dx * k, gy: s.a[1] + dy * k, dir: Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "x+" : "x-") : (dy > 0 ? "y+" : "y-") };
+    } };
+  }
+  function between(A, B) {  // from one stage's door to another's, along the lanes
+    const pts = [apronPt(A), lanePt(A)];
+    if (A.edge !== B.edge) pts.push([8, 8]);
+    pts.push(lanePt(B), apronPt(B));
+    return pts;
+  }
+  // A loop of drives and stops: where it is at time t (ms).
+  function schedule(steps) {
+    const SPEED = 2.4 / 1000;
+    let total = 0;
+    for (const s of steps) { s.from = total; s.dur = s.route ? s.route.len / SPEED : s.ms; total += s.dur; }
+    return (t) => {
+      if (!total) return null;
+      const k = reduced ? 0 : t % total, s = steps.find((x) => k < x.from + x.dur) || steps[0];
+      if (s.route) return Object.assign(s.route.at((k - s.from) * SPEED), { moving: true, step: s });
+      return { gx: s.at[0], gy: s.at[1], dir: s.dir, moving: false, step: s };
+    };
+  }
+  function crewKind(a) {
+    if (!a) return "operator";
+    if (a.kind === "text") return "dp";
+    const n = a.name || "", d = String(a.detail || "");
+    if (n === "Bash") return /ffmpeg|render|encod|video|audio|mux|subtit|whisper|voice|tts|thumbnail/i.test(d) ? "editor" : "technician";
+    if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(n)) return "screenwriter";
+    if (/^(Read|Glob|Grep|LS)$/.test(n)) return "supervisor";
+    if (/^Web/.test(n)) return "researcher";
+    if (n === "TodoWrite") return "ad";
+    if (n === "Task" || n === "Agent") return "second";
+    return "technician";
+  }
+  const CREW = {
+    operator: { role: "Camera operator", pose: "stand", hat: "cap", shirt: "#3b3f46", stands: "a session that has not taken its first step yet" },
+    dp: { role: "Director of photography", pose: "stand", hat: "beret", shirt: "#2c2f38", stands: "what the session last said" },
+    editor: { role: "Editor", pose: "sit", hat: "headset", shirt: "#5b3f6e", stands: "a command that renders or encodes" },
+    technician: { role: "Technician", pose: "stand", hat: "cap", shirt: "#2f5d73", stands: "a command the session runs" },
+    screenwriter: { role: "Screenwriter", pose: "sit", hat: "beret", shirt: "#8a3b2f", stands: "a file the session writes" },
+    supervisor: { role: "Script supervisor", pose: "sit", shirt: "#3f6b4a", stands: "files the session reads or searches" },
+    researcher: { role: "Researcher", pose: "sit", shirt: "#6b5a2f", stands: "a web search or a web page" },
+    ad: { role: "Assistant director", pose: "stand", hat: "headset", prop: "clipboard", shirt: "#2f4a7a", stands: "the session's plan" },
+    second: { role: "Second unit", pose: "stand", hat: "cap", shirt: "#4a4f57", stands: "a part handed to a helper" },
+  };
+  const LOT = "The lot";
+  function add(m) {
+    m.name = m.name || nameOf(m.key);
+    m.phase = hash(m.key) % 4000;
+    cast.push(m); castBy.set(m.key, m);
+    return m;
+  }
+  // Someone standing at a stage's spot (a along the front, v out from the door).
+  const spot = (st, a, v, o) => () => Object.assign({ gx: SG(st, a, v)[0], gy: SG(st, a, v)[1] }, o);
+
+  function build() {
+    const nodes = (snap && snap.nodes) || [];
+    const lay = plan(nodes.length);
+    const now = Date.now(), cut = now - DAY_MS;
+    stagesNow = lay.map((st, i) => {
+      const n = nodes[i], ch = (n.channels || [])[0] || n.name;
+      const ss = stageState(n);
+      return Object.assign(st, { node: n, key: n.name, no: stageNo(n.name, i), ss, color: pick(TRAILER, hash(ch)),
+        set: pick(SETS, hash(ch + "/set")), dnd: ss.state === "hold" || ss.state === "dark" });
+    });
+    cast = []; castBy = new Map(); props = []; taken.clear();
+    for (const fixed of ["Hermes", "Iris", "Sam", "Rio", "Claude"]) taken.add(fixed);
+    const T = { stages: stagesNow.length, rolling: 0, standby: 0, hold: 0, dark: 0, trouble: 0, offline: 0, pending: 0,
+      waiting: 0, done: 0, failed: 0, collect: 0, answering: 0, newest: null, newestAt: 0, newestOn: null, pulledToday: 0 };
+    for (const st of stagesNow) {
+      const n = st.node, s = n.status || {}, q = s.queue || {};
+      T[st.ss.state] = (T[st.ss.state] || 0) + 1;
+      if (n.reachable) T.answering += 1;
+      T.waiting += jobsOf(n).filter((j) => j.state === "inbox" || j.state === "outgoing").length;  // as on the board
+      T.collect += Number(q.unpulled) || 0;
+      for (const j of finishedSince(n, cut)) {
+        if (j.state === "done") { T.done += 1; if (j.pulled) T.pulledToday += 1; } else if (j.state === "failed") T.failed += 1;
+        const at = when(j.finished_at) || 0;
+        if (j.state === "done" && at > T.newestAt) { T.newestAt = at; T.newest = j; T.newestOn = st; }
+      }
+    }
+    lot.T = T;
+    lotWide(T, now);
+    for (const st of stagesNow) stageCast(st, now, cut);
+    scenery();
+  }
+  const lot = { T: null };
+
+  function lotWide(T, now) {
+    const gen = when(snap && snap.generated_at), every = Number(snap && snap.every) || 20;
+    const counts = ["rolling", "standby", "hold", "dark", "trouble", "offline"].filter((k) => T[k])
+      .map((k) => T[k] + " " + { rolling: "rolling", standby: "standing by", hold: "on hold", dark: "dark", trouble: "need a look", offline: "no contact" }[k]);
+    let said;
+    if (!contact) said = "I've lost the line to your PC. Start fleet studio again and I'll pick it back up.";
+    else if (snap && snap.demo) said = "This is a rehearsal with made-up jobs. Run fleet studio on your PC and you'll see your own lot.";
+    else if (!T.stages) said = "No stages yet. Add a VPS to the fleet and it gets a stage here.";
+    else if (T.rolling) said = plural(T.rolling, "stage", "stages") + " rolling, " + plural(T.waiting, "script", "scripts") + " waiting. Keep it moving!";
+    else if (T.waiting) said = plural(T.waiting, "script waits", "scripts wait") + ", and nobody's rolling. Somebody check the stages.";
+    else said = "Quiet lot. Every stage is ready for the next script.";
+    add({ key: "director", name: "Hermes", role: "Director", where: "The director's bungalow · your PC", group: LOT, order: 0,
+      stands: "your PC, where Hermes directs the fleet and this page runs",
+      quote: said, look: look("director", { shirt: "#3a2f4f", pants: "#2b2b33", hat: "beret", hatC: "#1f1f24", prop: "megaphone", style: "short" }),
+      params: [["Watching", LIVE ? (contact ? "Live, from fleet studio on your PC" : "Lost contact with your PC") : "An example lot with made-up jobs"],
+        ["Last look", gen ? agoAt(gen) : "not yet"], ["Looks every", every + " s"], ["Fleet version", (snap && snap.fleet_version) || "?"],
+        ["Stages", T.stages + (counts.length ? ": " + counts.join(", ") : "")], ["Waiting", String(T.waiting)],
+        ["Done today", String(T.done)], ["Failed today", String(T.failed)], ["To collect", String(T.collect)]],
+      cmd: LIVE ? "fleet status" : "fleet studio",
+      pos: () => ({ gx: 4.65, gy: 6.35, z: 2, pose: "sit" }), under: (g, t, s) => chair(g, s[0], s[1] + 1, "#a3322a") });
+    const silent = stagesNow.filter((st) => !st.node.reachable && !st.node.pending).map((st) => st.node.name);
+    add({ key: "lookout", name: "Iris", role: "Lookout", where: "On the water tower", group: LOT, order: 1,
+      stands: "the look at every VPS, one SSH round each time",
+      quote: !gen ? "Climbing up. First look in a moment." : silent.length ? T.answering + " of " + T.stages + " stages answered at " + clock(gen / 1000) + ". Nothing from " + silent.join(", ") + "."
+        : "All " + plural(T.stages, "stage", "stages") + " answered at " + clock(gen / 1000) + ". Next look in " + every + " seconds.",
+      look: look("lookout", { shirt: "#7a5b2f", pants: "#3f3a33", hat: "cap", hatC: "#c0392b" }),
+      params: [["Looks every", every + " s"], ["Last look", gen ? agoAt(gen) : "not yet"], ["Answering", T.answering + " of " + T.stages],
+        ["This page asks", LIVE ? "every 5 s" : "every 20 s (example)"]],
+      cmd: "fleet ping",
+      pos: (t) => ({ gx: 2.3 + 1.2, gy: towerBase + 2.6 + 1.2, z: 54, pose: "look", flip: !reduced && Math.floor(t / 7000) % 3 === 2 }) });
+    const errs = stagesNow.filter((st) => !st.node.reachable && !st.node.pending);
+    add({ key: "guard", name: "Sam", role: "Gate guard", where: "The front gate · your private road", group: LOT, order: 2,
+      stands: "the road to the VPSs, your Tailscale network",
+      quote: errs.length ? errs[0].node.name + " hasn't come through the gate: " + short(errs[0].node.error || "no answer", 70) : "Every stage is on your private road. Nobody else gets through this gate.",
+      look: look("guard", { shirt: "#2b3a5c", pants: "#1f2638", hat: "guard", hatC: "#1f2a44" }),
+      params: [["Road", "Tailscale, your private network"], ["Reachable", T.answering + " of " + T.stages]]
+        .concat(errs.map((st) => [st.node.name, short(st.node.error || "no answer", 90)])),
+      cmd: errs.length ? "fleet ping " + errs[0].node.name : null,
+      pos: (t) => ({ gx: G - 3.05, gy: 9.7, pose: courierNear(t) ? "up" : "stand", flip: true }) });
+    const perStage = stagesNow.map((st) => [st, Number(((st.node.status || {}).queue || {}).unpulled) || 0]).filter((x) => x[1] > 0);
+    const home = [G - 5.9, 10.3];
+    const steps = [];
+    if (perStage.length) {  // the rounds: right lane from the gate in, then the left lane outward, then home
+      const order = perStage.slice().sort((a, b) => (b[0].edge === "R") - (a[0].edge === "R") ||
+        (a[0].edge === "R" ? b[0].base - a[0].base : a[0].base - b[0].base));
+      let here = home, onLane = false, onLeft = false;
+      steps.push({ at: home, dir: "x-", ms: 3000 });
+      for (const [st] of order) {
+        const pts = [here];
+        if (!onLane) pts.push([G - 5.9, 8]);
+        if (st.edge === "L" && !onLeft) pts.push([8, 8]);
+        pts.push(lanePt(st));
+        steps.push({ route: route(pts) });
+        steps.push({ at: lanePt(st), dir: st.edge === "R" ? "x-" : "y+", ms: 2600, stop: st });
+        here = lanePt(st); onLane = true; onLeft = st.edge === "L";
+      }
+      const back = [here];
+      if (onLeft) back.push([8, 8]);
+      back.push([G - 5.9, 8], home);
+      steps.push({ route: route(back) });
+    }
+    const van = schedule(steps);
+    courierAt = (t) => (steps.length ? van(t) : { gx: home[0], gy: home[1], dir: "x-", moving: false });
+    add({ key: "courier", name: "Rio", role: "Courier", where: "The pickup bay by the gate", group: LOT, order: 3,
+      stands: "finished videos that wait to be collected on your PC",
+      quote: T.collect ? plural(T.collect, "finished film waits", "finished films wait") + " at the stage doors. Run fleet pull and I'll bring them home."
+        : "Nothing to pick up. Every finished film is already home.",
+      look: look("courier", { shirt: "#8a5a2b", pants: "#3b3328", hat: "cap", hatC: "#e3b54b", prop: "can" }),
+      params: [["To collect", String(T.collect)]].concat(perStage.map(([st, k]) => [st.node.name, plural(k, "film", "films")]))
+        .concat([["Collected today", String(T.pulledToday)]]),
+      cmd: T.collect ? "fleet pull" : null,
+      pos: (t) => { const v = courierAt(t); return v.moving || (v.step && v.step.stop) ? { gx: v.gx, gy: v.gy, hidden: true } : { gx: G - 4.75, gy: 11.05, flip: true }; } });
+    const nw = T.newest;
+    add({ key: "marquee", name: "The marquee", role: "Now showing", where: "By the red carpet", group: LOT, order: 4, object: "marquee",
+      stands: "the newest video finished in the last 24 hours",
+      quote: nw ? "Now showing: " + titled(nw) + ", from stage " + T.newestOn.no + "." : "Nothing premiered in the last 24 hours yet.",
+      params: [["Now showing", nw ? short(nw.title || nw.id, 80) : "nothing yet"], ["Finished", nw ? agoAt(T.newestAt) : "-"],
+        ["On", nw ? T.newestOn.node.name : "-"], ["Done today", String(T.done)], ["Failed today", String(T.failed)]],
+      cmd: nw ? "fleet jobs " + T.newestOn.node.name + " --state done" : null });
+  }
+  let courierAt = () => ({ gx: G - 5.9, gy: 10.3, dir: "x-", moving: false });
+  function courierNear(t) { const v = courierAt(t); return v.moving && Math.abs(v.gx - (G - 3)) < 2.2 && Math.abs(v.gy - 9) < 2.5; }
+
+  const inward = (st) => st.edge === "R";   // facing the middle of the lot
+  const outward = (st) => st.edge === "L";
+  const take = (j) => String(j.attempts || 1) + (Number(j.limit_waits) ? " (after " + plural(Number(j.limit_waits), "usage-limit wait", "usage-limit waits") + ")" : "");
+  const memText = (s) => (s.mem_available_mb != null ? (s.mem_available_mb / 1024).toFixed(1) + " GB free of " + ((s.mem_total_mb || 0) / 1024).toFixed(1) + " GB" : "?");
+  function inTime(t) { const m = Math.max(0, Math.round((t - Date.now()) / 60000)); return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min"; }
+  const hhmm = (sec) => { const d = new Date(sec * 1000); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
+
+  function stageCast(st, now, cut) {
+    const n = st.node, s = n.status || {}, q = s.queue || {}, ss = st.ss, nm = n.name, grp = st.key;
+    const chs = (n.channels || []).join(", ") || "no channel yet", where = "Stage " + st.no + " · " + nm;
+    const jobs = jobsOf(n), up = n.reachable;
+    const running = jobs.filter((j) => j.state === "running");
+    const inbox = jobs.filter((j) => j.state === "inbox").sort((a, b) => (when(a.submitted_at) || 0) - (when(b.submitted_at) || 0));
+    const outgoing = jobs.filter((j) => j.state === "outgoing");
+    const fin = finishedSince(n, cut), done = fin.filter((j) => j.state === "done"), failed = fin.filter((j) => j.state === "failed");
+    const prov = claudeOf(s), lim = limitOf(s), unpulled = Number(q.unpulled) || 0;
+    const disk = s.disk_free_gb != null ? gb(s.disk_free_gb) + " free (" + s.disk_free_pct + "%)" : "?";
+    const gen = when(snap && snap.generated_at);
+    add({ key: st.key + ":stage", name: "Stage " + st.no, role: "Sound stage", where: nm + " · " + chs, group: grp, order: 0, object: "stage",
+      stands: "the VPS " + nm,
+      quote: "Stage " + st.no + " makes " + chs + ". " + ss.sign + ": " + ss.note + ".",
+      params: up ? [["VPS", nm], ["Channels", chs], ["Lamp", ss.sign + ", " + ss.note], ["Sessions", (Number(q.running) || 0) + " of " + (s.max_parallel || n.sessions || 1) + " in use"],
+        ["Disk", disk], ["Load", (s.load1 != null ? Number(s.load1).toFixed(2) : "?") + " on " + (s.cpus || "?") + " CPUs"], ["Memory", memText(s)],
+        ["Up for", s.uptime_s != null ? upFor(s.uptime_s) : "?"], ["Worker", s.worker_version || "?"], ["Reboot", s.reboot_required ? "needed for security updates" : "not needed"]]
+        : [["VPS", nm], ["Channels", chs], ["Lamp", ss.sign + ", " + ss.note]].concat(n.error ? [["Error", n.error]] : []),
+      cmd: "fleet status " + nm });
+    const load = Number(s.load1) || 0, cpus = Number(s.cpus) || 1, busy = load / cpus;
+    add({ key: st.key + ":unit", name: "Air handler", role: "Rooftop unit", where, group: grp, order: 50, object: "unit", busy: up ? busy : 0,
+      stands: "how hard " + nm + " works: load, memory and disk",
+      quote: !up ? "Silent. No word from this VPS." : busy > 0.85 ? "Roaring: load " + load.toFixed(2) + " on " + plural(cpus, "CPU", "CPUs") + "."
+        : busy > 0.3 ? "Humming along at load " + load.toFixed(2) + "." : "Barely ticking over.",
+      params: up ? [["Load", load.toFixed(2) + " on " + plural(cpus, "CPU", "CPUs")], ["Memory", memText(s)], ["Disk", disk + (s.min_free_gb != null ? ", new jobs wait below " + gb(s.min_free_gb) : "")], ["Up for", s.uptime_s != null ? upFor(s.uptime_s) : "?"]] : [["Load", "no report"]],
+      cmd: null });
+    const smSaid = { rolling: "Quiet on set! Rolling on " + plural(running.length || 1, "video", "videos") + ".",
+      standby: "Standing by. The next " + ((n.channels || [])[0] || "") + " script starts as soon as it comes in.",
+      hold: "The usage limit's reached. The queue picks up by itself at " + (lim ? clock(Number(lim.until)) : "the reset") + ".",
+      dark: "Stage is dark: " + (s.paused_reason || "paused") + ". Run fleet resume " + nm + " to open up again.",
+      trouble: cap(ss.note) + ". Somebody take a look.", pending: "Checking in. One moment." }[ss.state];
+    if (up || n.pending) {
+      add({ key: st.key + ":manager", role: "Stage manager", where, group: grp, order: 1, bubble: n.pending ? "…" : null,
+        stands: "the worker on " + nm + " that starts each job",
+        quote: smSaid, look: look(st.key + ":manager", { shirt: "#2f3d4f", pants: "#2a2a30", hat: "headset", prop: "clipboard" }),
+        params: n.pending ? [["Worker", "checking"]] : [["Worker", (s.service || "?") + (s.worker_version ? ", version " + s.worker_version : "")],
+          ["Heartbeat", s.heartbeat_age_s != null ? s.heartbeat_age_s + " s ago" : "?"], ["Sessions", running.length + " of " + (s.max_parallel || 1) + " in use"],
+          ["Queue", (q.inbox || 0) + " waiting, " + (q.running || 0) + " running, " + (q.done || 0) + " done, " + (q.failed || 0) + " failed"],
+          ["Paused", s.paused ? "yes" + (s.paused_reason ? ": " + s.paused_reason : "") : "no"]].concat(Number(s.stuck_handovers) ? [["Stuck handovers", String(s.stuck_handovers)]] : []),
+        cmd: "fleet status " + nm, pos: spot(st, 0.85, 1.05, { flip: inward(st) }) });
+    }
+    running.forEach((j, k) => {
+      const a = (n.activity || {})[j.id] || null, kind = crewKind(a), C = CREW[kind];
+      const sl = [[3.05, 1.35], [1.75, 2.2], [3.4, 2.5]][k % 3], key = st.key + ":crew:" + j.id;
+      const act = activityText(a), stepAt = a && a.mtime ? a.mtime * 1000 : null;
+      const said = kind === "dp" ? "“" + short(act, 160) + "”" : kind === "operator" ? "Rolling on " + titled(j) + ". The session hasn't taken a step yet." : sentence(act);
+      add({ key, role: C.role, where, group: grp, order: 2 + k,
+        stands: "the job " + titled(j) + ", by its latest step: " + C.stands,
+        quote: said, look: look(key, { shirt: C.shirt, pants: "#2f2f36", hat: C.hat, hatC: "#1f1f24", prop: C.prop }),
+        params: [["Scene", j.title || "(no title)"], ["Job", j.id], ["Channel", j.channel || "?"], ["Take", take(j)],
+          ["Rolling for", j.started_at ? span(when(j.started_at)) : "?"], ["Now", act || "nothing yet"], ["Step", stepAt ? agoAt(stepAt) : "-"]],
+        cmd: "fleet logs " + nm + " " + j.id + " -f",
+        pos: spot(st, sl[0], sl[1], { pose: C.pose, flip: outward(st) }),
+        under: C.pose === "sit" ? (g, t, p) => chair(g, p[0], p[1] + 1, st.color, outward(st)) : null });
+      if (!/^(operator|dp)$/.test(kind)) { const d = SG(st, sl[0] + 0.6, sl[1] - 0.22); props.push({ gx: d[0], gy: d[1], key, draw: (g, t) => deskProp(g, kind, d[0], d[1], t, true) }); }
+      if (k === 0) { const c = SG(st, 2.1, 0.95); props.push({ gx: c[0], gy: c[1], key, draw: (g, t) => { const p = P(c[0], c[1]); camera(g, p[0], p[1], st.edge === "L", t, true); } }); }
+    });
+    if (up || n.pending) {
+      const ok = prov ? prov.ok !== false : true;
+      const where2 = ss.state === "rolling" ? "set" : st.dnd ? "trailer" : ok ? "chair" : "trouble";
+      const said = where2 === "set" ? "On set for " + titled(running[0] || {}) + ". Ready for my close-up."
+        : st.dnd && lim ? "Do not disturb until " + clock(Number(lim.until)) + ". " + sentence(lim.message || "My usage limit is used up")
+          : st.dnd ? "Resting in my trailer while the stage is dark." : !ok ? "I can't work yet: " + (prov.error || "not ready") + "." : "Ready when you are.";
+      add({ key: st.key + ":star", name: "Claude", role: "Star of stage " + st.no, where, group: grp, order: 1.5, bubble: where2 === "trouble" ? "?" : null,
+        stands: "Claude Code on " + nm + ", signed in with this VPS's own account", quote: said,
+        look: { skin: "#f2d0b4", hair: "#d9a441", style: "long", shirt: "#f4efe2", pants: "#e3b54b", shoes: "#a3322a", shades: true },
+        params: prov ? [["Provider", prov.provider || "claude"], ["Version", prov.version || "?"], ["Signed in with", prov.auth || "?"],
+          ["Ready", prov.ok ? "yes" : "no" + (prov.error ? ": " + prov.error : "")],
+          ["Credential age", prov.credential_age_days != null ? plural(Number(prov.credential_age_days), "day", "days") : "?"],
+          ["Usage limit", lim ? (lim.kind || "limit") + ", resets " + clock(Number(lim.until)) + " (in " + inTime(Number(lim.until) * 1000) + ")" : "none"]] : [["Provider", "no report yet"]],
+        cmd: ok ? null : "fleet health",
+        pos: where2 === "set" ? spot(st, 2.1, -0.22, { flip: inward(st) }) : where2 === "trailer" ? spot(st, 6, 1.4, { hidden: true })
+          : spot(st, 4.95, 3.0, { pose: where2 === "chair" ? "sit" : "stand", flip: inward(st) }),
+        under: where2 === "chair" ? (g, t, p) => chair(g, p[0], p[1] + 1, "#e3b54b", inward(st)) : null });
+    }
+    inbox.slice(0, 5).forEach((j, k) => {
+      const held = /usage limit/i.test(j.reason || ""), key = st.key + ":pa:" + j.id;
+      add({ key, role: "Production assistant", where, group: grp, order: 10 + k, bubble: k === 4 && inbox.length > 5 ? "+" + (inbox.length - 5) : null,
+        stands: "a job in the queue: " + titled(j),
+        quote: held ? "Holding " + titled(j) + " until the limit resets." : k === 0 ? "Next up: " + titled(j) + "." : "Number " + (k + 1) + " in line with " + titled(j) + ".",
+        look: look(key, { shirt: "#3f7cac", pants: "#3b3f46", prop: "script" }),
+        params: [["Script", j.title || "(no title)"], ["Job", j.id], ["Channel", j.channel || "?"], ["In line", (k + 1) + " of " + inbox.length],
+          ["Waiting since", j.submitted_at ? agoAt(when(j.submitted_at)) : "?"]].concat(j.reason ? [["Note", localTimes(j.reason)]] : [])
+          .concat(Number(j.limit_waits) ? [["Take", take(j)]] : []),
+        cmd: "fleet jobs " + nm + " --state inbox", pos: spot(st, 4.45, 1.2 + k * 0.55, { flip: outward(st) }) });
+    });
+    outgoing.forEach((j, k) => {
+      const m = /\bto\s+([A-Za-z0-9._-]+)/i.exec(j.reason || ""), target = m ? stagesNow.find((x) => x.node.name === m[1]) : null;
+      const home = apronPt(st), steps = [];
+      if (target && target !== st) steps.push({ at: home, dir: st.edge === "R" ? "y+" : "x+", ms: 2500 }, { route: route(between(st, target)) },
+        { at: apronPt(target), dir: target.edge === "R" ? "y-" : "x-", ms: 2500 }, { route: route(between(target, st)) });
+      const sched = steps.length ? schedule(steps) : () => ({ gx: home[0], gy: home[1], dir: st.edge === "R" ? "y+" : "x+", moving: false });
+      const key = st.key + ":cart:" + j.id;
+      add({ key, role: "Cart driver", where, group: grp, order: 20 + k,
+        stands: "a job you asked to move to another VPS",
+        quote: target ? "Taking " + titled(j) + " over to stage " + target.no + " (" + target.node.name + "), like you asked." : "Moving " + titled(j) + ": " + (j.reason || "a handover") + ".",
+        look: look(key, { shirt: "#c0392b", pants: "#2f2f36", hat: "cap", hatC: "#f2efe6", pose: "sit" }),
+        params: [["Script", j.title || "(no title)"], ["Job", j.id], ["From", nm], ["To", target ? target.node.name : m ? m[1] : "?"]].concat(j.reason ? [["Note", localTimes(j.reason)]] : []),
+        cmd: "fleet jobs " + nm + " --state outgoing", cart: sched });
+    });
+    if (ss.state === "hold") {
+      const lp = lim ? [["Limit", lim.kind || "usage limit"], ["Message", lim.message || "-"], ["Since", lim.since ? agoAt(Number(lim.since) * 1000) : "?"],
+        ["Resets", clock(Number(lim.until)) + " (in " + inTime(Number(lim.until) * 1000) + ")"], ["Waiting", plural(inbox.length, "job", "jobs")]] : [];
+      [[1.7, 1.5, "Gaffer"], [2.95, 1.85, "Grip"]].forEach(([a, v, r], k) => add({ key: st.key + ":sleeper:" + k, role: r + ", asleep", where, group: grp, order: 30 + k, zzz: true,
+        stands: "the usage limit this stage waits out", quote: "Zzz… wake us at " + (lim ? clock(Number(lim.until)) : "the reset") + ".",
+        look: look(st.key + ":sleeper:" + k, { shirt: k ? "#55606b" : "#6b4f3f", pants: "#2f2f36", hat: k ? "cap" : null, hatC: "#3b3f46" }),
+        params: lp, cmd: null, pos: spot(st, a, v, { pose: "sleep", flip: k ? inward(st) : outward(st) }),
+        under: (g, t, p) => chair(g, p[0], p[1] + 1, "#5b5f63", k ? inward(st) : outward(st)) }));
+      const c = SG(st, 3.95, 0.95);
+      add({ key: st.key + ":clock", name: "Reset clock", role: "When the limit resets", where, group: grp, order: 32, object: "clock",
+        stands: "the time the usage limit resets", quote: lim ? "The limit resets at " + clock(Number(lim.until)) + ", in " + inTime(Number(lim.until) * 1000) + "." : "Waiting for the reset.",
+        params: lp, cmd: null, at: c, drawObj: (g) => { const p = P(c[0], c[1]); clockBoard(g, p[0], p[1], lim ? hhmm(Number(lim.until)) : "--:--"); return { x: p[0] - 11, y: p[1] - 14, w: 22, h: 14 }; } });
+    }
+    if (ss.state === "dark") {
+      add({ key: st.key + ":janitor", role: "Night janitor", where, group: grp, order: 30,
+        stands: "the pause on " + nm, quote: "Lights are off: " + (s.paused_reason || "paused") + ". Run fleet resume " + nm + " to open up again.",
+        look: look(st.key + ":janitor", { shirt: "#6d7075", pants: "#55585d", hat: "cap", hatC: "#3b3f46", prop: "broom" }),
+        params: [["Paused", "yes"], ["Reason", s.paused_reason || "none given"], ["Waiting", plural(inbox.length, "job", "jobs")]],
+        cmd: "fleet resume " + nm,
+        pos: (t) => {
+          const k = reduced ? 0.3 : (t / 9000) % 2, f = k < 1 ? k : 2 - k, g2 = SG(st, 0.8 + f * 3.2, 1.65);
+          return { gx: g2[0], gy: g2[1], pose: reduced ? "stand" : Math.floor(t / 260) % 2 ? "walkA" : "walkB", flip: (k < 1) === (st.edge === "L") };
+        } });
+    }
+    const fault = ss.state === "trouble" ? ss.note : null, stuck = Number(s.stuck_handovers) || 0;
+    if (up && (fault || s.reboot_required || stuck)) {
+      const what = fault ? cap(fault) : s.reboot_required ? "Needs a reboot for security updates" : plural(stuck, "handover is stuck", "handovers are stuck");
+      add({ key: st.key + ":electrician", role: "Electrician", where, group: grp, order: 31, sparks: !!fault,
+        stands: "something on " + nm + " that needs a fix",
+        quote: fault ? sentence(what) + " This one needs you: ask the director, or run fleet health." : s.reboot_required
+          ? "Security updates are in. Reboot when the stage is quiet: fleet reboot waits while a job runs." : sentence(what) + " Run fleet health.",
+        look: look(st.key + ":electrician", { shirt: "#3b3f46", vest: "#ff8a2a", pants: "#2f3a4f", hat: "hard", hatC: "#f2c12e", prop: "wrench" }),
+        params: [["Problem", what], ["Reboot", s.reboot_required ? "needed" : "not needed"], ["Stuck handovers", String(stuck)], ["Disk", disk]],
+        cmd: fault ? "fleet health" : s.reboot_required ? "fleet reboot " + nm : "fleet health",
+        pos: spot(st, 4.2, 0.5, { pose: "up", flip: outward(st) }) });
+    }
+    if (!up && !n.pending) {
+      add({ key: st.key + ":search", role: "Search party", where, group: grp, order: 1, flashlight: true,
+        stands: "a VPS your PC cannot reach", quote: "Can't raise stage " + st.no + ". " + sentence(short(n.error || "No answer", 90)),
+        look: look(st.key + ":search", { shirt: "#c46a2a", pants: "#3b3328", hat: "hood", hatC: "#c46a2a", prop: "flashlight" }),
+        params: [["VPS", nm], ["Error", n.error || "no answer"], ["Last look", gen ? agoAt(gen) : "?"]], cmd: "fleet ping " + nm,
+        pos: (t) => {
+          const k = reduced ? 1 : t / 5200, g2 = SG(st, 2.5 + 1.9 * Math.cos(k), 1.6 + 0.75 * Math.sin(k));
+          const dx = -Math.sin(k) * (st.edge === "R" ? 1 : -1);
+          return { gx: g2[0], gy: g2[1], pose: reduced ? "stand" : Math.floor(t / 300) % 2 ? "walkA" : "walkB", flip: dx < 0 };
+        } });
+    }
+    if (unpulled) {
+      const c = SG(st, 0.32, 0.45);
+      add({ key: st.key + ":cans", name: "Film cans", role: "Finished, not collected", where, group: grp, order: 40, object: "cans",
+        stands: "finished videos on " + nm + " that are not on your PC yet", quote: plural(unpulled, "finished film waits", "finished films wait") + " to be collected.",
+        params: [["To collect", String(unpulled)], ["Finished today", String(done.length)]].concat(done.filter((j) => !j.pulled).slice(0, 3).map((j) => ["Film", short(j.title || j.id, 60)])),
+        cmd: "fleet pull " + nm, at: c, drawObj: (g) => { const p = P(c[0], c[1]); cans(g, p[0], p[1], unpulled); return { x: p[0] - 4, y: p[1] - 11, w: 15, h: 12 }; } });
+    }
+    if (up) {
+      const b = SG(st, 0.3, 1.9);
+      add({ key: st.key + ":board", name: "The dailies", role: "Today's board", where, group: grp, order: 41, object: "board",
+        stands: "the videos " + nm + " finished or failed in the last 24 hours",
+        quote: done.length || failed.length ? "Today: " + done.length + " done, " + failed.length + " failed." : "Nothing finished in the last 24 hours.",
+        params: [["Done today", String(done.length)], ["Failed today", String(failed.length)]]
+          .concat(failed.slice(0, 3).map((j) => ["Failed", short((j.title || j.id) + (j.reason ? ": " + localTimes(j.reason) : ""), 100)]))
+          .concat(done.slice(0, 3).map((j) => ["Done", short(j.title || j.id, 60) + ", " + ago(when(j.finished_at) || now)])),
+        cmd: failed.length ? "fleet logs " + nm + " " + failed[0].id : null,
+        at: b, drawObj: (g) => { const p = P(b[0], b[1]); board(g, p[0], p[1], done.length, failed.length); return { x: p[0] - 6, y: p[1] - 17, w: 12, h: 18 }; } });
+    }
+  }
+
+  function scenery() {
+    for (let d = 22; d < 2 * G - 11; d += 4.4) {
+      if (Math.abs(d - (G + 8)) < 5) continue;
+      for (const sgn of [-1, 1]) {
+        const gx = (d + sgn * 2.75) / 2, gy = (d - sgn * 2.75) / 2, h = 21 + (hash([d, sgn].join()) % 6);
+        props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); palm(g, p[0], p[1], h, sgn < 0); } });
+      }
+    }
+    lights.posts = [];
+    const post = (gx, gy) => { props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); lampPost(g, p[0], p[1]); } }); lights.posts.push(P(gx, gy)); };
+    for (let x = 11.5; x < G - 4; x += 7) post(x, 9.35);
+    for (let y = 12.5; y < G - 2; y += 7) post(9.35, y);
+    props.push({ gx: G - 3.4, gy: G - 3.4, key: "marquee", draw: (g, t) => marquee(g, t) });
+    props.push({ gx: G - 1.2, gy: 9.6, draw: (g) => gateFront(g) });
+    props.push({ key: "courier", pos: (t) => courierAt(t), draw: (g, t, v) => {
+      vehicle(g, v.gx, v.gy, v.dir, "van", "#f4f1e8");
+      const s = P(v.gx, v.gy);
+      if (v.step && v.step.stop) bubble(g, s[0], s[1] - 24, "!");
+      return { x: s[0] - 15, y: s[1] - 22, w: 30, h: 26 };
+    } });
+  }
+  function marquee(g, t) {
+    const p = P(G - 3.4, G - 3.4), bw = 50, bh = 21, bx = p[0] - 25, by = p[1] - 40;
+    px(g, p[0] - 20, by + bh, 2, 40 - bh, "#3a3530"); px(g, p[0] + 18, by + bh, 2, 40 - bh, "#3a3530");
+    px(g, bx - 1, by - 1, bw + 2, bh + 2, "#1d1714"); px(g, bx, by, bw, bh, "#2a1f1c"); px(g, bx + 1, by + 1, bw - 2, 7, "#b3262e");
+    text(g, "NOW SHOWING", bx + Math.floor((bw - textW("NOW SHOWING")) / 2), by + 2, "#f7e7b0");
+    const T = lot.T, title = T && T.newest ? (T.newest.title || T.newest.id) : "COMING SOON", tw = textW(title);
+    g.save(); g.beginPath(); g.rect(bx + 2, by + 10, bw - 4, 8); g.clip();
+    const off = reduced || tw <= bw - 6 ? Math.max(0, Math.floor((bw - 4 - tw) / 2)) : (bw - 4) - Math.floor(t / 70) % (tw + bw);
+    text(g, title, bx + 2 + off, by + 12, "#fff3d6");
+    g.restore();
+    const n = reduced ? 0 : Math.floor(t / 200);
+    for (let i = 0, k = 0; i < bw; i += 3, k++) { const c = (k + n) % 3 ? "#ffe39a" : "#6e5a3a"; px(g, bx + i, by - 2, 1, 1, c); px(g, bx + bw - 1 - i, by + bh + 1, 1, 1, c); }
+    for (let j = 0, k = 0; j < bh; j += 3, k++) { const c = (k + n) % 3 ? "#ffe39a" : "#6e5a3a"; px(g, bx - 2, by + bh - 1 - j, 1, 1, c); px(g, bx + bw + 1, by + j, 1, 1, c); }
+    px(g, p[0] - 1, by - 6, 3, 3, "#e3b54b"); px(g, p[0], by - 7, 1, 5, "#e3b54b");
+    lights.marquee = [bx, by, bw, bh];
+    return { x: bx - 2, y: by - 7, w: bw + 4, h: 48 };
+  }
+  function gateFront(g) {
+    box3(g, G - 1.45, 9.3, G - 0.95, 9.8, 0, 25, "#e8e0cf");
+    box(g, G - 1.4, 6.1, G - 1.0, 9.9, 18, 25, "#d9cfba", "#e8e0cf", "#cbbfa6");
+    const p = P(G - 1.0, 9.55, 24);
+    text(g, "HERMES", p[0] + 1, p[1], "#8f2f27", { shear: -1 });
+    for (let i = 0; i < 12; i++) { const y0 = 9.25 - i * 0.2, a = P(G - 1.2, y0, 8), b = P(G - 1.2, y0 - 0.2, 8); seg(g, a, b, i % 2 ? "#f2efe6" : "#d6402f"); seg(g, [a[0], a[1] + 1], [b[0], b[1] + 1], i % 2 ? "#d9d4c8" : "#a8302a"); }
+  }
+  function bubble(g, x, y, s) {
+    const w = textW(s) + 4;
+    px(g, x - Math.ceil(w / 2), y - 7, w, 7, "#fbf8f0"); px(g, x - Math.ceil(w / 2) - 1, y - 6, w + 2, 5, "#fbf8f0");
+    px(g, x - 1, y, 2, 1, "#fbf8f0");
+    text(g, s, x - Math.ceil(w / 2) + 2, y - 6, "#1d1a15");
+  }
+
+  // ---------------------------------------------------------------- one frame of film
+  let skyC = null, skyG = null, lotC = null, lotG = null, sceneC = null, sceneG = null;
+  let dirty = true, curPer = "", hits = [], selected = null, hover = null;
+  function layers(per) {
+    if (!skyC || skyC.width !== W || skyC.height !== H) {
+      [skyC, skyG] = mk(W, H); [lotC, lotG] = mk(W, H); [sceneC, sceneG] = mk(W, H);
+      cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
+      fit();
+    }
+    skyG.clearRect(0, 0, W, H); drawSky(skyG, per);
+    lotG.clearRect(0, 0, W, H);
+    staticHits = []; lights.windows = []; lights.doors = [];
+    drawGround(lotG);
+    drawOffice(lotG);
+    const things = stagesNow.map((st) => ({ d: st.base + 4.5, f: () => drawStage(lotG, st) }));
+    things.push({ d: towerBase + 4.9, f: () => drawTower(lotG) });
+    things.sort((a, b) => a.d - b.d).forEach((x) => x.f());
+    drawFront(lotG);
+    placeLabels();
+  }
+  function drawPerson(g, t, m) {
+    const p = m._p, s = P(p.gx, p.gy, p.z || 0), pose = p.pose || "stand", seated = pose === "sit" || pose === "sleep";
+    if (m.under) m.under(g, t, s, p);
+    const spr = personSprite(Object.assign({}, m.look, { pose }), !!p.flip);
+    const bob = !reduced && pose === "stand" && (t + m.phase) % 5200 < 200 ? 1 : 0;
+    g.drawImage(spr, s[0] - 4, s[1] - 15 - bob - (seated ? 2 : 0));
+    if (m.flashlight) lights.torch = { x: s[0] + (p.flip ? -5 : 5), y: s[1] - 8, d: p.flip ? -1 : 1 };
+    return { x: s[0] - 5, y: s[1] - 18 - (seated ? 2 : 0), w: 11, h: 20 };
+  }
+  function drawCart(g, t, m) {
+    const v = m._v, s = P(v.gx, v.gy), flip = v.dir === "x-" || v.dir === "y+";
+    vehicle(g, v.gx, v.gy, v.dir, "cart", "#f2efe6");
+    g.drawImage(personSprite(Object.assign({}, m.look, { pose: "sit" }), flip), s[0] - 4, s[1] - 21);
+    px(g, s[0] + (flip ? 3 : -5), s[1] - 8, 3, 2, "#f4f1e8");
+    return { x: s[0] - 9, y: s[1] - 23, w: 18, h: 25 };
+  }
+  function frame(t) {
+    const per = period();
+    if (per !== curPer || dirty) { layers(per); curPer = per; dirty = false; }
+    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+    ctx.drawImage(skyC, 0, 0);
+    if (per !== "night") clouds(ctx, t, per); else beams(ctx, t);
+    const g = sceneG;
+    g.clearRect(0, 0, W, H);
+    g.drawImage(lotC, 0, 0);
+    const items = [];
+    lights.torch = null;
+    for (const m of cast) {
+      if (m.pos) { const p = m.pos(t); m._p = p; if (!p.hidden) items.push({ d: p.gx + p.gy, m, kind: "person" }); }
+      else if (m.cart) { const v = m.cart(t); m._v = v; items.push({ d: v.gx + v.gy, m, kind: "cart" }); }
+      else if (m.drawObj) items.push({ d: m.at[0] + m.at[1], m, kind: "obj" });
+    }
+    for (const pr of props) {
+      if (pr.pos) { const v = pr.pos(t); pr._v = v; items.push({ d: v.gx + v.gy + 0.01, pr }); }
+      else items.push({ d: pr.gx + pr.gy, pr });
+    }
+    items.sort((a, b) => a.d - b.d);
+    hits = [];
+    for (const it of items) {
+      let r = null, key = null;
+      if (it.pr) { r = it.pr.draw(g, t, it.pr._v); key = it.pr.key || null; }
+      else if (it.kind === "person") { r = drawPerson(g, t, it.m); key = it.m.key; }
+      else if (it.kind === "cart") { r = drawCart(g, t, it.m); key = it.m.key; }
+      else { r = it.m.drawObj(g, t); key = it.m.key; }
+      if (r && key && castBy.has(key)) hits.push(Object.assign({ key }, r));
+    }
+    effects(g, t, per);
+    if (TINT[per]) {
+      g.globalCompositeOperation = "source-atop"; g.globalAlpha = TINT[per][1];
+      px(g, 0, 0, W, H, TINT[per][0]);
+      g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+    }
+    ctx.drawImage(sceneC, 0, 0);
+    if (per !== "day") glow(ctx, t, per);
+    lamps(ctx, t, per);
+    const r = selected && rectOf(selected);
+    if (r) arrow(ctx, r.x + r.w / 2, r.y - 2 - (reduced ? 0 : Math.floor(t / 320) % 2));
+  }
+  function rectOf(key) {
+    for (let i = hits.length - 1; i >= 0; i--) if (hits[i].key === key) return hits[i];
+    return staticHits.filter((h) => h.key === key).sort((a, b) => a.pri - b.pri)[0] || null;
+  }
+  function arrow(g, x, y) {
+    x = Math.round(x); y = Math.round(y);
+    for (let i = 0; i < 4; i++) { px(g, x - 4 + i, y - 6 + i, 9 - 2 * i, 1, "#1d1a15"); }
+    px(g, x - 4, y - 7, 9, 1, "#1d1a15"); px(g, x, y - 2, 1, 1, "#1d1a15");
+    for (let i = 0; i < 3; i++) px(g, x - 3 + i, y - 6 + i, 7 - 2 * i, 1, "#f2c12e");
+    px(g, x - 3, y - 6, 2, 1, "#fff3b0");
+  }
+
+  function clouds(g, t, per) {
+    const col = per === "dusk" ? "#f2b8a2" : "#ffffff", sh = per === "dusk" ? "#c98a86" : "#dbe7ef";
+    for (let i = 0; i < 4; i++) {
+      const w = 24 + ((i * 11) % 18), speed = 0.0035 + i * 0.0012;
+      const x = Math.round(((reduced ? i * 140 : t * speed + i * 157) % (W + 90)) - 45), y = 7 + ((i * 13) % 24);
+      px(g, x, y + 2, w, 4, col); px(g, x + 4, y, w - 10, 3, col); px(g, x + 8, y - 2, w - 18, 3, col); px(g, x + 2, y + 6, w - 4, 1, sh);
+    }
+  }
+  function beams(g, t) {  // two searchlights behind the lot, for the night premiere
+    g.save(); g.globalCompositeOperation = "lighter";
+    [P(-1.5, 15, 10), P(15, -1.5, 10)].forEach((b, i) => {
+      const ang = -Math.PI / 2 + (i ? 0.32 : -0.32) + (reduced ? 0 : Math.sin(t / 3400 + i * 2.2) * 0.42);
+      for (const [w, a] of [[0.09, 0.06], [0.045, 0.08]]) {
+        g.globalAlpha = a;
+        poly(g, [b, [b[0] + Math.cos(ang - w) * 300, b[1] + Math.sin(ang - w) * 300], [b[0] + Math.cos(ang + w) * 300, b[1] + Math.sin(ang + w) * 300]], "#c9d8ff");
+      }
+    });
+    g.restore();
+  }
+  function effects(g, t, per) {
+    for (const m of cast) {
+      const p = m._p;
+      if (!p || p.hidden) continue;
+      const s = P(p.gx, p.gy, p.z || 0);
+      if (m.zzz) {
+        const k = reduced ? 0.4 : ((t + m.phase) % 2600) / 2600;
+        text(g, "Z", s[0] + 3 + Math.round(k * 3), s[1] - 21 - Math.round(k * 7), "#f7f4ec");
+        if (k > 0.45) text(g, "Z", s[0] + 7, s[1] - 27 - Math.round((k - 0.45) * 8), "#cfcabd");
+      }
+      if (m.bubble) bubble(g, s[0], s[1] - 19, m.bubble === "…" ? "..." : m.bubble);
+      if (m.sparks && !reduced && (t + m.phase) % 1700 < 280) {
+        for (let i = 0; i < 6; i++) px(g, s[0] - 5 + Math.floor((t / 37 + i * 7) % 10), s[1] - 17 + Math.floor((t / 23 + i * 5) % 8), 1, 1, i % 2 ? "#fff3a0" : "#ffb347");
+      }
+    }
+    const v = courierAt(t);
+    if (v && v.step && v.step.stop) {  // the courier counts the cans at the door
+      const c = castBy.get(v.step.stop.key + ":cans");
+      if (c && !reduced && t % 900 < 450) { const p = P(c.at[0], c.at[1]); px(g, p[0] + 2, p[1] - 14, 1, 2, "#f2c12e"); }
+    }
+    for (const st of stagesNow) {
+      const um = castBy.get(st.key + ":unit"), puffs = um && st.unit ? Math.min(5, Math.round(um.busy * 4 + 0.4)) : 0;
+      for (let i = 0; i < puffs; i++) {
+        const k = reduced ? i / 5 : (t / 2600 + i / puffs + (hash(st.key) % 7) / 7) % 1;
+        const x = st.unit[0] + Math.round(Math.sin(k * 6 + i) * 2 + k * 4), y = st.unit[1] - Math.round(k * 16), r = 1 + Math.round(k * 2);
+        g.globalAlpha = 0.7 * (1 - k); px(g, x - r, y - r, 2 * r, 2 * r, "#f4f6f6"); g.globalAlpha = 1;
+      }
+      if (st.ss.state === "offline") {  // fog over a stage nobody can reach
+        const r = rng(hash(st.key + "fog"));
+        g.globalAlpha = 0.33;
+        for (let i = 0; i < 40; i++) {
+          const p = S(st, r() * SW, -SD + r() * (SD + 2.6), r() * 34), dx = reduced ? 0 : Math.round(Math.sin(t / 1900 + i) * 3);
+          px(g, p[0] + dx - 4, p[1] - 1, 8, 3, "#d3d6dc");
+        }
+        g.globalAlpha = 1;
+      }
+    }
+    if (lights.fountain && !reduced) {
+      for (let i = 0; i < 5; i++) { const k = (t / 650 + i / 5) % 1; px(g, lights.fountain[0] - 5 + i * 2.5, lights.fountain[1] + 2 - Math.round(Math.sin(k * Math.PI) * 6), 1, 1, "#e2f4ff"); }
+    }
+  }
+  function pool(g, x, y, rx, col, a) {  // light on the ground: three rings, brightest in the middle
+    g.fillStyle = col;
+    for (let i = 3; i >= 1; i--) { g.globalAlpha = a / 3; ellipse(g, x, y, (rx * i) / 3, (rx * i) / 6, col); }
+    g.globalAlpha = 1;
+  }
+  function glow(g, t, per) {
+    const night = per === "night", A = night ? 1 : 0.55;
+    g.save(); g.globalCompositeOperation = "lighter";
+    for (const st of lights.doors) {
+      const p = S(st, 2.1, 1.3);
+      pool(g, p[0], p[1], 26, "#ffcf7a", 0.42 * A);
+      g.globalAlpha = 0.28 * A; spoly(g, st, [[1.2, 0, 0], [3.0, 0, 0], [3.0, 0, 22], [1.2, 0, 22]], "#ffd98a"); g.globalAlpha = 1;
+    }
+    for (const p of lights.posts) pool(g, p[0], p[1], 18, "#ffe2a0", 0.3 * A);
+    if (lights.marquee) { const [x, y, w, h] = lights.marquee; g.globalAlpha = 0.22 * A; px(g, x - 3, y - 3, w + 6, h + 6, "#ffd88a"); g.globalAlpha = 1; const c = P(G - 3.4, G - 3.4); pool(g, c[0], c[1], 30, "#ffd27a", 0.25 * A); }
+    if (lights.sign) { const [x, y, w, h] = lights.sign; g.globalAlpha = 0.3 * A; px(g, x - 2, y - 1, w + 4, h + 2, "#ffe9b8"); g.globalAlpha = 1; }
+    if (lights.fountain) pool(g, lights.fountain[0], lights.fountain[1] + 10, 16, "#7fd0ff", 0.18 * A);
+    if (lights.torch) {
+      const { x, y, d } = lights.torch;
+      g.globalAlpha = 0.3 * A; poly(g, [[x, y], [x + d * 26, y - 7], [x + d * 26, y + 9]], "#fff1b0"); g.globalAlpha = 1;
+    }
+    g.restore();
+    g.globalAlpha = night ? 0.9 : 0.6;
+    for (const w of lights.windows) poly(g, w, "#ffd27a");
+    for (const st of stagesNow) if (st.dnd && st.trailerWin) poly(g, st.trailerWin, "#ffd27a");
+    g.globalAlpha = 1;
+    for (const p of lights.posts) px(g, p[0] - 1, p[1] - 20, 3, 1, "#fff1c4");
+    if (lights.tower && (reduced || Math.floor(t / 900) % 2 === 0)) px(g, lights.tower[0], lights.tower[1], 1, 1, "#ff4b3a");
+  }
+  function lamps(g, t, per) {  // the lamp over every door: its colour is the stage's state
+    for (const st of stagesNow) {
+      const col = LAMP[st.ss.state];
+      if (!col || !st.lamp) continue;
+      const on = st.ss.state !== "rolling" || reduced || Math.floor(t / 650) % 2 === 0;
+      const [x, y] = st.lamp;
+      px(g, x - 1, y - 1, 3, 2, on ? col : shade(col, -0.55));
+      if (on) {
+        px(g, x, y - 1, 1, 1, shade(col, 0.55));
+        if (per !== "day") { g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.35; disc(g, x, y, 4, col); g.globalAlpha = 0.15; disc(g, x, y, 8, col); g.restore(); }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- the page around the still
+  const $ = (id) => document.getElementById(id);
+  const film = $("film"), screenEl = $("screen"), labelsEl = $("labels"), tagEl = $("nametag"), dialog = $("dialog");
+  const coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  let scale = 1;
+  function fit() {
+    if (!W) return;
+    const avail = Math.max(200, film.clientWidth - 20), dpr = window.devicePixelRatio || 1;
+    let cssW = avail;
+    const k = Math.floor((avail * dpr) / W);
+    if (k >= 2) cssW = (k * W) / dpr;
+    const maxH = Math.max(300, window.innerHeight * 0.84);
+    if ((cssW * H) / W > maxH) { const kk = Math.floor((maxH * dpr) / H); cssW = kk >= 2 ? (kk * W) / dpr : (maxH * W) / H; }
+    cv.style.width = cssW + "px"; cv.style.height = (cssW * H) / W + "px";
+    scale = cssW / W;
+    screenEl.classList.toggle("small", cssW < 700);
+    film.classList.toggle("stacked", cssW < 860 || (cssW * H) / W < 500);
+    placeLabels();
+  }
+  function placeLabels() {
+    labelsEl.innerHTML = stagesNow.map((st) => {
+      if (!st.top) return "";
+      const ch = (st.node.channels || [])[0];
+      return '<span class="tag" style="left:' + (st.top[0] * scale).toFixed(1) + "px;top:" + (st.top[1] * scale).toFixed(1) + 'px"><i style="--c:' + CSSC[st.ss.state] + '"></i>' +
+        esc(st.node.name) + "<span> · " + (ch ? esc(ch) + " · " : "") + esc(st.ss.sign) + "</span></span>";
+    }).join("");
+  }
+  function tally() {
+    const T = lot.T;
+    if (!T) return;
+    const words = { rolling: "rolling", standby: "standing by", hold: "on hold", trouble: "need a look", dark: "dark", offline: "no contact" };
+    const chips = Object.keys(words).filter((k) => T[k]).map((k) => '<li><i style="--c:' + CSSC[k] + '"></i><b>' + T[k] + "</b>" + words[k] + "</li>");
+    chips.push("<li><b>" + T.waiting + "</b>waiting</li>", "<li><b>" + T.done + "</b>done today</li>", "<li><b>" + T.collect + "</b>to collect</li>");
+    $("tally").innerHTML = chips.join("");
+    cv.setAttribute("aria-label", "The film lot: " + Object.keys(words).filter((k) => T[k]).map((k) => T[k] + " " + words[k]).join(", ") +
+      "; " + T.waiting + " waiting, " + T.done + " done today. The call sheet below lists everyone.");
+  }
+  function status() {
+    const badge = $("badge"), note = $("notice");
+    let msg = "", lost = false;
+    if (!LIVE) msg = "This is an example lot with made-up jobs. On your PC, run fleet studio to watch your own fleet live.";
+    else if (!contact) { msg = "Lost contact with fleet studio on your PC. If you closed it, start it again with fleet studio."; lost = true; }
+    else if (snap && snap.error) msg = String(snap.error);
+    note.hidden = !msg; note.textContent = msg; note.classList.toggle("lost", lost);
+    badge.textContent = !LIVE ? "Example" : contact ? "Live" : "Lost contact";
+    badge.className = "badge" + (LIVE && contact ? " live" : "") + (lost ? " lost" : "");
+  }
+  function tick() {
+    const gen = when(snap && snap.generated_at);
+    $("take").textContent = "Production still · Take " + Math.max(1, looks) + " · " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    $("looked").textContent = gen ? "Looked at the lot " + ago(gen) + ", every " + ((snap && snap.every) || 20) + " s" : "Looking at the lot…";
+  }
+
+  // The dialog box: who you picked, what they stand for, the real values and a command.
+  const D = { name: $("d-name"), role: $("d-role"), where: $("d-where"), said: $("d-said"), typed: $("d-typed"),
+    params: $("d-params"), cmd: $("d-cmd"), code: $("d-code"), copy: $("d-copy") };
+  let typing = 0, shownQuote = "";
+  function select(key, from) {
+    const m = castBy.get(key);
+    if (!m) return;
+    const fresh = key !== selected || dialog.hidden;
+    selected = key;
+    fillDialog(m, fresh);
+    const r = rectOf(key);  // keep the box clear of who you picked
+    dialog.classList.toggle("right", !!r && r.x + r.w / 2 < W * 0.48);
+    dialog.hidden = false;
+    markSheet();
+    if (from === "sheet") film.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
+  }
+  function fillDialog(m, fresh) {
+    D.name.textContent = m.name;
+    D.role.textContent = "· " + m.role;
+    D.where.textContent = m.where;
+    D.params.innerHTML = [["Stands for", cap(m.stands)]].concat(m.params || [])
+      .map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("");
+    D.cmd.hidden = !m.cmd;
+    if (D.code.textContent !== (m.cmd || "")) { D.code.textContent = m.cmd || ""; D.copy.textContent = "Copy"; }
+    if (fresh || m.quote !== shownQuote) type(m.quote, fresh);
+    drawPortrait($("portrait"), m);
+  }
+  function type(q, animate) {
+    shownQuote = q; D.said.textContent = q;
+    clearInterval(typing);
+    const el = D.typed;
+    if (reduced || !animate) { el.textContent = q; el.classList.add("done"); return; }
+    let i = 0;
+    el.textContent = ""; el.classList.remove("done");
+    typing = setInterval(() => { i += 2; el.textContent = q.slice(0, i); if (i >= q.length) { clearInterval(typing); el.classList.add("done"); } }, 28);
+  }
+  function closeDialog() { selected = null; dialog.hidden = true; clearInterval(typing); markSheet(); }
+  function step(d) {
+    if (!sheetKeys.length) return;
+    const i = sheetKeys.indexOf(selected);
+    select(sheetKeys[(i + d + sheetKeys.length) % sheetKeys.length]);
+  }
+  D.copy.addEventListener("click", () => {
+    const txt = D.code.textContent, ok = () => { D.copy.textContent = "Copied"; setTimeout(() => { D.copy.textContent = "Copy"; }, 1500); };
+    const byHand = () => {
+      const r = document.createRange(), s = window.getSelection();
+      r.selectNodeContents(D.code); s.removeAllRanges(); s.addRange(r);
+      try { if (document.execCommand("copy")) ok(); } catch (e) { /* it stays selected, to copy by hand */ }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, byHand); else byHand();
+  });
+  $("d-prev").addEventListener("click", () => step(-1));
+  $("d-next").addEventListener("click", () => step(1));
+  $("d-close").addEventListener("click", closeDialog);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !dialog.hidden) closeDialog();
+    else if (!dialog.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(document.activeElement)) {
+      step(e.key === "ArrowRight" ? 1 : -1); e.preventDefault();
+    }
+  });
+  function drawPortrait(c, m) {
+    const g = c.getContext("2d"), w = c.width, h = c.height, big = w > 9;
+    g.imageSmoothingEnabled = false;
+    g.clearRect(0, 0, w, h);
+    if (big) { px(g, 0, 0, w, h, "#2a2c46"); disc(g, Math.floor(w / 2), h - 8, 7, "#383b5e"); px(g, 0, h - 4, w, 4, "#202238"); }
+    if (m.look) g.drawImage(personSprite(Object.assign({}, m.look, { pose: "stand" }), false), Math.floor((w - 9) / 2), h - 16 - (big ? 3 : 0));
+    else icon(g, m.object, w, h);
+  }
+  function icon(g, kind, w, h) {
+    const x = Math.floor(w / 2), y = h - (w > 9 ? 4 : 1);
+    if (kind === "stage") { px(g, x - 4, y - 8, 9, 8, PAL.wall); px(g, x - 4, y - 10, 9, 2, PAL.roof); px(g, x - 3, y - 11, 7, 1, PAL.roof); px(g, x - 2, y - 5, 3, 5, PAL.door); px(g, x + 2, y - 7, 2, 3, PAL.number); }
+    else if (kind === "unit") { px(g, x - 4, y - 6, 9, 6, PAL.metal); px(g, x - 2, y - 7, 5, 1, "#4b5054"); px(g, x - 1, y - 11, 2, 2, "#f4f6f6"); px(g, x, y - 14, 2, 2, "#e4e8ea"); }
+    else if (kind === "cans") cans(g, x, y, 3);
+    else if (kind === "board") board(g, x, y, 4, 1);
+    else if (kind === "clock") { px(g, x - 4, y - 8, 9, 6, "#1c1b1a"); px(g, x - 3, y - 6, 2, 2, "#f3a51f"); px(g, x + 1, y - 6, 2, 2, "#f3a51f"); px(g, x - 3, y - 2, 1, 2, "#3b3a37"); px(g, x + 3, y - 2, 1, 2, "#3b3a37"); }
+    else if (kind === "marquee") { px(g, x - 4, y - 12, 9, 2, "#b3262e"); px(g, x - 4, y - 10, 9, 5, "#2a1f1c"); px(g, x - 3, y - 8, 7, 1, "#fff3d6"); px(g, x - 3, y - 5, 1, 5, "#3a3530"); px(g, x + 3, y - 5, 1, 5, "#3a3530"); px(g, x - 4, y - 13, 1, 1, "#ffe39a"); px(g, x + 4, y - 13, 1, 1, "#ffe39a"); }
+  }
+
+  // The call sheet: everyone, grouped by where they work.
+  let sheetKeys = [], sheetSig = "";
+  function renderSheet() {
+    const groups = [{ key: LOT, title: "The lot", c: "var(--gold)", sub: "your PC and the road" }]
+      .concat(stagesNow.map((st) => ({ key: st.key, title: "Stage " + st.no + " · " + st.node.name, c: CSSC[st.ss.state], sub: st.ss.sign })));
+    const keys = [], parts = [];
+    for (const gr of groups) {
+      const ms = cast.filter((m) => m.group === gr.key).sort((a, b) => a.order - b.order);
+      if (!ms.length) continue;
+      ms.forEach((m) => keys.push(m.key));
+      parts.push('<div class="group"><h3><i style="--c:' + gr.c + '"></i>' + esc(gr.title) + "<span>" + esc(gr.sub) + "</span></h3><ul>" +
+        ms.map((m) => '<li><button type="button" class="person" data-key="' + esc(m.key) + '" aria-pressed="false"><canvas width="9" height="16" aria-hidden="true"></canvas><span><b>' +
+          esc(m.name) + " <span>· " + esc(m.role) + "</span></b><small>" + esc(short(m.quote, 120)) + "</small></span></button></li>").join("") + "</ul></div>");
+    }
+    sheetKeys = keys;
+    const html = parts.join("");
+    if (html === sheetSig) { markSheet(); return; }
+    sheetSig = html;
+    const el = $("sheet"), was = document.activeElement && el.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+    el.innerHTML = html;
+    el.querySelectorAll("button.person").forEach((b) => drawPortrait(b.querySelector("canvas"), castBy.get(b.dataset.key)));
+    if (was) { const b = Array.from(el.querySelectorAll("button.person")).find((x) => x.dataset.key === was); if (b) b.focus(); }
+    markSheet();
+  }
+  function markSheet() {
+    $("sheet").querySelectorAll("button.person").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.key === selected)));
+  }
+  $("sheet").addEventListener("click", (e) => { const b = e.target.closest("button.person"); if (b) select(b.dataset.key, "sheet"); });
+
+  // Pointing and clicking on the lot.
+  function worldAt(e) { const r = cv.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H]; }
+  function pickAt(x, y) {
+    const pad = coarse ? 5 : 1;
+    for (let i = hits.length - 1; i >= 0; i--) {
+      const h = hits[i];
+      if (x >= h.x - pad && x <= h.x + h.w + pad && y >= h.y - pad && y <= h.y + h.h + pad) return h.key;
+    }
+    const s = staticHits.filter((h) => castBy.has(h.key) && x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h).sort((a, b) => a.pri - b.pri)[0];
+    return s ? s.key : null;
+  }
+  function showTag(key) {
+    const m = key && castBy.get(key), r = key && rectOf(key);
+    if (!m || !r) { tagEl.hidden = true; return; }
+    tagEl.innerHTML = esc(m.name) + " <span>· " + esc(m.role) + "</span>";
+    tagEl.style.left = ((r.x + r.w / 2) * scale).toFixed(1) + "px";
+    tagEl.style.top = (r.y * scale).toFixed(1) + "px";
+    tagEl.hidden = false;
+  }
+  cv.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") return;
+    const [x, y] = worldAt(e), key = pickAt(x, y);
+    if (key !== hover) { hover = key; cv.classList.toggle("point", !!key); }
+    showTag(key);
+  });
+  cv.addEventListener("pointerleave", () => { hover = null; showTag(null); cv.classList.remove("point"); });
+  cv.addEventListener("click", (e) => { const [x, y] = worldAt(e), key = pickAt(x, y); if (key) select(key); else closeDialog(); });
+  document.querySelectorAll(".sky button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.sky === skyMode));
+    b.addEventListener("click", () => {
+      skyMode = b.dataset.sky;
+      try { localStorage.setItem("fleet-lot-sky", skyMode); } catch (e) { /* remembered for this visit only */ }
+      document.querySelectorAll(".sky button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      dirty = true;
+    });
+  });
+
+  // ---------------------------------------------------------------- rolling
+  function refresh() {
+    build(); dirty = true;
+    status(); tally(); renderSheet(); tick();
+    if (selected) {
+      const m = castBy.get(selected);
+      if (m) fillDialog(m, false);
+      else { const st = selected.split(":")[0] + ":stage"; if (castBy.has(st)) select(st); else closeDialog(); }
+    }
+  }
+  let lastT = 0;
+  function loop(now) {
+    requestAnimationFrame(loop);
+    if (document.hidden || !snap || now - lastT < (reduced ? 1000 : 33)) return;
+    lastT = now;
+    frame(now);
+  }
+  // Opened as a plain file from the repository, the board sits next to this page as studio.html.
+  if (location.protocol === "file:") document.querySelectorAll('a[href="index.html"]').forEach((a) => { a.href = "studio.html"; });
+  FS.watch((seen, ok) => {
+    if (seen) snap = seen; else if (!snap) snap = { nodes: [] };
+    contact = ok; looks += 1;
+    refresh();
+  });
+  setInterval(() => { if (snap) refresh(); }, 5000);
+  setInterval(tick, 1000);
+  window.addEventListener("resize", fit);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

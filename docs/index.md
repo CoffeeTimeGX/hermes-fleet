@@ -36,7 +36,8 @@ flowchart LR
   New jobs for its channel wait there too, unless you move them.
 - **Watch it work.** `fleet studio` opens a page that shows the whole fleet like a film
   lot seen from above: every VPS is a sound stage, with what its Claude session is
-  doing right now. See [The studio](operations/studio.md).
+  doing right now. The pixel lot draws it as a pixel-art studio where everyone at work
+  stands for something real. See [The studio](operations/studio.md).
 
 ## Where to start
 

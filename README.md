@@ -25,7 +25,8 @@ flowchart LR
 - **Usage limits are handled.** A VPS that reaches its Claude limit waits for the reset,
   then continues the same session. New jobs for its channel wait there too.
 - **Watch it work.** `fleet studio` opens a page that shows every VPS at work, like a
-  film lot seen from above.
+  film lot seen from above. Its pixel lot draws the same fleet as a pixel-art studio,
+  where everyone at work stands for something real.
 
 ## Quick start
 

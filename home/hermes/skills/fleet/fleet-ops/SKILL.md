@@ -1,7 +1,7 @@
 ---
 name: fleet-ops
 description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos and triage failures.
-version: 1.5.0
+version: 1.5.1
 metadata:
   hermes:
     tags: [fleet, vps, ssh, video, claude]
@@ -53,7 +53,9 @@ the fleet".
 3. **Follow progress.** `fleet jobs` lists everything. `fleet jobs vps2 --state running`
    narrows it. `fleet logs vps2 <job-id>` shows the last 200 log lines. When the owner
    wants to watch the fleet at work, point them to `fleet studio`, a page they open on
-   this computer (`fleet studio --tailnet` to watch from their phone).
+   this computer (`fleet studio --tailnet` to watch from their phone). Its **Pixel lot**
+   view draws the same fleet as a pixel-art film lot: each person there stands for a
+   real value, shown when they click them.
 4. **Collect.** `fleet pull` downloads every finished job not pulled yet and prints each
    summary. Report done and FAILED jobs separately, with the folder path. `MOVED` lines
    are the partial work of jobs that were handed over; the job itself runs elsewhere.

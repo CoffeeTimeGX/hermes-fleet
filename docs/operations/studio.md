@@ -6,10 +6,16 @@ Tailscale, and every VPS is a sound stage with its channel's name on the roof. Y
 which VPSs are making a video, what each Claude session is doing right now, what waits,
 and what finished today.
 
-![The studio with an example fleet](../assets/studio.png)
+It has two views of the same fleet, with a link at the top of each to the other:
 
-It only watches. Nothing on the page changes the fleet: to act, ask the director or use
-the `fleet` commands.
+- **Board**: the fleet as signs, slates and tables, for the facts at a glance.
+- **Pixel lot**: the fleet drawn as a pixel-art film lot, where everyone at work stands
+  for something real. Click anyone to see the real values behind them.
+
+![The studio board with an example fleet](../assets/studio.png)
+
+It only watches. Nothing on either view changes the fleet: to act, ask the director or
+use the `fleet` commands.
 
 ## Open it
 
@@ -20,12 +26,12 @@ fleet studio
 ```
 
 ```
-Fleet studio: http://127.0.0.1:8740/
+Fleet studio: http://127.0.0.1:8740/  (pixel lot: http://127.0.0.1:8740/pixel.html)
 It looks at the VPSs every 20 seconds and only watches: it changes nothing.
 Press Ctrl+C to stop it.
 ```
 
-Your browser opens the page. Leave the terminal window open: the studio runs as long as
+Your browser opens the board. Leave the terminal window open: the studio runs as long as
 it does, and the page updates by itself. To stop it, press Ctrl+C in that window, or
 close it. The VPSs keep working either way.
 
@@ -33,7 +39,7 @@ The director does not open the studio for you, because it keeps running until yo
 it. Ask the director for a status instead when you are away from your PC, or open the
 studio on your phone as described below.
 
-## What you see
+## The board
 
 **The office** at the top counts the stages by lamp, the jobs that wait, the jobs that
 finished today and the jobs that wait to be collected. It also says when the studio last
@@ -65,6 +71,83 @@ and what finished in the last 24 hours, with the reason a job waits or failed an
 whether a finished job was collected. Times are in the local time of the device you
 watch on.
 
+## The pixel lot
+
+Click **Pixel lot** at the top of the board. You see the same fleet as a still from a
+video game: a film lot in pixel art, seen from above at an angle. People walk, the van
+drives its rounds and the lamps blink, all following what the VPSs do.
+
+![The pixel lot with an example fleet](../assets/studio-pixel.png)
+
+Everyone on the lot stands for something real:
+
+- Point at someone to see who they are.
+- Click or tap them to open their card: what they stand for, what they say, the real
+  values behind them, and the `fleet` command that goes with them. **Copy** puts the
+  command on your clipboard.
+- The **<** and **>** buttons on the card step through everyone on the lot. Esc closes
+  the card.
+- The **call sheet** under the picture lists everyone, stage by stage. Pick a name there
+  to find that person in the picture. It works with the keyboard and a screen reader too.
+
+![A card on the pixel lot: an editor on stage 1 stands for a running job, with its take, its latest step and the fleet logs command](../assets/studio-pixel-card.png){ width="480" }
+
+**Board** at the top takes you back.
+
+### Who is who
+
+Around the lot:
+
+| Who | Where | Stands for | On the card |
+| --- | --- | --- | --- |
+| Hermes, the director | On the porch of the bungalow | Your PC, where Hermes directs the fleet and the studio runs. | The fleet totals, `fleet status` |
+| Iris, the lookout | On the water tower | The studio's regular look at the VPSs: one short SSH round each time. | When she last looked, who answered, `fleet ping` |
+| Sam, the gate guard | At the front gate | The private road to the VPSs: your Tailscale network. | Which VPSs your PC cannot reach |
+| Rio, the courier | At the pickup bay, or driving the van | Finished videos that wait to be collected on your PC. The van stops at each stage that has some. | How many wait on each VPS, `fleet pull` |
+| The marquee | By the red carpet | The newest video finished in the last 24 hours. | Its title, its VPS, and the counts for today |
+
+On each stage:
+
+| Who | Stands for | On the card |
+| --- | --- | --- |
+| The sound stage, with its number on the front | One VPS and its channels. Its lamp works like the lamp on the board. | Its lamp, sessions, disk, load and memory, `fleet status vps1` |
+| The air handler on the roof | How hard the VPS works. The busier it is, the more steam. | Load, memory and disk |
+| The stage manager, with a headset | The worker on the VPS that starts each job. | The worker, its heartbeat and the queue, `fleet status vps1` |
+| The crew on set | A running job, one person each. Their trade follows the session's latest step (see the next table). | The job, its take, its latest step, `fleet logs vps1 <job-id> -f` |
+| Claude, the star | Claude Code on the VPS, signed in with that VPS's own account. On set while a job rolls, in the chair when ready, in the trailer (sign on the door) during a usage limit or a pause. | Version, how it signed in, whether it is ready, the usage limit |
+| Production assistants in line outside | The jobs in the queue, one each. After five, a bubble shows how many more. | The job, its place in line, why it waits, `fleet jobs vps1 --state inbox` |
+| A cart driver | A job you asked to move to another VPS. The cart drives it over. | From where to where, `fleet jobs vps1 --state outgoing` |
+| The gaffer and the grip, asleep, and the reset clock | A usage limit. The clock shows when it resets. | The limit, since when, and when it resets |
+| The night janitor | A paused VPS. | Why it was paused, `fleet resume vps1` |
+| The electrician, in a hard hat | Something that needs a fix: the worker, Claude not ready, low disk, a reboot for updates, or a stuck handover. | The problem, and `fleet health` or `fleet reboot vps1` |
+| The search party, with a flashlight | A VPS your PC cannot reach. | The error, `fleet ping vps1` |
+| Film cans in front of the stage | Finished videos on the VPS that are not on your PC yet. | How many, `fleet pull vps1` |
+| The dailies board | The videos the VPS finished or failed in the last 24 hours. | The titles, and why a job failed |
+
+The crew's trade shows what the session does right now:
+
+| Crew member | The session's latest step |
+| --- | --- |
+| Camera operator | It has not taken its first step yet. |
+| Director of photography | It said something. The card quotes it. |
+| Editor | It runs a command that renders or encodes, such as `ffmpeg`. |
+| Technician | It runs another command. |
+| Screenwriter | It writes or edits a file. |
+| Script supervisor | It reads or searches files. |
+| Researcher | It searches the web or reads a web page. |
+| Assistant director | It updates its plan. |
+| Second unit | It hands a part of the work to a helper. |
+
+### Day and night
+
+The light on the lot follows the clock of the device you watch on: day, dusk, then night
+with the lamps, windows and searchlights on. The **Day** and **Night** buttons at the top
+right of the picture keep it one way; **Auto** follows the clock again. Your browser
+remembers the choice.
+
+If your device is set to reduce motion, nobody walks and nothing blinks. The picture
+still follows the fleet.
+
 ## Watch from your phone
 
 Start the studio on your PC's Tailscale address instead:
@@ -74,7 +157,7 @@ fleet studio --tailnet
 ```
 
 ```
-Fleet studio: http://my-pc.tailnet-name.ts.net:8740/
+Fleet studio: http://my-pc.tailnet-name.ts.net:8740/  (pixel lot: http://my-pc.tailnet-name.ts.net:8740/pixel.html)
 It looks at the VPSs every 20 seconds and only watches: it changes nothing.
 Press Ctrl+C to stop it.
 ```
@@ -108,7 +191,7 @@ Your PC must be on and the studio running for the phone to see it. The page says
 commands run: nothing is installed and nothing runs on the VPSs. Every 20 seconds it
 makes one short SSH connection to each VPS, like `fleet status`, and asks for the
 worker's status, the job list and the last step of each running session (from the end
-of its `logs/transcript.jsonl`). The page asks your PC for that every few seconds.
+of its `logs/transcript.jsonl`). Both views ask your PC for that every few seconds.
 
 - Without `--tailnet`, only your PC can open the page (`127.0.0.1`). With it, only
   devices on your tailnet can.
@@ -116,8 +199,9 @@ of its `logs/transcript.jsonl`). The page asks your PC for that every few second
   a web page from somewhere else cannot read the studio through your browser.
 - The page loads its fonts from Google Fonts; everything else comes from your PC.
 
-To see the page without a fleet, open `home/studio/studio.html` from the repository in
-your browser. It shows an example lot with made-up jobs.
+To see the studio without a fleet, open `home/studio/studio.html` (the board) or
+`home/studio/pixel.html` (the pixel lot) from the repository in your browser. They show
+an example lot with made-up jobs.
 
 ## If something looks wrong
 

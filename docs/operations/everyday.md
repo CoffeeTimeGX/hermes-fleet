@@ -156,8 +156,9 @@ fleet studio
 ```
 
 Your browser shows every VPS as a sound stage, with what each session is doing right
-now, and it refreshes by itself. `fleet studio --tailnet` lets your phone watch too. See
-[The studio](studio.md).
+now, and it refreshes by itself. Click **Pixel lot** at the top to see the same fleet as
+a pixel-art studio, where everyone at work stands for something real.
+`fleet studio --tailnet` lets your phone watch too. See [The studio](studio.md).
 
 ## Collect the results
 

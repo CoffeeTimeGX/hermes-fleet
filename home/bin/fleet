@@ -63,7 +63,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -1701,7 +1701,8 @@ def cmd_doctor(cfg_path: Path, a) -> int:
 
 # --------------------------------------------------------------------------- studio
 
-STUDIO_PAGE = REPO_ROOT / "home" / "studio" / "studio.html"
+STUDIO_DIR = REPO_ROOT / "home" / "studio"
+STUDIO_PAGE = STUDIO_DIR / "studio.html"
 STUDIO_PORT = 8740
 LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
 # The newest thing a running session did, from the end of its transcript: the last text
@@ -1776,16 +1777,25 @@ def studio_snapshot(cfg: Config, every: int) -> dict:
 
 
 def studio_page_html() -> bytes:
-    """The studio page in a full HTML document, marked live so that it asks this
-    computer for the fleet instead of showing its example lot."""
+    """The board (a page fragment) in a full HTML document."""
     page = STUDIO_PAGE.read_text(encoding="utf-8")
     head = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-            '<script>window.FLEET_STUDIO_LIVE = true;</script>\n'
             '<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);'
             'padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}'
             'img{max-width:100%}[hidden]{display:none!important}</style>\n</head>\n<body>\n')
     return (head + page + "\n</body>\n</html>\n").encode("utf-8")
+
+
+def studio_files() -> dict:
+    """What the studio serves, by path: the board, the pixel lot, and the script they
+    share, marked live so that both ask this computer for the fleet instead of showing
+    their example lot."""
+    html, js = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
+    board = studio_page_html()
+    data = b"window.FLEET_STUDIO_LIVE = true;\n" + (STUDIO_DIR / "studio-data.js").read_bytes()
+    return {"/": (board, html), "/index.html": (board, html),
+            "/pixel.html": ((STUDIO_DIR / "pixel.html").read_bytes(), html), "/studio-data.js": (data, js)}
 
 
 def studio_host_ok(host: str, allowed: set) -> bool:
@@ -1799,7 +1809,7 @@ def studio_host_ok(host: str, allowed: set) -> bool:
     return bool(name) and name in allowed
 
 
-def studio_handler(page: bytes, state: dict, lock, allowed: set):
+def studio_handler(files: dict, state: dict, lock, allowed: set):
     from http.server import BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
@@ -1824,8 +1834,8 @@ def studio_handler(page: bytes, state: dict, lock, allowed: set):
                 return self.send(403, b"fleet studio answers only to this computer's own names\n",
                                  "text/plain; charset=utf-8")
             path = self.path.split("?", 1)[0]
-            if path in ("/", "/index.html"):
-                return self.send(200, page, "text/html; charset=utf-8")
+            if path in files:
+                return self.send(200, *files[path])
             if path == "/api/studio":
                 with lock:
                     snap = state["snapshot"]
@@ -1903,13 +1913,13 @@ def cmd_studio(cfg: Config, a) -> int:
             stop.wait(a.every)
 
     try:
-        srv = studio_server(host, a.port, studio_handler(studio_page_html(), state, lock, allowed))
+        srv = studio_server(host, a.port, studio_handler(studio_files(), state, lock, allowed))
     except OSError as e:
         raise FleetError(f"cannot open the studio on {host}:{a.port} ({e.strerror or e}). "
                          f"Another program may use that port: pick another with --port") from None
     threading.Thread(target=look, daemon=True).start()
     url = f"http://{shown}:{srv.server_address[1]}/"
-    print(f"Fleet studio: {url}\n"
+    print(f"Fleet studio: {url}  (pixel lot: {url}pixel.html)\n"
           f"It looks at the VPSs every {a.every} seconds and only watches: it changes nothing.\n"
           "Press Ctrl+C to stop it.", flush=True)
     if not a.no_browser:

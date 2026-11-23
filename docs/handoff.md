@@ -37,7 +37,9 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 | Path | What it is |
 | --- | --- |
 | `home/bin/fleet` | The CLI. One Python file, standard library only, Python 3.9+, Windows, Linux and macOS. |
-| `home/studio/studio.html` | The studio page. `fleet studio` serves it from the PC with live data. Opened as a plain file, it shows an example lot. |
+| `home/studio/studio.html` | The studio board, a page fragment. `fleet studio` serves it in a full page from the PC with live data. Opened as a plain file, it shows an example lot. |
+| `home/studio/pixel.html` | The pixel lot: the same fleet drawn on a canvas in isometric pixel art, every character tied to a real value. A full page, served as `/pixel.html`. |
+| `home/studio/studio-data.js` | What both views share: the example lot, the polling of `/api/studio`, and the meaning of each state. `fleet studio` serves it with `FLEET_STUDIO_LIVE` set. |
 | `home/install.ps1`, `home/install.sh` | The PC installers: Git (Windows), Python, Tailscale, Hermes, then `fleet init`. |
 | `home/hermes/SOUL.md`, `home/hermes/skills/fleet/*/SKILL.md` | Hermes' personality and its `fleet-ops` and `fleet-provision` skills. |
 | `home/fleet.ini.example`, `home/secrets.example/`, `home/hermes/env.example` | Templates with empty values. The real files live outside the repository. |

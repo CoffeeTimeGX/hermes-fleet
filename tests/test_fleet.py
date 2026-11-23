@@ -1149,7 +1149,8 @@ class StudioTest(TempDirTest):
         self.assertFalse(fleet.studio_host_ok("127.0.0.1:8740", tailnet))
 
     def serve(self, snapshot) -> int:
-        handler = fleet.studio_handler(b"<p>page</p>", {"snapshot": snapshot}, threading.Lock(), fleet.LOOPBACK_NAMES)
+        files = {"/": (b"<p>page</p>", "text/html; charset=utf-8"), "/app.js": (b"go()", "text/javascript; charset=utf-8")}
+        handler = fleet.studio_handler(files, {"snapshot": snapshot}, threading.Lock(), fleet.LOOPBACK_NAMES)
         srv = fleet.studio_server("127.0.0.1", 0, handler)
         threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         self.addCleanup(srv.server_close)
@@ -1175,6 +1176,8 @@ class StudioTest(TempDirTest):
         code, headers, body = self.get(port, "/api/studio?t=1")
         self.assertEqual((code, headers["content-type"], json.loads(body)), (200, "application/json", snap))
         self.assertEqual(self.get(port, "/", method="HEAD")[::2], (200, b""))
+        code, headers, body = self.get(port, "/app.js")
+        self.assertEqual((code, headers["content-type"], body), (200, "text/javascript; charset=utf-8", b"go()"))
         self.assertEqual(self.get(port, "/nope")[0], 404)
         self.assertEqual(self.get(port, "/", host=f"localhost:{port}")[0], 200)
         for host in ("evil.example", f"evil.example:{port}", f"127.0.0.1.evil.example:{port}"):
@@ -1183,7 +1186,7 @@ class StudioTest(TempDirTest):
             self.assertNotIn(b"generated_at", body)
 
     def test_a_busy_port_is_refused(self):
-        handler = fleet.studio_handler(b"", {"snapshot": {}}, threading.Lock(), fleet.LOOPBACK_NAMES)
+        handler = fleet.studio_handler({}, {"snapshot": {}}, threading.Lock(), fleet.LOOPBACK_NAMES)
         with socket.socket() as busy:
             busy.bind(("127.0.0.1", 0))
             busy.listen(1)
@@ -1194,16 +1197,29 @@ class StudioTest(TempDirTest):
             with self.assertRaisesRegex(fleet.FleetError, "pick another with --port"):
                 fleet.cmd_studio(cfg, self.args())
 
-    def test_page(self):
-        fragment = fleet.STUDIO_PAGE.read_text(encoding="utf-8")
-        self.assertTrue(fragment.startswith("<title>Hermes Fleet Studio</title>"))
-        self.assertNotRegex(fragment, r"(?i)<!doctype|<(html|head|body)[\s>]")
-        self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?]+)", fragment)),
-                             {"fonts.googleapis.com", "fonts.gstatic.com"})
-        self.assertIn('fetch("api/studio"', fragment)
-        page = fleet.studio_page_html().decode("utf-8")
+    def test_pages(self):
+        board = fleet.STUDIO_PAGE.read_text(encoding="utf-8")
+        self.assertTrue(board.startswith("<title>Hermes Fleet Studio</title>"))
+        self.assertNotRegex(board, r"(?i)<!doctype|<(html|head|body)[\s>]")  # a fragment, for the preview too
+        pixel = (fleet.STUDIO_DIR / "pixel.html").read_text(encoding="utf-8")
+        self.assertTrue(pixel.lower().startswith("<!doctype html>"))
+        shared = (fleet.STUDIO_DIR / "studio-data.js").read_text(encoding="utf-8")
+        for page in (board, pixel):  # the shared script comes first, and the views link to each other
+            self.assertLess(page.index('<script src="studio-data.js"></script>'), page.index("FleetStudio"))
+        self.assertIn('href="pixel.html"', board)
+        self.assertIn('href="index.html"', pixel)
+        self.assertIn('fetch("api/studio"', shared)
+        for text in (board, pixel, shared):
+            self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?)]+)", text)),
+                                 {"fonts.googleapis.com", "fonts.gstatic.com"})
+        files = fleet.studio_files()
+        self.assertEqual(set(files), {"/", "/index.html", "/pixel.html", "/studio-data.js"})
+        page = files["/"][0].decode("utf-8")
         self.assertTrue(page.startswith("<!doctype html>") and page.rstrip().endswith("</html>"))
-        self.assertLess(page.index("window.FLEET_STUDIO_LIVE = true;"), page.index("<title>"))
+        self.assertNotIn("FLEET_STUDIO_LIVE = true", page)
+        js, ctype = files["/studio-data.js"]
+        self.assertTrue(js.startswith(b"window.FLEET_STUDIO_LIVE = true;\n") and ctype.startswith("text/javascript"))
+        self.assertEqual(files["/pixel.html"][0], pixel.encode("utf-8"))
 
     def args(self, **kw):
         return argparse.Namespace(**dict(dict(port=8740, tailnet=False, every=20, no_browser=True, json=False), **kw))
@@ -1240,7 +1256,7 @@ class StudioTest(TempDirTest):
     def test_serves_this_computer_only_by_default(self):
         rc, out, srv, allowed, browser = self.run_studio(make_cfg(self.tmp, "vps1", "vps2"))
         self.assertEqual((rc, srv.server_address, allowed), (0, ("127.0.0.1", 8740), fleet.LOOPBACK_NAMES))
-        self.assertIn("Fleet studio: http://127.0.0.1:8740/", out)
+        self.assertIn("Fleet studio: http://127.0.0.1:8740/  (pixel lot: http://127.0.0.1:8740/pixel.html)", out)
         self.assertIn("only watches", out)
         self.assertIn("Fleet studio stopped.", out)
         self.assertTrue(srv.closed)
