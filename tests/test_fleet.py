@@ -1087,6 +1087,7 @@ class StudioTest(TempDirTest):
         self.assertEqual((snap["every"], snap["fleet_version"]), (20, fleet.VERSION))
         self.assertEqual(snap["nodes"][1], dict(fleet.studio_base(cfg.nodes["vps2"]), reachable=False,
                                                 error="no route to vps2"))
+        self.assertEqual(snap["screenings"], [])  # nothing collected yet
         json.dumps(snap)
 
     @unittest.skipUnless(POSIX and shutil.which("jq"), "the VPS side runs on Linux, with jq")
@@ -1148,19 +1149,19 @@ class StudioTest(TempDirTest):
             self.assertTrue(fleet.studio_host_ok(host, tailnet), host)
         self.assertFalse(fleet.studio_host_ok("127.0.0.1:8740", tailnet))
 
-    def serve(self, snapshot) -> int:
+    def serve(self, snapshot, media_root=None) -> int:
         files = {"/": (b"<p>page</p>", "text/html; charset=utf-8"), "/app.js": (b"go()", "text/javascript; charset=utf-8")}
-        handler = fleet.studio_handler(files, {"snapshot": snapshot}, threading.Lock(), fleet.LOOPBACK_NAMES)
+        handler = fleet.studio_handler(files, {"snapshot": snapshot}, threading.Lock(), fleet.LOOPBACK_NAMES, media_root)
         srv = fleet.studio_server("127.0.0.1", 0, handler)
         threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)
         return srv.server_address[1]
 
-    def get(self, port, path, method="GET", host=None):
+    def get(self, port, path, method="GET", host=None, headers=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         try:
-            c.request(method, path, headers={"Host": host} if host else {})
+            c.request(method, path, headers=dict({"Host": host} if host else {}, **(headers or {})))
             r = c.getresponse()
             return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
         finally:
@@ -1185,6 +1186,74 @@ class StudioTest(TempDirTest):
             self.assertEqual(code, 403, host)
             self.assertNotIn(b"generated_at", body)
 
+    def screening_lot(self):
+        """A results folder as fleet pull leaves it: an index, and each job's output folder."""
+        cfg = make_cfg(self.tmp, "vps1", "vps2")
+        lines = []
+
+        def job(node, jid, files, **kw):
+            for name, data in files.items():
+                p = cfg.results_dir / node / jid / "output" / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data)
+            lines.append(json.dumps(dict({"node": node, "id": jid, "state": "done", "channel": "Space Facts",
+                                          "title": "Title of " + jid, "finished_at": "2026-01-01T00:00:00Z"}, **kw)))
+
+        job("vps1", "job-a", {"final.mp4": b"0123456789", "thumb.png": b"png"})
+        job("vps1", "job-b", {"raw take.mp4": b"x" * 50, "renders/video.mp4": b"small", "frames/f001.png": b"f"})
+        job("vps2", "job-c", {"script.md": b"# no video"})
+        job("vps2", "job-d", {"final.mp4": b"v"}, state="failed")
+        job("vps2", "job-e", {"final.mp4": b"v"}, pull_error="timed out")
+        job("vps2", "job-f", {"a.mp4": b"a", "b.webm": b"bbbb", "Cover Art.jpg": b"j", ".hidden.mp4": b"h" * 99})
+        lines.insert(1, "not json")
+        lines.append(lines[0])  # pulled twice: listed once
+        (cfg.results_dir / "index.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return cfg
+
+    def test_screenings_are_the_newest_videos_collected(self):
+        cfg = self.screening_lot()
+        got = fleet.studio_screenings(cfg)
+        self.assertEqual([(s["node"], s["id"]) for s in got], [("vps1", "job-a"), ("vps2", "job-f"), ("vps1", "job-b")])
+        a, f, b = got
+        self.assertEqual((a["video"], a["poster"], a["bytes"], a["title"], a["channel"]),
+                         ("media/vps1/job-a/final.mp4", "media/vps1/job-a/thumb.png", 10, "Title of job-a", "Space Facts"))
+        self.assertEqual((f["video"], f["poster"]), ("media/vps2/job-f/b.webm", "media/vps2/job-f/Cover%20Art.jpg"))
+        self.assertEqual((b["video"], b["poster"]), ("media/vps1/job-b/renders/video.mp4", None))
+        self.assertEqual(len(fleet.studio_screenings(cfg, limit=1)), 1)
+        self.assertEqual(fleet.studio_screenings(make_cfg(self.tmp / "none")), [])
+
+    def test_media_serves_collected_videos_and_nothing_else(self):
+        cfg = self.screening_lot()
+        outside = cfg.results_dir / "secret.mp4"
+        outside.write_bytes(b"secret")
+        if POSIX:  # a link out of the job's folder is not followed
+            (cfg.results_dir / "vps1" / "job-a" / "output" / "link.mp4").symlink_to(outside)
+        port = self.serve({"nodes": []}, media_root=cfg.results_dir)
+        url = "/media/vps1/job-a/final.mp4"
+        code, headers, body = self.get(port, url)
+        self.assertEqual((code, body, headers["content-type"], headers["accept-ranges"]), (200, b"0123456789", "video/mp4", "bytes"))
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+        code, headers, body = self.get(port, url, headers={"Range": "bytes=2-5"})
+        self.assertEqual((code, body, headers["content-range"]), (206, b"2345", "bytes 2-5/10"))
+        self.assertEqual(self.get(port, url, headers={"Range": "bytes=7-"})[2], b"789")
+        self.assertEqual(self.get(port, url, headers={"Range": "bytes=-3"})[2], b"789")
+        code, headers, _ = self.get(port, url, headers={"Range": "bytes=10-"})
+        self.assertEqual((code, headers["content-range"]), (416, "bytes */10"))
+        self.assertEqual(self.get(port, url, headers={"Range": "lines=1-2"})[0], 416)
+        self.assertEqual(self.get(port, url, method="HEAD")[::2], (200, b""))
+        self.assertEqual(self.get(port, "/media/vps1/job-b/renders/video.mp4")[2], b"small")
+        self.assertEqual(self.get(port, "/media/vps2/job-f/Cover%20Art.jpg")[1]["content-type"], "image/jpeg")
+        for bad in ("/media/vps1/job-a/../../secret.mp4", "/media/vps1/job-a/..%2F..%2Fsecret.mp4",
+                    "/media/vps1/job-a/%2e%2e/%2e%2e/secret.mp4", "/media/../secret.mp4", "/media/vps2/job-c/script.md",
+                    "/media/vps1/job-a/link.mp4", "/media/vps1/job-a/missing.mp4", "/media/vps1/job-b/frames",
+                    "/media/vps1/job-a/thumb.png/x.mp4", "/media/VPS1/job-a/final.mp4", "/media/vps1/.job-a/final.mp4",
+                    "/media/vps2/job-f/.hidden.mp4", "/media/vps1/job-a"):
+            code, _, body = self.get(port, bad)
+            self.assertEqual(code, 404, bad)
+            self.assertNotIn(b"secret", body)
+        self.assertEqual(self.get(port, url, host="evil.example")[0], 403)
+        self.assertEqual(self.get(self.serve({"nodes": []}), url)[0], 404)  # no results folder, no media
+
     def test_a_busy_port_is_refused(self):
         handler = fleet.studio_handler({}, {"snapshot": {}}, threading.Lock(), fleet.LOOPBACK_NAMES)
         with socket.socket() as busy:
@@ -1208,8 +1277,13 @@ class StudioTest(TempDirTest):
             self.assertLess(page.index('<script src="studio-data.js"></script>'), page.index("FleetStudio"))
         self.assertIn('href="pixel.html"', board)
         self.assertIn('href="index.html"', pixel)
-        for control in ('id="t-auto"', 'id="t-slider"', 'id="t-lapse"', 'id="t-full"', "requestFullscreen", "wakeLock", 'id="z-in"', 'id="z-out"'):
-            self.assertIn(control, pixel)  # the lot keeps time all day, zooms and goes full screen
+        for control in ('id="t-auto"', 'id="t-slider"', 'id="t-lapse"', 'id="t-full"', "requestFullscreen", "wakeLock", 'id="z-in"',
+                        'id="z-out"', 'id="w-season"', 'id="w-pick"', 'id="s-sound"', 'id="r-open"', 'id="r-strip"', 'id="d-watch"'):
+            self.assertIn(control, pixel)  # time all day, zoom, full screen, weather, sound, replay, the screen
+        for control in ('id="day-strip"', 'id="day-play"', 'id="replay-banner"', 'id="reels"'):
+            self.assertIn(control, board)  # the board replays the day and has a screening room
+        for part in ("function at(", "function spans(", "function strip(", "function play("):
+            self.assertIn(part, shared)
         self.assertIn('fetch("api/studio"', shared)
         for text in (board, pixel, shared):
             self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?)]+)", text)),

@@ -453,6 +453,50 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
 .legend .lamp.tape { border-radius: 2px; background-image: repeating-linear-gradient(135deg, var(--tape-a) 0 3px, var(--tape-b) 3px 6px); }
 .footnote { color: var(--ink-soft); font-size: 14px; }
 
+/* The last 24 hours: each VPS's takes on a strip, to replay the lot as it stood */
+.day, .screening { background: var(--floor); border: 1px solid var(--edge); border-radius: 4px; display: grid; }
+.day-body { border-top: 1px solid var(--edge); padding: 12px 14px 14px; display: grid; gap: 10px; }
+#day-strip { display: block; width: 100%; height: 124px; cursor: pointer; border-radius: 2px; }
+#day-strip:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.day-ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.day-key { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-soft); font-size: 13px; margin-left: auto; }
+.day-key i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; background: var(--c); vertical-align: 1px; }
+.day-time { font-family: var(--font-mono); font-size: 13px; }
+.btn {
+  font-family: var(--font-sign); font-weight: 700; font-size: 14px; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--slate-ink); background: var(--slate); border: 1px solid var(--ink); border-radius: 3px; padding: 5px 12px; cursor: pointer;
+}
+.btn:hover:not(:disabled) { filter: brightness(1.25); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.replay-banner {
+  position: sticky; top: 8px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 10px 14px; border-radius: 4px; background: var(--slate); color: var(--slate-ink); box-shadow: 0 5px 0 var(--cast);
+}
+.replay-banner[hidden] { display: none; }
+.replay-banner .btn { background: var(--slate-ink); color: var(--slate); }
+.replay-banner b { font-family: var(--font-mono); font-weight: 500; }
+body.replaying .lot { filter: sepia(0.22); }
+/* The screening room: the finished videos you have collected */
+.reels { border-top: 1px solid var(--edge); padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 18px 14px; }
+.reels .none { color: var(--ink-soft); grid-column: 1 / -1; }
+.reel { display: grid; gap: 7px; align-content: start; text-align: left; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.reel:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.poster {
+  position: relative; display: block; aspect-ratio: 9 / 16; border-radius: 3px; overflow: hidden; box-shadow: 5px 6px 0 var(--cast);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.6)), var(--c, var(--slate));
+}
+.poster img, .poster video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.poster-ch { position: absolute; top: 8px; left: 9px; right: 9px; color: rgba(255, 255, 255, 0.85); font-family: var(--font-sign); font-weight: 600; font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; }
+.poster-title { position: absolute; left: 9px; right: 9px; bottom: 10px; color: #fff; font-family: var(--font-stencil); font-size: 18px; line-height: 1.05; overflow-wrap: anywhere; }
+.poster::after {
+  content: ""; position: absolute; left: 50%; top: 42%; width: 0; height: 0; transform: translate(-30%, -50%); opacity: 0; transition: opacity 0.2s;
+  border-style: solid; border-width: 15px 0 15px 24px; border-color: transparent transparent transparent rgba(255, 255, 255, 0.92);
+}
+.reel:hover .poster::after, .reel:focus-visible .poster::after { opacity: 1; }
+.reel b { font-weight: 600; line-height: 1.25; }
+.reel small { color: var(--ink-soft); font-size: 12.5px; line-height: 1.3; }
+
 @media (max-width: 640px) {
   .office { grid-template-columns: minmax(0, 1fr); }
   .office-side { justify-items: start; }
@@ -462,6 +506,7 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
 }
 @media (prefers-reduced-motion: reduce) {
   .stage[data-state="rolling"] .door .lamp { animation: none; }
+  .poster::after { transition: none; }
 }
 </style>
 
@@ -491,7 +536,36 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
 
   <p class="notice" id="notice" hidden></p>
 
+  <div class="replay-banner" id="replay-banner" role="status" hidden>
+    <span>Replay: the lot as it stood <b id="rb-time"></b></span>
+    <button type="button" class="btn" id="rb-live">Back to live</button>
+  </div>
+
+  <section class="day" aria-labelledby="day-title">
+    <div class="cb-head">
+      <h2 id="day-title">The last 24 hours</h2>
+      <p>Each VPS's takes in the last day. Click or drag along the strip, or press Play, to see the lot below as it stood then.</p>
+    </div>
+    <div class="day-body">
+      <canvas id="day-strip" width="600" height="124"></canvas>
+      <div class="day-ctrl">
+        <button type="button" class="btn" id="day-play" aria-pressed="false">Play</button>
+        <span class="day-time" id="day-time" aria-live="polite">Live</span>
+        <button type="button" class="btn" id="day-live" disabled>Back to live</button>
+        <span class="day-key" aria-hidden="true"><span style="--c: var(--standby)"><i></i>Done</span><span style="--c: var(--trouble)"><i></i>Failed</span><span style="--c: var(--rolling)"><i></i>Rolling</span><span style="--c: var(--hold)"><i></i>On hold</span></span>
+      </div>
+    </div>
+  </section>
+
   <main class="lot" id="lot"></main>
+
+  <section class="screening" aria-labelledby="sr-title">
+    <div class="cb-head">
+      <h2 id="sr-title">Screening room</h2>
+      <p>The videos you have collected with <span class="mono">fleet pull</span>, newest first. Click one to watch it.</p>
+    </div>
+    <div class="reels" id="reels"></div>
+  </section>
 
   <section class="callboard" aria-labelledby="cb-title">
     <div class="cb-head">
@@ -520,9 +594,11 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
 <script>
 (() => {
   "use strict";
-  const { LIVE, DAY_MS, when, ago, span, timecode, clock, localTimes, stageNo, plural, activityText,
-    claudeOf, limitOf, stageState } = window.FleetStudio;
-  let snap = null;
+  const FS = window.FleetStudio;
+  const { LIVE, DAY_MS, now, when, ago, span, timecode, clock, localTimes, hueOf, stageNo, plural, activityText,
+    claudeOf, limitOf, stageState } = FS;
+  let snap = null;      // the lot as shown: now, or the moment a replay shows
+  let liveSnap = null;  // the lot now
   let contact = true;
 
   // ---------------------------------------------------------------- helpers
@@ -592,7 +668,7 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
       set.append(qbox);
     }
 
-    const cutoff = Date.now() - DAY_MS;
+    const cutoff = now() - DAY_MS;
     const recent = jobs.filter((j) => (when(j.finished_at) || 0) >= cutoff);
     const doneToday = recent.filter((j) => j.state === "done").length;
     const failedToday = recent.filter((j) => j.state === "failed").length;
@@ -657,7 +733,7 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
   function renderBoard(nodes) {
     const counts = { rolling: 0, standby: 0, hold: 0, dark: 0, trouble: 0, offline: 0, pending: 0 };
     let waiting = 0, collect = 0, doneToday = 0;
-    const cutoff = Date.now() - DAY_MS;
+    const cutoff = now() - DAY_MS;
     for (const n of nodes) {
       counts[stageState(n).state] += 1;
       const jobs = Array.isArray(n.jobs) ? n.jobs : [];
@@ -682,7 +758,7 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
 
   function renderCallboard(nodes) {
     const rows = [];
-    const cutoff = Date.now() - DAY_MS;
+    const cutoff = now() - DAY_MS;
     nodes.forEach((n, i) => {
       for (const j of Array.isArray(n.jobs) ? n.jobs : []) {
         const fin = when(j.finished_at);
@@ -719,10 +795,94 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
     const nodes = (snap && Array.isArray(snap.nodes)) ? snap.nodes : [];
     document.getElementById("lot").replaceChildren(...nodes.map(renderStage));
     renderBoard(nodes);
+    renderScreening();
     renderCallboard(nodes);
     renderNotice();
     tick();
   }
+
+  // ---------------------------------------------------------------- the screening room
+  function renderScreening() {
+    const box = document.getElementById("reels"), list = ((snap && snap.screenings) || []).slice(0, 12);
+    const sig = list.map((s) => s.node + "/" + s.id).join(",") + "|" + (FS.now() > Date.now() - 60000);
+    if (box.dataset.sig === sig) { for (const e of box.querySelectorAll("[data-fin]")) e.textContent = metaOf(JSON.parse(e.dataset.fin)); return; }
+    box.dataset.sig = sig;
+    if (!list.length) {
+      box.replaceChildren(el("p", { class: "none", text: snap && snap.replay ? "Nothing had been collected by then." : "No videos yet. They appear here once fleet pull has collected them." }));
+      return;
+    }
+    box.replaceChildren(...list.map((s) => {
+      const b = el("button", { type: "button", class: "reel", "aria-label": "Watch " + (s.title || s.id) },
+        posterOf(s), el("b", { text: s.title || s.id }), el("small", { "data-fin": JSON.stringify(s), text: metaOf(s) }));
+      b.addEventListener("click", () => FS.play(s, s.video ? null : posterOf(s, true)));
+      return b;
+    }));
+  }
+  const metaOf = (s) => { const t = when(s.finished_at); return [s.channel, s.node, t ? ago(t) : ""].filter(Boolean).join(" · "); };
+  function posterOf(s, big) {  // the poster, a frame of the video, or a title card in the channel's colour
+    const p = el("span", { class: "poster", style: "--c: " + hueOf(s.channel || s.node) + (big ? "; width: min(70vw, 300px)" : ""), "aria-hidden": "true" },
+      el("span", { class: "poster-ch", text: s.channel || s.node || "" }), el("span", { class: "poster-title", text: s.title || s.id }));
+    if (s.poster) p.append(el("img", { src: s.poster, alt: "", loading: "lazy" }));
+    else if (s.video && !big) p.append(el("video", { src: s.video + "#t=1", preload: "metadata", muted: true, playsinline: true }));
+    return p;
+  }
+
+  // ---------------------------------------------------------------- replay
+  // The strip above the stages replays the last 24 hours: click or drag along it, or press Play
+  // (an hour every four seconds), and the board shows the lot as it stood then, rebuilt from the
+  // times on the jobs. Back to live, or the end of the strip, returns to now.
+  const day = { play: document.getElementById("day-play"), time: document.getElementById("day-time"), live: document.getElementById("day-live"),
+    banner: document.getElementById("replay-banner"), bTime: document.getElementById("rb-time"), at: null, run: null, timer: 0, sig: "" };
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  day.strip = FS.strip(document.getElementById("day-strip"), {
+    label: "Moment to replay on the board, in the last 24 hours",
+    palette: () => ({ bg: css("--floor"), row: css("--roof"), grid: css("--edge"), text: css("--ink-soft"), head: css("--ink"),
+      done: css("--standby"), failed: css("--trouble"), running: css("--rolling"), held: css("--hold"), hold: css("--hold"),
+      font: "600 12px " + css("--font-sign"), names: 62 }),
+    onPick: (t) => { stopDay(); replayTo(t); },
+  });
+  const sigOf = (s) => ((s && s.nodes) || []).map((n) => stageState(n).state + ":" + (n.jobs || []).map((j) => j.id + "=" + j.state).join(",")).join("|");
+  function whenText(t) {
+    const d = new Date(t), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return (d.toDateString() === new Date().toDateString() ? "today " : "yesterday ") + hm;
+  }
+  function replayTo(t) {
+    if (t >= Date.now() - 30000) { backToLive(); return; }
+    day.at = Math.round(Math.max(Date.now() - DAY_MS, t));
+    FS.setNow(day.at);
+    snap = FS.at(liveSnap, day.at);
+    const sig = sigOf(snap);
+    if (sig !== day.sig || !day.run) { day.sig = sig; render(); } else tick();
+    showDay();
+  }
+  function backToLive() {
+    stopDay();
+    if (day.at != null) { day.at = null; day.sig = ""; FS.setNow(null); snap = liveSnap; render(); }
+    showDay();
+  }
+  function showDay() {
+    const on = day.at != null, txt = on ? whenText(day.at) : "";
+    day.time.textContent = on ? txt.charAt(0).toUpperCase() + txt.slice(1) : "Live";
+    day.bTime.textContent = txt;
+    day.banner.hidden = !on;
+    day.live.disabled = !on;
+    day.play.textContent = day.run ? "Pause" : "Play";
+    day.play.setAttribute("aria-pressed", String(!!day.run));
+    document.body.classList.toggle("replaying", on);
+    day.strip.set(liveSnap, day.at);
+  }
+  function playDay() {
+    const end = Date.now(), from = day.at == null || day.at >= end - 60000 ? end - DAY_MS : day.at;
+    day.run = { from, at: performance.now() };
+    clearInterval(day.timer);
+    day.timer = setInterval(() => { if (day.run) replayTo(day.run.from + (performance.now() - day.run.at) * 900); }, 250);
+    replayTo(from);
+  }
+  function stopDay() { day.run = null; clearInterval(day.timer); day.timer = 0; }
+  day.play.addEventListener("click", () => { if (day.run) { stopDay(); showDay(); } else playDay(); });
+  day.live.addEventListener("click", backToLive);
+  document.getElementById("rb-live").addEventListener("click", backToLive);
+  window.addEventListener("resize", () => day.strip.draw());
 
   function renderNotice() {
     const box = document.getElementById("notice");
@@ -750,7 +910,8 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
     for (const e of document.querySelectorAll("td[data-ago]")) e.textContent = ago(Number(e.dataset.ago));
     const looked = document.getElementById("looked");
     const t = snap && when(snap.generated_at);
-    if (!snap || !t) looked.textContent = "Looking at the lot…";
+    if (day.at != null) looked.textContent = "Replay · " + whenText(day.at);
+    else if (!snap || !t) looked.textContent = "Looking at the lot…";
     else {
       const every = Number(snap.every) || 20;
       looked.textContent = (snap.demo ? "Example · " : "") + "Last look " + ago(t) + (LIVE ? " · every " + every + " s" : "");
@@ -775,7 +936,13 @@ td .id { display: block; color: var(--ink-soft); font-family: var(--font-mono); 
     } catch (e) { fallback(); }
   }
 
-  FleetStudio.watch((look, ok) => { snap = look; contact = ok; render(); });
+  FleetStudio.watch((look, ok) => {
+    liveSnap = look;
+    snap = day.at == null ? look : FS.at(look, day.at);
+    contact = ok;
+    render();
+    day.strip.set(liveSnap, day.at);
+  });
   setInterval(tick, 1000);
 })();
 </script>

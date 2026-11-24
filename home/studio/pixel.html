@@ -130,6 +130,22 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .badge { font: 600 12px/1 var(--font-pixel); background: #111; color: #fff; padding: 5px 7px 4px; border: 2px solid #fff; letter-spacing: .06em; text-transform: uppercase; }
 .badge.live::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: #ff4b3a; animation: blink 1.2s steps(2, jump-none) infinite; }
 .badge.lost { background: #6b1d16; }
+.badge.past { background: #3b2f6b; }
+/* Replay: a strip of the last 24 hours over the foot of the picture, the lot a little sepia. */
+.replaybar { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 5px 6px; background: rgba(17, 17, 17, .88); border: 2px solid #fff; transition: opacity .4s; }
+.replaybar[hidden] { display: none; }
+.replaybar button { font: 600 12px/1 var(--font-pixel); color: #fff; background: #111; border: 2px solid #fff; padding: 5px 7px 4px; cursor: pointer; white-space: nowrap; }
+.replaybar button:hover:not(:disabled) { background: #2a2a2a; }
+.replaybar button[aria-pressed="true"] { background: #fff; color: #111; }
+.replaybar button:disabled { color: #77716a; border-color: #77716a; cursor: default; }
+.rtime { font: 500 12px/1 var(--font-mono); color: #fff; min-width: 9.6em; white-space: nowrap; }
+#r-strip { flex: 1 1 0; width: 0; min-width: 0; height: 40px; cursor: pointer; }
+.film.replaying #scene { filter: sepia(.32); }
+.screen.small .replaybar button { font-size: 10px; padding: 3px 5px 2px; }
+.screen.small .rtime { font-size: 10px; min-width: 8.6em; }
+.film:not(.is-full) .screen.small .replaybar { position: static; flex: 1 1 100%; }
+.screen.small .replaybar { flex-wrap: wrap; }
+.screen.small #r-strip { flex: 1 1 100%; order: 5; }
 .clock { font: 500 12px/1 var(--font-mono); background: rgba(17, 17, 17, .78); color: #fff; padding: 5px 7px 4px; border: 2px solid rgba(255, 255, 255, .85); letter-spacing: .04em; white-space: nowrap; }
 .time { display: inline-flex; align-items: center; border: 2px solid #fff; background: #111; }
 .time button, .hbtn { font: 600 12px/1 var(--font-pixel); color: #cfc9bb; background: transparent; border: 0; padding: 5px 7px 4px; cursor: pointer; white-space: nowrap; }
@@ -142,11 +158,15 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .time button:hover, .hbtn:hover { color: #fff; background: #2a2a2a; }
 .time button[aria-pressed="true"], .hbtn[aria-pressed="true"] { background: #fff; color: #111; }
 .time input[type="range"] { width: 128px; margin: 0 6px; accent-color: #e3b54b; cursor: pointer; }
+.pick { display: inline-flex; align-items: center; gap: 3px; font: 600 12px/1 var(--font-pixel); color: #a9a395; padding-left: 7px; }
+.pick select { font: 600 12px/1 var(--font-pixel); color: #fff; background: #111; border: 0; padding: 4px 3px 3px; cursor: pointer; max-width: 13em; }
+.pick select:hover { background: #2a2a2a; }
+.screen.small .pick, .screen.small .pick select { font-size: 10px; }
 /* Full screen: the lot and nothing else. The controls fade when the mouse rests. */
 .film.is-full { padding: 0; border-radius: 0; background: #000; display: flex; align-items: center; justify-content: center; width: 100vw; height: 100vh; }
 .film.full { position: fixed; inset: 0; z-index: 1000; height: 100dvh; }
 .film.is-full::before, .film.is-full::after { display: none; }
-.film.idle .hud-r, .film.idle .nametag { opacity: 0; pointer-events: none; }
+.film.idle .hud-r, .film.idle .nametag, .film.idle .replaybar { opacity: 0; pointer-events: none; }
 .film.idle, .film.idle #scene, .film.idle .view.zoomed #scene { cursor: none; }
 html.lot-full, html.lot-full body { overflow: hidden; }
 .nametag {
@@ -184,6 +204,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 .cmd code { flex: 1; font: 500 12.5px/1.3 var(--font-mono); overflow-wrap: anywhere; }
 .dialog button { font: 600 12px/1 var(--font-pixel); color: var(--box); background: var(--box-edge); border: 0; padding: 6px 8px 5px; cursor: pointer; }
 .dialog button:hover { background: #fff; }
+.dialog .watch { grid-column: 1 / -1; justify-self: start; font-size: 14px; padding: 8px 16px 7px; }
+.dialog .watch[hidden] { display: none; }
 .dnav { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
 .dnav button { min-width: 24px; }
 
@@ -212,7 +234,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 .foot code, .lede code { font-size: .95em; }
 @media (prefers-reduced-motion: reduce) {
   .badge.live::before, .quote .typed::after { animation: none; }
-  .hud { transition: none; }
+  .hud, .replaybar { transition: none; }
 }
 </style>
 </head>
@@ -245,11 +267,26 @@ html.lot-full, html.lot-full body { overflow: hidden; }
             <div class="zoom" role="group" aria-label="Zoom">
               <button type="button" id="z-out" title="Zoom out (-)" aria-label="Zoom out" disabled>&minus;</button><button type="button" id="z-fit" title="See the whole picture (0)" hidden>See all</button><button type="button" id="z-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
             </div>
+            <button type="button" class="hbtn" id="s-sound" aria-pressed="false" title="Hear the lot: off until you turn it on">Sound off</button>
+            <button type="button" class="hbtn" id="r-open" aria-pressed="false" title="Play back the last 24 hours (R)">Replay</button>
             <button type="button" class="hbtn" id="t-full" aria-pressed="false" title="Full screen (F)">Full screen</button>
           </div>
           <div class="time" role="group" aria-label="Time of day on the lot">
             <button type="button" id="t-auto" aria-pressed="true" title="Follow this device's clock">Auto</button><input type="range" id="t-slider" min="0" max="1435" step="5" value="720" aria-label="Time of day"><button type="button" id="t-lapse" aria-pressed="false" title="Run a whole day in one minute">Day in 1 min</button>
           </div>
+          <div class="time sky" role="group" aria-label="Season and weather on the lot">
+            <label class="pick">Season <select id="w-season" title="Auto follows this device's date">
+              <option value="auto">Auto</option><option value="spring">Spring</option><option value="summer">Summer</option><option value="autumn">Autumn</option><option value="winter">Winter</option><option value="holidays">Holidays</option>
+            </select></label><label class="pick">Weather <select id="w-pick" title="Auto makes up the weather from the date and the hour">
+              <option value="auto">Auto</option><option value="clear">Clear</option><option value="cloudy">Cloudy</option><option value="rain">Rain</option><option value="fog">Fog</option><option value="snow">Snow</option>
+            </select></label>
+          </div>
+        </div>
+        <div class="replaybar" id="replay" role="group" aria-label="Replay of the last 24 hours" hidden>
+          <button type="button" id="r-play" aria-pressed="false">Play</button>
+          <span class="rtime" id="r-time" aria-live="polite">Live</span>
+          <canvas id="r-strip" width="300" height="40"></canvas>
+          <button type="button" id="r-live" disabled>Back to live</button>
         </div>
         <div class="nametag" id="nametag" hidden></div>
       </div>
@@ -262,6 +299,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         </div>
         <dl class="params" id="d-params"></dl>
         <div class="cmd" id="d-cmd" hidden><code id="d-code"></code><button type="button" id="d-copy">Copy</button></div>
+        <button type="button" class="watch" id="d-watch" hidden>Watch</button>
         <div class="dnav">
           <button type="button" id="d-prev" aria-label="Previous person">&lt;</button><button type="button" id="d-next" aria-label="Next person">&gt;</button><button type="button" id="d-close" aria-label="Close">X</button>
         </div>
@@ -284,6 +322,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   const { LIVE, DAY_MS, when, ago, span, timecode, clock, localTimes, stageNo, plural,
     activityText, jobsOf, claudeOf, limitOf, finishedSince, stageState } = FS;
   const reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  // The lot's own clock: now, or the moment a replay shows.
+  const nowMs = () => (FS.now ? FS.now() : Date.now());
 
   // ---------------------------------------------------------------- the lot's measures
   // One tile is 16 x 8 pixels. A sound stage is SW tiles wide and SD deep, its walls WH
@@ -295,7 +335,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 
   function plan(n) {
     const R = Math.ceil(n / 2), Lc = Math.floor(n / 2);
-    G = Math.max(22, B + Math.max(R, Lc + 1) * SLOT + 5);
+    G = Math.max(28, B + Math.max(R, Lc + 1) * SLOT + 5);  // at least 28: room on the lawn for the screen
     towerBase = B + Lc * SLOT;
     const out = [];  // read from left to right: the left edge from the outside in, then the right edge
     for (let j = Lc - 1; j >= 0; j--) out.push({ edge: "L", base: B + j * SLOT });
@@ -362,6 +402,9 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     dark: "var(--dark)", offline: "var(--dark)", pending: "var(--ink-soft)" };
 
   // ---------------------------------------------------------------- drawing by the pixel
+  // While the town and the lot are drawn, the season swaps some colours (swap, see dressFor), and
+  // with snow on the ground every top face turns white (snowTops). Moving things keep their colours.
+  let swap = null, snowTops = false;
   const cv = document.getElementById("scene");
   const ctx = cv.getContext("2d");
   function mk(w, h) {
@@ -369,12 +412,12 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const g = c.getContext("2d"); g.imageSmoothingEnabled = false;
     return [c, g];
   }
-  function px(g, x, y, w, h, col) { g.fillStyle = col; g.fillRect(Math.round(x), Math.round(y), w, h); }
+  function px(g, x, y, w, h, col) { g.fillStyle = swap ? swap.get(col) || col : col; g.fillRect(Math.round(x), Math.round(y), w, h); }
   // A filled polygon, one row of pixels at a time, so its edges stay crisp.
   function poly(g, pts, col) {
     let y0 = Infinity, y1 = -Infinity;
     for (const p of pts) { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
-    g.fillStyle = col;
+    g.fillStyle = swap ? swap.get(col) || col : col;
     for (let y = Math.floor(y0); y < Math.ceil(y1); y++) {
       const yc = y + 0.5, xs = [];
       for (let i = 0; i < pts.length; i++) {
@@ -389,7 +432,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
   }
   function line(g, x0, y0, x1, y1, col) {
-    g.fillStyle = col;
+    g.fillStyle = swap ? swap.get(col) || col : col;
     x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
     const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
     let err = dx + dy;
@@ -403,9 +446,10 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   }
   const seg = (g, a, b, col) => line(g, a[0], a[1], b[0], b[1], col);
   // A flat patch of ground from (x0, y0) to (x1, y1) in tiles, at height z.
-  const flat = (g, x0, y0, x1, y1, col, z) => poly(g, [P(x0, y0, z), P(x1, y0, z), P(x1, y1, z), P(x0, y1, z)], col);
+  const flat = (g, x0, y0, x1, y1, col, z) => poly(g, [P(x0, y0, z), P(x1, y0, z), P(x1, y1, z), P(x0, y1, z)], snowTops && z > 0.5 ? mix(col, "#f2f6f9", 0.84) : col);
   // A box on the ground: the face toward the lower left, the one toward the lower right, the top.
   function box(g, x0, y0, x1, y1, z0, z1, top, left, right) {
+    if (snowTops) top = mix(top, "#f2f6f9", 0.84);
     poly(g, [P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)], left);
     poly(g, [P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)], right);
     poly(g, [P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)], top);
@@ -496,7 +540,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     while (DAYKEYS[i][0] < min) i++;
     const a = DAYKEYS[i - 1], b = DAYKEYS[i], f = (min - a[0]) / (b[0] - a[0] || 1);
     const c = (k) => mix(a[k], b[k], f), n = (k) => a[k] + (b[k] - a[k]) * f;
-    const phase = moonPhase(Date.now()), mk2 = ((min - phase * 1440 - RISE) % 1440 + 1440) % 1440 / (SET - RISE);
+    const phase = moonPhase(nowMs()), mk2 = ((min - phase * 1440 - RISE) % 1440 + 1440) % 1440 / (SET - RISE);
     return { min, top: c(1), mid: c(2), low: c(3), mul: c(4), haze: c(5), hazeA: n(6), dark: n(7),
       sun: arcAt(min), moon: { k: mk2, up: mk2 <= 1 ? Math.sin(Math.PI * mk2) : -1, phase } };
   }
@@ -509,13 +553,16 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 
   // When the lot shows: "auto" follows this device's clock; a minute of the day stays put; a
   // time-lapse runs a whole day in a minute from where it starts.
-  let lightMode = "auto", lapse = null;
+  // The lot's clock: auto, a minute of the day held with the slider, or the time-lapse. A replay
+  // (replayAt, a past moment) overrides them all: the lot shows the light of that moment.
+  let lightMode = "auto", lapse = null, replayAt = null;
   try { lightMode = localStorage.getItem("fleet-lot-light") || "auto"; } catch (e) { lightMode = "auto"; }
   if (lightMode !== "auto" && !/^\d{1,4}$/.test(lightMode)) lightMode = "auto";
   function nowMin() {
+    if (replayAt != null) { const r = new Date(replayAt); return r.getHours() * 60 + r.getMinutes() + r.getSeconds() / 60; }
     if (lapse) return (lapse.from + ((performance.now() - lapse.at) / 1000) * 24) % 1440;
     if (lightMode !== "auto") return Number(lightMode) % 1440;
-    const d = new Date();
+    const d = new Date(nowMs());
     return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
   }
 
@@ -540,6 +587,187 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     return Math.min(1, 0.12 + bump(8.5, 1.6, 0.75) + bump(13, 3.2, 0.42) + bump(18, 2, 0.8) + bump(21.5, 1.6, 0.25));
   }
 
+  // ---------------------------------------------------------------- seasons and weather
+  // The season follows this device's date (northern seasons), with lights strung up from the first
+  // of December to the sixth of January. The weather is made up but the same on every screen: it
+  // follows from the date and the hour alone. Most days are fair; some bring rain, a winter day can
+  // bring snow that lies all day, and some mornings start in fog. You can also pick a season and a
+  // weather to look at. None of it stands for anything in the fleet.
+  const SEASONS = ["spring", "summer", "autumn", "winter"], WEATHERS = ["clear", "cloudy", "rain", "fog", "snow"];
+  let seasonPick = "auto", weatherPick = "auto";
+  try { seasonPick = localStorage.getItem("fleet-lot-season") || "auto"; weatherPick = localStorage.getItem("fleet-lot-weather") || "auto"; } catch (e) { /* the defaults */ }
+  if (seasonPick !== "auto" && seasonPick !== "holidays" && !SEASONS.includes(seasonPick)) seasonPick = "auto";
+  if (weatherPick !== "auto" && !WEATHERS.includes(weatherPick)) weatherPick = "auto";
+  const seasonOf = (d) => { const m = d.getMonth(); return m === 11 || m < 2 ? "winter" : m < 5 ? "spring" : m < 8 ? "summer" : "autumn"; };
+  const holidayOf = (d) => d.getMonth() === 11 || (d.getMonth() === 0 && d.getDate() <= 6);
+  // For each season: the chance of a fair, a grey, a wet and a snowy day, then of a foggy morning.
+  const DAYS = { spring: [0.52, 0.24, 0.24, 0, 0.2], summer: [0.72, 0.16, 0.12, 0, 0.1],
+    autumn: [0.44, 0.26, 0.3, 0, 0.36], winter: [0.38, 0.28, 0.1, 0.24, 0.28] };
+  const plans = new Map();
+  function dayPlan(y, m, d, season) {  // the weather of one day, in eight blocks of three hours
+    const key = y + "-" + (m + 1) + "-" + d + ":" + season;
+    if (plans.has(key)) return plans.get(key);
+    const r = rng(hash("weather:" + key)), ch = DAYS[season], u = r();
+    const kind = u < ch[0] ? "fair" : u < ch[0] + ch[1] ? "grey" : u < ch[0] + ch[1] + ch[2] ? "wet" : "snowy";
+    const blocks = [];
+    for (let b = 0; b < 8; b++) {
+      const v = r(), k = 0.45 + r() * 0.55;
+      blocks.push(kind === "fair" ? (v < 0.24 ? { cloud: 0.42 + 0.2 * k } : { cloud: 0.04 + 0.18 * k })
+        : kind === "grey" ? (v < 0.25 ? { cloud: 0.86, rain: 0.2 + 0.2 * k } : { cloud: 0.58 + 0.26 * k })
+          : kind === "wet" ? (v < 0.55 ? { cloud: 0.92, rain: k } : { cloud: 0.66 + 0.2 * k })
+            : (v < 0.62 ? { cloud: 0.88, snow: k } : { cloud: 0.7 + 0.15 * k }));
+    }
+    const p = { kind, blocks, fog: kind !== "wet" && r() < ch[4] ? 0.55 + r() * 0.45 : 0, cover: kind === "snowy" ? 1 : 0 };
+    plans.set(key, p);
+    if (plans.size > 12) plans.delete(plans.keys().next().value);
+    return p;
+  }
+  const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+  const morningFog = (min) => (min < 170 || min > 640 ? 0 : min < 330 ? (min - 170) / 160 : min < 460 ? 1 : 1 - (min - 460) / 180);
+  const PICKED = { clear: { cloud: 0.05 }, cloudy: { cloud: 0.72 }, rain: { cloud: 0.94, rain: 0.85 },
+    fog: { cloud: 0.42, fog: 0.95 }, snow: { cloud: 0.9, snow: 0.8, cover: 1 } };
+  let WX = { season: "summer", holiday: false, cloud: 0, rain: 0, snow: 0, fog: 0, cover: 0, auto: "" };
+  function weatherAt(min) {
+    const d = new Date(nowMs()), y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+    const season = seasonPick === "auto" ? seasonOf(d) : seasonPick === "holidays" ? "winter" : seasonPick;
+    const holiday = seasonPick === "auto" ? holidayOf(d) : seasonPick === "holidays";
+    const w = { season, holiday, cloud: 0, rain: 0, snow: 0, fog: 0, cover: 0 };
+    const p = dayPlan(y, m, day, season);
+    if (weatherPick === "auto") {
+      const b = Math.min(7, Math.floor(min / 180)), nd = new Date(y, m, day + 1);
+      const a = p.blocks[b], n = b < 7 ? p.blocks[b + 1] : dayPlan(nd.getFullYear(), nd.getMonth(), nd.getDate(), season).blocks[0];
+      const f = smooth((min - (b * 180 + 140)) / 40);  // the last 40 minutes of a block turn into the next
+      for (const k of ["cloud", "rain", "snow"]) w[k] = (a[k] || 0) + ((n[k] || 0) - (a[k] || 0)) * f;
+      w.fog = p.fog * smooth(morningFog(min) * 1.5);
+      w.cloud = Math.max(w.cloud, w.fog * 0.45);
+      w.cover = p.cover;
+    } else Object.assign(w, PICKED[weatherPick]);
+    if (season !== "winter" && weatherPick === "auto") { w.rain = Math.max(w.rain, w.snow); w.snow = 0; w.cover = 0; }
+    w.auto = p.kind;
+    return w;
+  }
+  // The weather in a word or two, for the clock.
+  function weatherWord(w) {
+    if (w.snow > 0.15) return w.snow > 0.6 ? "Snow" : "Light snow";
+    if (w.rain > 0.15) return w.rain > 0.55 ? "Rain" : "Showers";
+    if (w.fog > 0.3) return "Fog";
+    if (w.cover > 0.5) return "Snow on the ground";
+    if (w.cloud > 0.7) return "Overcast";
+    if (w.cloud > 0.38) return "Cloudy";
+    return "";
+  }
+
+  // The light under the weather: clouds grey the sky and flatten the light on the land, rain
+  // darkens it and lamps come on earlier on a gloomy day, fog veils the far land. A few fair-weather
+  // clouds leave the light as it is (and the frame stays cheap: no tint on a clear midday).
+  const greyOf = (c, k) => { const [r, g, b] = rgb(c), y = r * 0.3 + g * 0.55 + b * 0.15; return hex(r + (y - r) * k, g + (y - g) * k, b + (y - b) * k); };
+  function weatherLight(L, w) {
+    const oc = Math.max(0, Math.min(1, (w.cloud - 0.25) / 0.75)), wet = Math.max(w.rain, w.snow * 0.7), fog = w.fog;
+    const fogC = mix(litCol("#dfe4e8", L), L.low, 0.25);
+    L.wx = w; L.fogC = fogC; L.sunA = Math.max(0, Math.min(1, 1 - oc * 1.12)); L.starA = Math.max(0, Math.min(1, 1 - oc * 1.15 - fog));
+    if (oc < 0.01 && fog < 0.03) return L;
+    const day = 1 - L.dark * 0.65, k = oc * 0.72, d = (0.07 + 0.14 * wet) * oc * day;
+    const sky = (c, kk) => shade(greyOf(c, kk), -d);
+    L.top = mix(sky(L.top, k), fogC, fog * 0.45);
+    L.mid = mix(sky(L.mid, k), fogC, fog * 0.7);
+    L.low = mix(sky(L.low, k * 0.85), fogC, fog * 0.85);
+    L.mul = shade(greyOf(L.mul, oc * 0.38), -(0.08 * oc + 0.07 * wet) * day);
+    L.haze = mix(L.haze, fogC, Math.max(fog, oc * 0.35));
+    L.hazeA = Math.min(0.6, L.hazeA + 0.05 * oc + 0.3 * fog);
+    L.dark = Math.min(1, L.dark + (0.1 * oc + 0.06 * wet + 0.05 * fog) * (L.dark < 0.97 ? 1 : 0));
+    return L;
+  }
+
+  // ---------------------------------------------------------------- what the season wears
+  // Each season swaps some colours of the town and the lot for its own while they are drawn: the
+  // lawns, the hills, the copses, the water. The trees and the flower beds ask for theirs. Snow on
+  // the ground whitens the lawns, the paving and every roof; the streets stay ploughed.
+  const SNOWC = "#f2f6f9";
+  const SEASONED = {
+    spring: { lawn: ["#76ad57", "#6ca34f", "#84b764", "#7aac5a"], hills: ["#7cae5b", "#a3ca7d", "#92bf6f", "#6f9f51"], copse: ["#4f8a45", "#69a35a"],
+      leaves: [["#4d8c43", "#5f9e4e", "#83c063"], ["#4a8740", "#5c9a4b", "#7ab95c"]], blossom: ["#f6b8cb", "#fbd7e2", "#ffffff"], speck: "#6aab57",
+      flowers: 22, fcol: ["#f4d35e", "#ee6c8a", "#f7f4ec", "#c77dff", "#ff9ec0"], snowLine: 15, bed: null },
+    summer: { lawn: null, hills: null, copse: null, leaves: [["#3f7a3a", "#4d8c43", "#68a853"]], speck: null,
+      flowers: 14, fcol: ["#f4d35e", "#ee6c8a", "#f7f4ec", "#c77dff"], snowLine: 22, bed: null },
+    autumn: { lawn: ["#839e56", "#7a954f", "#8ba660", "#839c58"], hills: ["#929b58", "#b8b979", "#a7ab69", "#838b4d"], copse: ["#9c5b2e", "#bf7f3a"],
+      leaves: [["#b4512b", "#d1763a", "#e9a84b"], ["#a3412e", "#c6623a", "#e29245"], ["#c48f2e", "#dcae47", "#f0cc6a"], ["#5f7a3a", "#7a9442", "#a3a853"]],
+      speck: "#7f9a4a", flowers: 6, fcol: ["#d9822b", "#c94f3a", "#e3b54b"], snowLine: 18, bed: null },
+    winter: { lawn: ["#7e8f6b", "#758664", "#869577", "#7d8d70"], hills: ["#7c8b6d", "#9ba78b", "#8e9a7f", "#707e63"], copse: ["#35563d", "#476a4b"],
+      leaves: [["#2f5a3a", "#3b6b45", "#507f56"]], bare: true, speck: "#58785a", flowers: 0, fcol: [], snowLine: 10, bed: "#5d4e40" },
+  };
+  // The colours that each season swaps: [the original, its place in the season's list]. (The town's
+  // colours are set further on, so these lists are made when they are first needed.)
+  const SWAPS = () => [["lawn", [PAL.grass, PAL.grass2, TC.lawn, TC.lawn2]], ["hills", ["#76a05a", "#9cc078", "#8ab46a", "#6a9450"]], ["copse", ["#4b7d42", "#5f9550"]]];
+  const SNOWED = () => [[PAL.grass, "#eef3f7"], [PAL.grass2, "#e6edf2"], [TC.lawn, "#eef3f7"], [TC.lawn2, "#e7eef3"], ["#76a05a", "#e9eff4"],
+    ["#9cc078", "#f8fafc"], ["#8ab46a", "#f1f5f8"], ["#6a9450", "#d8e1e9"], [PAL.concrete, "#e5eaee"], [PAL.concrete2, "#d9e0e6"],
+    [TC.walk, "#e1e7ec"], [TC.walk2, "#d6dde3"], [PAL.stone, "#e3e9ee"], [PAL.stone2, "#d4dce3"], [TC.dirt, "#e6ebef"],
+    [TC.pave, "#d9dfe4"], [TC.pave2, "#ccd3da"], ["#4f8fb8", "#c1dbe9"], ["#6aa6cc", "#d8e9f2"], ["#5b9bc2", "#c4dcea"],
+    ["#7cb6d8", "#dbeaf3"], ["#a8503c", "#eef2f5"], ["#5a9a4f", "#eef3f7"], [PAL.hedge2, "#e9eef2"]];
+  let DR = { key: "", season: "summer", snow: false, holiday: false, s: SEASONED.summer, swap: null };
+  function dressFor(w) {  // true when the town and the lot must be drawn again
+    const snow = w.cover > 0.5, key = w.season + (snow ? "+snow" : "") + (w.holiday ? "+lights" : "");
+    if (key === DR.key) return false;
+    const s = SEASONED[w.season], swap = new Map();
+    for (const [name, from] of SWAPS()) if (s[name]) from.forEach((c, i) => swap.set(c, s[name][i % s[name].length]));
+    if (s.speck) swap.set("#5a9a4f", s.speck);
+    if (s.bed) swap.set(PAL.hedge2, s.bed);
+    if (snow) for (const [a, b] of SNOWED()) swap.set(a, b);
+    DR = { key, season: w.season, snow, holiday: w.holiday, s, swap: swap.size ? swap : null };
+    snowTops = snow;
+    return true;
+  }
+  // A roof or anything else that faces the sky, under the snow when there is snow on the ground.
+  const snowy = (c, k) => (snowTops ? mix(c, SNOWC, k == null ? 0.84 : k) : c);
+  // A tree as the season has it: in leaf, in blossom, in autumn colours, or bare, with snow on top.
+  function seasonTree(g, x, y, s, seed) {
+    const h = hash(seed), cy = y - 3 - s, S2 = DR.s;
+    px(g, x, y - 4, 1, 4, TC.trunk);
+    if (S2.bare && h % 5 > 1) {  // three in five lose their leaves; the rest are evergreens
+      const r = rng(h);
+      for (let dy = -s; dy <= s; dy++) {
+        const wd = Math.floor(Math.sqrt(s * s - dy * dy + s * 0.8));
+        for (let dx = -wd; dx <= wd; dx++) if (((dx + dy) & 1) === 0 && r() < 0.5) px(g, x + dx, cy + dy, 1, 1, r() < 0.5 ? "#6e5a48" : "#857060");
+      }
+      px(g, x, cy - 1, 1, s + 3, "#6e5a48");
+      if (DR.snow) for (let dx = -s + 1; dx < s; dx += 2) px(g, x + dx, cy - Math.floor(Math.sqrt(Math.max(0, s * s - dx * dx))) + 1, 1, 1, SNOWC);
+      return;
+    }
+    const L = S2.leaves[h % S2.leaves.length];
+    disc(g, x, cy, s, L[0]); disc(g, x - 1, cy - 1, Math.max(1, s - 1), L[1]);
+    px(g, x - Math.ceil(s / 2), cy - Math.ceil(s / 2), 2, 1, L[2]);
+    if (S2.blossom && h % 3 === 0) { const r = rng(h ^ 77); for (let i = 0; i < s * 4; i++) px(g, x - s + Math.floor(r() * 2 * s), cy - s + Math.floor(r() * 2 * s), 1, 1, S2.blossom[i % 3]); }
+    if (DR.snow) { disc(g, x - 1, cy - s + 1, Math.max(1, s - 2), SNOWC); px(g, x - s + 1, cy - 1, 2, 1, SNOWC); px(g, x + s - 2, cy, 2, 1, SNOWC); }
+  }
+
+  // ---------------------------------------------------------------- holiday lights
+  // From December 1 to January 6 the lot and the shops string up lights. They are drawn with the
+  // building they hang on, then lit and twinkled in every frame where nothing stands in front of them.
+  const HOLI = ["#ff4b4b", "#4bd16a", "#ffd84b", "#4bb0ff", "#ff8be0"];
+  const HOLI_LIT = HOLI.map((c) => mix(c, "#ffffff", 0.45));
+  function stringOf(g, list, pts, seed) {  // bulbs along a line of points, sagging between hooks
+    for (let i = 0; i < pts.length; i++) {
+      const k = (((i + seed) % HOLI.length) + HOLI.length) % HOLI.length, p = pts[i];
+      px(g, p[0], p[1], 1, 1, HOLI[k]);
+      list.push({ x: Math.round(p[0]), y: Math.round(p[1]), k, ph: (hash(seed + ":" + i) % 1000) / 250 });
+    }
+  }
+  // A string from a to b (screen points), a bulb every 3 pixels, a sag of up to 2 pixels.
+  function strand(a, b, sag) {
+    const n = Math.max(2, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 3)), out = [];
+    for (let i = 0; i <= n; i++) { const f = i / n, hook = (f * n / 4) % 1; out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f + Math.sin(Math.PI * hook) * (sag == null ? 2 : sag)]); }
+    return out;
+  }
+  // Keep the bulbs nothing was drawn over: their pixel in the layer still has their colour.
+  function seenBulbs(c, list) {
+    if (!list.length) return list;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data, rgbs = HOLI.map(rgb);
+    return list.filter((b) => {
+      if (b.x < 0 || b.y < 0 || b.x >= c.width || b.y >= c.height) return false;
+      const i = (b.y * c.width + b.x) * 4, q = rgbs[b.k];
+      return d[i] === q[0] && d[i + 1] === q[1] && d[i + 2] === q[2] && d[i + 3] === 255;
+    });
+  }
+
   // ---------------------------------------------------------------- the sky
   // Where the land meets the sky: the far mountains stand on MTN, the near hills top out at HILL.
   const MTN = () => OY - 58, HILL = () => OY - 44;
@@ -562,25 +790,33 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       g.fillStyle = bands[i - 1];
       for (let x = (i + 1) % 2; x < W; x += 2) g.fillRect(x, i * bh, 1, 1);
     }
-    const s = L.sun, [sx, sy] = sunAt(L);
-    if (s.up > -0.25 && s.up < 0.55) {  // a low sun warms the sky around it
-      const a = Math.max(0, 1 - Math.abs(s.up - 0.04) / 0.5);
+    const s = L.sun, [sx, sy] = sunAt(L), sa = L.sunA == null ? 1 : L.sunA;  // clouds hide the sun and the moon
+    if (sa > 0.02 && s.up > -0.25 && s.up < 0.55) {  // a low sun warms the sky around it
+      const a = Math.max(0, 1 - Math.abs(s.up - 0.04) / 0.5) * sa;
       g.save(); g.globalCompositeOperation = "lighter";
       for (const [r, al] of [[120, 0.05], [80, 0.06], [50, 0.08], [28, 0.1]]) { g.globalAlpha = al * a; ellipse(g, sx, Math.max(sy, MTN() - 8), r * 1.7, r * 0.62, "#ff9548"); }
       g.restore();
     }
-    if (s.up > -0.1) {
+    if (sa > 0.02 && s.up > -0.1) {
       const low = Math.max(0, Math.min(1, 1 - s.up / 0.32)), r = 8 + Math.round(low * 3);
+      g.save(); g.globalAlpha = sa;
       disc(g, sx, sy, r + 1, mix("#fff6cf", "#ff7a32", low)); disc(g, sx, sy, r - 2, mix("#fffdf2", "#ffb466", low));
+      g.restore();
     }
     const m = L.moon, lit = (1 - Math.cos(2 * Math.PI * m.phase)) / 2;
-    if (m.up > -0.05 && lit > 0.04) {
+    if (sa > 0.02 && m.up > -0.05 && lit > 0.04) {
       const [mx, my] = moonAt(L), r = 6, under = skyBand(L, Math.max(0, Math.min(1, my / bot)));
-      g.save(); g.globalAlpha = 0.35 + 0.65 * L.dark;
+      g.save(); g.globalAlpha = (0.35 + 0.65 * L.dark) * sa;
       disc(g, mx, my, r, "#f3efd9"); px(g, mx - 2, my - 1, 2, 2, "#d9d3bb"); px(g, mx + 2, my + 2, 1, 1, "#d9d3bb");
       const dx = m.phase < 0.5 ? -Math.round(2 * r * 2 * m.phase) : Math.round(2 * r * 2 * (1 - m.phase));
       if (Math.abs(dx) < 2 * r + 1) { g.globalAlpha = 1; disc(g, mx + dx, my, r + 1, under); }
       g.restore();
+    }
+    const w = L.wx;
+    if (w && w.cloud > 0.5) {  // a grey day: a ceiling of cloud, thickest at the top
+      const a = Math.min(1, (w.cloud - 0.5) / 0.4), ceil = Math.round(bot * 0.7), cc = mix(L.mid, litCol("#e9ecef", L), 0.35);
+      for (let y = 0; y < ceil; y += 2) { g.globalAlpha = a * 0.55 * (1 - y / ceil); px(g, 0, y, W, 2, y % 4 ? shade(cc, -0.05) : cc); }
+      g.globalAlpha = 1;
     }
   }
 
@@ -629,8 +865,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const c = G - 3.2 + sgn * 2.6, cc = G - 3.2 - sgn * 2.6;
       const bx = sgn > 0 ? c : cc, by = sgn > 0 ? cc : c;
       flat(g, bx - 1, by - 1, bx + 1, by + 1, PAL.hedge2);
-      const r = rng(hash("bed" + sgn));
-      for (let i = 0; i < 14; i++) { const p = P(bx - 0.9 + r() * 1.8, by - 0.9 + r() * 1.8); px(g, p[0], p[1], 1, 1, pick(["#f4d35e", "#ee6c8a", "#f7f4ec", "#c77dff"], i)); }
+      const r = rng(hash("bed" + sgn)), fl = DR.snow ? 0 : DR.s.flowers;
+      for (let i = 0; i < fl; i++) { const p = P(bx - 0.9 + r() * 1.8, by - 0.9 + r() * 1.8); px(g, p[0], p[1], 1, 1, pick(DR.s.fcol, i)); }
     }
     flat(g, 9.3, G - 9, 12.2, laneEnd, PAL.asphalt2);
     for (let y = G - 9; y <= laneEnd + 0.01; y += 1.55) seg(g, P(9.4, y), P(12.1, y), PAL.stripe);
@@ -659,10 +895,11 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     poly(g, [P(4.0, 5.5, 2), P(4.9, 5.5, 2), P(4.9, 5.5, 15), P(4.0, 5.5, 15)], "#5c7a5a");
     px(g, P(4.75, 5.5, 8)[0], P(4.75, 5.5, 8)[1], 1, 1, PAL.paint);
     const ap = P(3, 3, 31);
-    poly(g, [P(0.1, 5.9, 17), P(5.9, 5.9, 17), ap], "#c65a3e");
-    poly(g, [P(5.9, 0.1, 17), P(5.9, 5.9, 17), ap], "#a04631");
-    for (let k = 1; k < 5; k++) { seg(g, P(0.1 + k * 1.16, 5.9, 17), ap, "#b44f37"); seg(g, P(5.9, 0.1 + k * 1.16, 17), ap, "#8e3d2b"); }
+    poly(g, [P(0.1, 5.9, 17), P(5.9, 5.9, 17), ap], snowy("#c65a3e"));
+    poly(g, [P(5.9, 0.1, 17), P(5.9, 5.9, 17), ap], snowy("#a04631", 0.78));
+    for (let k = 1; k < 5; k++) { seg(g, P(0.1 + k * 1.16, 5.9, 17), ap, snowy("#b44f37", 0.7)); seg(g, P(5.9, 0.1 + k * 1.16, 17), ap, snowy("#8e3d2b", 0.66)); }
     seg(g, P(0.1, 5.9, 17), P(5.9, 5.9, 17), "#7d3424"); seg(g, P(5.9, 0.1, 17), P(5.9, 5.9, 17), "#6d2d1f");
+    if (DR.holiday) { stringOf(g, lights.bulbs, strand(P(0.1, 5.9, 16), P(5.9, 5.9, 16)), 1); stringOf(g, lights.bulbs, strand(P(5.9, 5.9, 16), P(5.9, 0.1, 16)), 3); }
     for (let i = 0; i < 9; i++) {  // a striped awning over the porch
       const x0 = 1.0 + i * 0.52, x1 = x0 + 0.52;
       poly(g, [P(x0, 5.9, 16), P(x1, 5.9, 16), P(x1, 7.0, 12), P(x0, 7.0, 12)], i % 2 ? "#f4efe4" : "#c8423a");
@@ -692,8 +929,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
     ellipse(g, C[0], C[1] - zt, rx, ry, shade(tank, 0.12));
     const apex = [C[0], C[1] - zt - 11];
-    poly(g, [apex, [C[0] - rx - 1, C[1] - zt], [C[0], C[1] - zt + ry]], "#8e9a9b");
-    poly(g, [apex, [C[0], C[1] - zt + ry], [C[0] + rx + 1, C[1] - zt]], "#6f7a7b");
+    poly(g, [apex, [C[0] - rx - 1, C[1] - zt], [C[0], C[1] - zt + ry]], snowy("#8e9a9b"));
+    poly(g, [apex, [C[0], C[1] - zt + ry], [C[0] + rx + 1, C[1] - zt]], snowy("#6f7a7b", 0.76));
     const nm = "HERMES", tw = textW(nm);
     text(g, nm, C[0] - Math.floor(tw / 2), C[1] - 70 + ry - 2, "#8f2f27");
     for (let dx = -rx - 4; dx <= rx + 4; dx++) {  // the railing of the catwalk, in front
@@ -720,7 +957,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     spoly(g, st, [[SW, -SD, 0], [SW, 0, 0], [SW, 0, 3], [SW, -SD, 3]], shade(endWall, -0.22));
     for (const a of [0.12, SW - 0.12]) seg(g, S(st, a, 0, 3), S(st, a, 0, WH - 1), shade(doorWall, -0.1));
     for (const v of [-SD + 0.12, -0.12]) seg(g, S(st, SW, v, 3), S(st, SW, v, WH - 1), shade(endWall, -0.1));
-    const roofC = dim ? mix(PAL.roof, "#4f5054", dim) : PAL.roof;
+    const roofC = snowy(dim ? mix(PAL.roof, "#4f5054", dim) : PAL.roof, 0.7);
     for (let i = 0; i < 6; i++) {
       const t0 = i / 6, t1 = (i + 1) / 6, z0 = WH + RH * Math.sin(Math.PI * t0), z1 = WH + RH * Math.sin(Math.PI * t1);
       const rising = z1 > z0, mid = i === 2 || i === 3;
@@ -736,6 +973,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       }
     }
     seg(g, S(st, 0, 0, WH), S(st, SW, 0, WH), shade(doorWall, -0.32));
+    if (DR.holiday) stringOf(g, lights.bulbs, strand(S(st, 0.1, 0, WH - 1), S(st, SW - 0.1, 0, WH - 1), 3), hash(st.key) % 5);
     // the rooftop unit: how hard this VPS works
     sbox(g, st, 0.7, -2.5, 1.7, -1.6, WH + RH - 1, WH + RH + 5, dim ? "#77797a" : PAL.metal);
     const fan = S(st, 1.2, -2.05, WH + RH + 5);
@@ -802,6 +1040,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     poly(g, bw, PAL.glassDark); lights.windows.push(bw);
     poly(g, [P(G - 2.45, 10.25, 6), P(G - 2.45, 11.15, 6), P(G - 2.45, 11.15, 11), P(G - 2.45, 10.25, 11)], PAL.glassDark);
     box(g, G - 3.95, 9.85, G - 2.25, 11.55, 13, 15, "#a0453a", "#b44f42", "#8e3b32");
+    if (DR.holiday) { stringOf(g, lights.bulbs, strand(P(G - 3.95, 11.55, 12.5), P(G - 2.25, 11.55, 12.5), 1), 2); stringOf(g, lights.bulbs, strand(P(G - 2.25, 11.55, 12.5), P(G - 2.25, 9.85, 12.5), 1), 4); }
     const fc = (G + 8) / 2, C = P(fc, fc);
     ellipse(g, C[0], C[1] - 2, 19, 9.5, "#cdbb94"); ellipse(g, C[0], C[1] - 4, 18, 9, "#bfae88");
     ellipse(g, C[0], C[1] - 4, 15, 7.5, "#4f8fb8"); ellipse(g, C[0] - 2, C[1] - 5, 9, 4, "#6aa6cc");
@@ -833,7 +1072,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   const OUT = () => G + 5.6;                 // the blocks beyond the boulevard start here
   // What the town lights: windows by their own hours, lamps and signs by the dark, beacons by the
   // clock. B is drawn with the land behind the lot, F with the land in front of it.
-  const city = { winB: [], winF: [], emB: [], emF: [], haloB: [], haloF: [], pools: [], blink: [], towers: [], far: [], near: [], hill: [], horizon: [] };
+  const city = { winB: [], winF: [], emB: [], emF: [], haloB: [], haloF: [], pools: [], blink: [], towers: [], far: [], near: [], hill: [], horizon: [], bulbsB: [], bulbsF: [] };
   const TC = {
     street: "#5b5d64", street2: "#53555c", walk: "#cdc6b6", walk2: "#c2bbab", kerb: "#a39c8e", lawn: "#7ba95d", lawn2: "#72a256",
     pave: "#aaa89f", pave2: "#9d9b93", line: "#ece7d8", yellow: "#e8c34a", glass: "#56707f", dirt: "#bba27a",
@@ -890,13 +1129,14 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   }
   // The far range and the skyline, in the haze of the hour: drawn on the sky, once for each light.
   function drawFar(g, L) {
-    const hz = (c, f) => mix(litCol(c, L), L.low, f);
+    const fk = L.wx ? L.wx.fog * 0.6 : 0, hz = (c, f) => mix(litCol(c, L), L.low, Math.min(0.96, f + fk));  // fog hides the far land
     const fa = hz("#aabdcc", 0.45), fs = hz("#94a8b9", 0.45), snow = hz("#f4f7f9", 0.38);
+    const sl = DR.snow ? 4 : DR.s.snowLine, deep = DR.snow ? 7 : sl < 14 ? 5 : 3;  // the snow line: low in winter, high in summer
     const na = hz("#8fa7b5", 0.3), ns = hz("#7b93a3", 0.3);
     for (let x = 0; x < W; x++) {
       const t = city.far[x], sl = city.far[Math.min(W - 1, x + 2)] - city.far[Math.max(0, x - 2)];
       px(g, x, t, 1, H - t, sl > 0 ? fs : fa);
-      if (t < MTN() - 19) px(g, x, t, 1, Math.min(3, MTN() - 18 - t), snow);
+      if (t < MTN() - sl) px(g, x, t, 1, Math.min(deep, MTN() - sl + 1 - t), snow);
     }
     for (let x = 0; x < W; x++) {
       const t = city.near[x], sl = city.near[Math.min(W - 1, x + 2)] - city.near[Math.max(0, x - 2)];
@@ -933,6 +1173,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const y = top + 3 + Math.floor(rr() * room), what = rr();
       if (what < 0.38) {  // a farmhouse with a window that lights up
         px(g, x, y - 2, 4, 3, "#ece3d0"); px(g, x + 3, y - 2, 1, 3, "#cfc4ae"); px(g, x - 1, y - 3, 6, 1, "#a8503c"); px(g, x, y - 4, 4, 1, "#a8503c");
+        if (DR.holiday && what < 0.2) for (let k = 0; k < 3; k++) stringOf(g, city.bulbsB, [[x - 1 + k * 2, y - 3]], k + xw);
         city.winB.push({ x: x + 1, y: y - 1, w: 1, h: 1, hr: hoursFor(hash("farm" + xw), "home"), c: WARM[xw & 3] });
       } else if (what < 0.8) {
         for (let k = 0; k < 2 + Math.floor(rr() * 3); k++) { const tx = x + k * 3 - 1, ty = y - Math.floor(rr() * 2); px(g, tx, ty - 2, 3, 3, "#4b7d42"); px(g, tx, ty - 3, 2, 1, "#5f9550"); }
@@ -1092,21 +1333,17 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const R0 = alongX ? P(x0 + d / 2, (y0 + y1) / 2, z + rh) : P((x0 + x1) / 2, y0 + w / 2, z + rh);
     const R1 = alongX ? P(x1 - d / 2, (y0 + y1) / 2, z + rh) : P((x0 + x1) / 2, y1 - w / 2, z + rh);
     const c00 = P(x0, y0, z), c10 = P(x1, y0, z), c11 = P(x1, y1, z), c01 = P(x0, y1, z);
+    const back = snowy(shade(col, -0.3), 0.74), side = snowy(shade(col, -0.22), 0.76), front = snowy(col, 0.8);
     if (alongX) {
-      poly(g, [c00, c10, R1, R0], shade(col, -0.3)); poly(g, [c00, c01, R0], shade(col, -0.3));
-      poly(g, [c10, c11, R1], shade(col, -0.22)); poly(g, [c01, c11, R1, R0], col);
+      poly(g, [c00, c10, R1, R0], back); poly(g, [c00, c01, R0], back);
+      poly(g, [c10, c11, R1], side); poly(g, [c01, c11, R1, R0], front);
     } else {
-      poly(g, [c00, c10, R0], shade(col, -0.3)); poly(g, [c00, c01, R1, R0], shade(col, -0.3));
-      poly(g, [c10, c11, R1, R0], shade(col, -0.22)); poly(g, [c01, c11, R1], col);
+      poly(g, [c00, c10, R0], back); poly(g, [c00, c01, R1, R0], back);
+      poly(g, [c10, c11, R1, R0], side); poly(g, [c01, c11, R1], front);
     }
     seg(g, c01, c11, shade(col, -0.35)); seg(g, c11, c10, shade(col, -0.4)); seg(g, R0, R1, shade(col, 0.2));
   }
-  function tree(g, gx, gy, s) {
-    const p = P(gx, gy), cy = p[1] - 3 - s;
-    px(g, p[0], p[1] - 4, 1, 4, TC.trunk);
-    disc(g, p[0], cy, s, TC.leaf); disc(g, p[0] - 1, cy - 1, Math.max(1, s - 1), TC.leaf2);
-    px(g, p[0] - Math.ceil(s / 2), cy - Math.ceil(s / 2), 2, 1, TC.leaf3);
-  }
+  function tree(g, gx, gy, s) { const p = P(gx, gy); seasonTree(g, p[0], p[1], s, gx.toFixed(2) + ":" + gy.toFixed(2)); }
   function tank(g, gx, gy, z) {  // a water tank on a roof
     const p = P(gx, gy, z);
     px(g, p[0] - 3, p[1] - 3, 1, 3, "#5a4636"); px(g, p[0] + 2, p[1] - 3, 1, 3, "#5a4636");
@@ -1199,7 +1436,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const n = Math.max(2, Math.round((b[2] - b[0]) / 1.5)), st = (b[2] - b[0]) / n, rf = shade(wall, 0.14);
     for (let i = 0; i < n; i++) {
       const a0 = b[0] + i * st, a1 = a0 + st, gl = [P(a1, b[1], h), P(a1, b[3], h), P(a1, b[3], h + 5), P(a1, b[1], h + 5)];
-      poly(g, [P(a0, b[1], h), P(a1, b[1], h + 5), P(a1, b[3], h + 5), P(a0, b[3], h)], i % 2 ? rf : shade(rf, -0.05));
+      poly(g, [P(a0, b[1], h), P(a1, b[1], h + 5), P(a1, b[3], h + 5), P(a0, b[3], h)], snowy(i % 2 ? rf : shade(rf, -0.05)));
       poly(g, gl, "#6d8695");
       poly(g, [P(a0, b[3], h), P(a1, b[3], h), P(a1, b[3], h + 5)], wall);
       list.push({ q: gl, hr: hoursFor(hash(p.seed + "saw" + i), "office"), c: "#c9d8e6", a: 0.28 });
@@ -1282,6 +1519,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     pane(g, list, hb, side, (s0 + s1) / 2, 2, { w: 2, h: 3, sill: "#f4efe4", seed: p.seed + "c" });
     if (r() < 0.45) { const c = P(hb[0] + w * 0.7, hb[1] + d * 0.3, h + 2); px(g, c[0], c[1] - 7, 3, 7, "#8a5a44"); px(g, c[0], c[1] - 7, 3, 1, "#5e3d2f"); }
     hipRoof(g, hb, h, roof);
+    if (DR.holiday && p.seed % 5 < 3) stringOf(g, p.back ? city.bulbsB : city.bulbsF, strand(onFace(hb, f, a0 + 0.05, h - 0.6), onFace(hb, f, a1 - 0.05, h - 0.6), 1), p.seed % 5);
     // the yard: a tree in front, sometimes a fence
     const tx = f === "L" ? (r() < 0.5 ? b[0] + 0.4 : b[2] - 0.4) : b[2] - 0.35, ty = f === "L" ? b[3] - 0.35 : (r() < 0.5 ? b[1] + 0.4 : b[3] - 0.4);
     if (r() < 0.8) tree(g, tx, ty, 3 + Math.floor(r() * 2));
@@ -1302,6 +1540,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const e = Math.min(a + 0.36, a1 - 0.3);
       poly(g, [onFace(b, f, a, 8.5), onFace(b, f, e, 8.5), onFace(b, f, e, 6.5, 0.6), onFace(b, f, a, 6.5, 0.6)], i % 2 ? "#f4efe4" : awn);
     }
+    if (DR.holiday) stringOf(g, p.back ? city.bulbsB : city.bulbsF, strand(onFace(b, f, a0 + 0.3, 6.3, 0.6), onFace(b, f, a1 - 0.3, 6.3, 0.6), 1), p.seed % 5);
     if (two) panes(g, list, b, f, 10, 13, { kind: "home", step: 0.9, w: 2, h: 3, floor: 7, seed: p.seed + "up" });
     const fits = SHOPS.filter((s) => textW(s) <= len * 8 - 4), name = fits.length ? fits[(p.seed >>> 6) % fits.length] : "", zt = 9;
     if (name) faceText(g, b, f, mid, zt + 0.2, name, "#2b2622", 0);
@@ -1323,6 +1562,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
     flat(g, b[0] + 0.2, b[1] + 0.2, b[2] - 0.2, b[3] - 0.2, "#b9c2c0", h);
     const [a0, a1] = along(b, f), mid = (a0 + a1) / 2, word = "DINER";
+    if (DR.holiday) stringOf(g, p.back ? city.bulbsB : city.bulbsF, strand(onFace(b, f, a0, h - 0.5), onFace(b, f, a1, h - 0.5), 1), 2);
     const [x, y, sh] = faceText(g, b, f, mid, h + 2, word, "#2e8fa0", -0.4);
     const c0 = onFace(b, f, mid, h, -0.4); px(g, c0[0], c0[1] - 2, 1, 2, "#3a3532");
     em.push({ thr: 0.15, f: (g2, k) => {
@@ -1341,6 +1581,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       for (const z of [0, 7]) { poly(g, faceQ(b, f, a - 0.32, a - 0.05, z, z + 5), "#7b4a35"); pane(g, list, b, f, a + 0.18, z + 2, { w: 2, h: 2, seed: p.seed + ":" + i + ":" + z }); }
     }
     seg(g, onFace(b, f, a0, 7, 0.4), onFace(b, f, a1, 7, 0.4), "#8b7355"); seg(g, onFace(b, f, a0, 9, 0.4), onFace(b, f, a1, 9, 0.4), "#8b7355");
+    if (DR.holiday) stringOf(g, p.back ? city.bulbsB : city.bulbsF, strand(onFace(b, f, a0, 9.6, 0.4), onFace(b, f, a1, 9.6, 0.4), 1.5), 3);
     roofTop(g, b, h, wall, rng(p.seed));
     // the roadside sign on its pole
     const pole = f === "L" ? [b[0] + 0.3, b[3] + 0.5] : [b[2] + 0.5, b[1] + 0.3], q = P(pole[0], pole[1]);
@@ -1513,6 +1754,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   // and the blocks beyond the boulevard. Both are drawn once for each size of the screen.
   function buildTown(gb, gf) {
     city.winB = []; city.winF = []; city.emB = []; city.emF = []; city.haloB = []; city.haloF = []; city.pools = []; city.blink = [];
+    city.bulbsB = []; city.bulbsF = [];
     farLand();
     drawHills(gb);
     const plan = townPlan();
@@ -1791,7 +2033,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   function build() {
     const nodes = (snap && snap.nodes) || [];
     const lay = plan(nodes.length);
-    const now = Date.now(), cut = now - DAY_MS;
+    const now = nowMs(), cut = now - DAY_MS;
+    dressFor(WX = weatherAt(nowMin()));
     stagesNow = lay.map((st, i) => {
       const n = nodes[i], ch = (n.channels || [])[0] || n.name;
       const ss = stageState(n);
@@ -1900,6 +2143,9 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       params: [["Now showing", nw ? short(nw.title || nw.id, 80) : "nothing yet"], ["Finished", nw ? agoAt(T.newestAt) : "-"],
         ["On", nw ? T.newestOn.node.name : "-"], ["Done today", String(T.done)], ["Failed today", String(T.failed)]],
       cmd: nw ? "fleet jobs " + T.newestOn.node.name + " --state done" : null });
+    reel.list = reelOf(snap && snap.screenings);
+    add(Object.assign({ key: "screen", name: "The screening room", role: "Finished videos", where: "On the lawn", group: LOT, order: 5, object: "screen",
+      stands: "the videos you have collected with fleet pull, newest first", live: screenFacts }, screenFacts()));
   }
   let courierAt = () => ({ gx: G - 5.9, gy: 10.3, dir: "x-", moving: false });
   function courierNear(t) { const v = courierAt(t); return v.moving && Math.abs(v.gx - (G - 3)) < 2.2 && Math.abs(v.gy - 9) < 2.5; }
@@ -1908,7 +2154,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   const outward = (st) => st.edge === "L";
   const take = (j) => String(j.attempts || 1) + (Number(j.limit_waits) ? " (after " + plural(Number(j.limit_waits), "usage-limit wait", "usage-limit waits") + ")" : "");
   const memText = (s) => (s.mem_available_mb != null ? (s.mem_available_mb / 1024).toFixed(1) + " GB free of " + ((s.mem_total_mb || 0) / 1024).toFixed(1) + " GB" : "?");
-  function inTime(t) { const m = Math.max(0, Math.round((t - Date.now()) / 60000)); return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min"; }
+  function inTime(t) { const m = Math.max(0, Math.round((t - nowMs()) / 60000)); return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min"; }
   const hhmm = (sec) => { const d = new Date(sec * 1000); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
 
   function stageCast(st, now, cut) {
@@ -2078,18 +2324,62 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
   }
 
+  // What already stands on the plaza, as boxes of pixels [x0, y0, x1, y1], so that new things find room.
+  // Flat things on the ground (the pickup pad, the parking, the flower beds) keep their own shape.
+  let occupied = [];
+  const keep = (x, y, w, h) => occupied.push([x - w / 2, y - h, x + w / 2, y + 2]);
+  const keepBox = (pts) => { const b = bbox(pts); occupied.push([b.x - 1, b.y - 1, b.x + b.w + 1, b.y + b.h + 1]); };
+  const keepFlat = (pts) => { const b = bbox(pts); occupied.push(Object.assign([b.x, b.y, b.x + b.w, b.y + b.h], { shape: pts })); };
+  function overlapsShape(r, pts) {  // the box r and a convex shape overlap unless some axis separates them
+    const corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], axes = [[1, 0], [0, 1]];
+    pts.forEach((a, i) => { const b = pts[(i + 1) % pts.length]; axes.push([a[1] - b[1], b[0] - a[0]]); });
+    return axes.every(([ax, ay]) => {
+      const on = (list) => list.map((p) => p[0] * ax + p[1] * ay), u = on(corners), v = on(pts);
+      return Math.min(...u) < Math.max(...v) && Math.min(...v) < Math.max(...u);
+    });
+  }
+  // A free spot for something w by h pixels standing at its foot, near (gx, gy): on the lawn to the
+  // right of the promenade (side 1) or to its left (side -1), no further back than the fountain.
+  function lawnSpot(gx, gy, w, h, side) {
+    const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3] && (!b.shape || overlapsShape(a, b.shape));
+    let best = null, bd = Infinity;
+    for (let x = 10; x <= G - 1.2; x += 0.5) {
+      for (let y = 10; y <= G - 1.2; y += 0.5) {
+        if ((x - y) * side < 2.4 || x + y < G + 8) continue;  // off the promenade and the carpet
+        const q = P(x, y), r = [q[0] - w / 2, q[1] - h, q[0] + w / 2, q[1] + 2], d = Math.hypot(x - gx, y - gy);
+        if (d < bd && !occupied.some((o) => hit(r, o))) { bd = d; best = [x, y]; }
+      }
+    }
+    return best;
+  }
   function scenery() {
+    occupied = [];
     for (let d = 22; d < 2 * G - 11; d += 4.4) {
       if (Math.abs(d - (G + 8)) < 5) continue;
       for (const sgn of [-1, 1]) {
         const gx = (d + sgn * 2.75) / 2, gy = (d - sgn * 2.75) / 2, h = 21 + (hash([d, sgn].join()) % 6);
         props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); palm(g, p[0], p[1], h, sgn < 0); } });
+        const p = P(gx, gy); keep(p[0], p[1], 18, h + 8);
       }
     }
     lights.posts = [];
-    const post = (gx, gy) => { props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); lampPost(g, p[0], p[1]); } }); lights.posts.push([gx, gy]); };
+    const post = (gx, gy) => { props.push({ gx, gy, draw: (g) => { const p = P(gx, gy); lampPost(g, p[0], p[1]); } }); lights.posts.push([gx, gy]); const p = P(gx, gy); keep(p[0], p[1], 5, 24); };
     for (let x = 11.5; x < G - 4; x += 7) post(x, 9.35);
     for (let y = 12.5; y < G - 2; y += 7) post(9.35, y);
+    const fc = (G + 8) / 2, fp = P(fc, fc), mq = P(G - 3.4, G - 3.4), van = P(G - 5.9, 10.3), sam = P(G - 3.05, 9.7);
+    keep(fp[0], fp[1] + 12, 44, 34); keep(mq[0], mq[1], 58, 50); keep(van[0], van[1], 34, 28); keep(sam[0], sam[1], 12, 21);
+    keepFlat([P(G - 10.4, 9.25), P(G - 4.4, 9.25), P(G - 4.4, 11.4), P(G - 10.4, 11.4)]);                         // the pickup pad
+    keepBox([P(G - 3.95, 9.85, 15), P(G - 2.25, 9.85, 15), P(G - 2.25, 11.55), P(G - 3.95, 11.55)]);               // the guard booth
+    keepFlat([P(9.3, G - 9, 8), P(12.2, G - 9, 8), P(12.2, G - 1.2), P(9.3, G - 1.2)]);                            // the parking
+    for (const sgn of [-1, 1]) { const c = G - 3.2 + sgn * 2.6, cc = G - 3.2 - sgn * 2.6, bx = sgn > 0 ? c : cc, by = sgn > 0 ? cc : c; keepFlat([P(bx - 1, by - 1), P(bx + 1, by - 1), P(bx + 1, by + 1), P(bx - 1, by + 1)]); }
+    {  // the screening room: a screen on the lawn to the right
+      const at = lawnSpot(G - 3.5, G - 9.5, 30, 62, 1);
+      if (at) { const q = P(at[0], at[1]); keep(q[0], q[1], 30, 62); props.push({ gx: at[0], gy: at[1], key: "screen", draw: (g, t) => screenProp(g, t, at[0], at[1]) }); }
+    }
+    if (DR.holiday) {  // a tree for the holidays, on the lawn to the left
+      const at = lawnSpot(G - 9.5, G - 3.5, 20, 32, -1);
+      if (at) { const q = P(at[0], at[1]); keep(q[0], q[1], 20, 32); props.push({ gx: at[0], gy: at[1], draw: (g, t) => holidayTree(g, t, at[0], at[1]) }); }
+    }
     props.push({ gx: G - 3.4, gy: G - 3.4, key: "marquee", draw: (g, t) => marquee(g, t) });
     props.push({ gx: G - 1.2, gy: 9.6, draw: (g) => gateFront(g) });
     props.push({ key: "courier", pos: (t) => courierAt(t), draw: (g, t, v) => {
@@ -2119,15 +2409,149 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   function gateFront(g) {
     box3(g, G - 1.45, 9.3, G - 0.95, 9.8, 0, 25, "#e8e0cf");
     box(g, G - 1.4, 6.1, G - 1.0, 9.9, 18, 25, "#d9cfba", "#e8e0cf", "#cbbfa6");
+    if (DR.holiday) hangLights(g, strand(P(G - 1.0, 6.2, 17.4), P(G - 1.0, 9.8, 17.4), 2), 1);
     const p = P(G - 1.0, 9.55, 24);
     text(g, "HERMES", p[0] + 1, p[1], "#8f2f27", { shear: -1 });
     for (let i = 0; i < 12; i++) { const y0 = 9.25 - i * 0.2, a = P(G - 1.2, y0, 8), b = P(G - 1.2, y0 - 0.2, 8); seg(g, a, b, i % 2 ? "#f2efe6" : "#d6402f"); seg(g, [a[0], a[1] + 1], [b[0], b[1] + 1], i % 2 ? "#d9d4c8" : "#a8302a"); }
+  }
+  // Lights on something drawn in every frame: drawn now, lit after dark with the overlays.
+  function hangLights(g, pts, seed) {
+    const list = pts.map((p, i) => ({ x: Math.round(p[0]), y: Math.round(p[1]), k: (((i + seed) % HOLI.length) + HOLI.length) % HOLI.length, ph: (hash(seed + ":" + i) % 1000) / 250 }));
+    for (const b of list) px(g, b.x, b.y, 1, 1, HOLI[b.k]);
+    overlayQ.push((g2, t) => bulbs(g2, list, t, LIGHT));
+  }
+  function holidayTree(g, t, gx, gy) {  // a fir in lights with a star on top
+    const p = P(gx, gy), x = p[0], y = p[1], pts = [];
+    px(g, x - 1, y - 4, 3, 4, "#6b4a32");
+    const tier = (y0, h, w0, w1) => {
+      for (let i = 0; i < h; i++) {
+        const hw = Math.floor(Math.round(w0 + (w1 - w0) * i / (h - 1)) / 2), yy = y0 - i;
+        px(g, x - hw, yy, 2 * hw + 1, 1, "#2f6b3a"); px(g, x - hw, yy, 1, 1, "#3f8048"); px(g, x + hw, yy, 1, 1, "#24552e");
+        if (DR.snow && i > 1) { px(g, x - hw, yy, 1, 1, SNOWC); if (i % 2) px(g, x + hw, yy, 1, 1, "#dfe6ec"); }
+        if (i % 3 === 1) for (let k = -hw + 1 + (i % 2); k < hw; k += 3) pts.push([x + k, yy]);
+      }
+    };
+    tier(y - 4, 9, 17, 9); tier(y - 11, 9, 13, 5); tier(y - 18, 9, 9, 1);
+    hangLights(g, pts, 3);
+    px(g, x, y - 29, 1, 3, "#e3b54b"); px(g, x - 1, y - 28, 3, 1, "#e3b54b");
+    overlayQ.push((g2) => {
+      if (!LIGHT || LIGHT.dark < 0.15) return;
+      g2.globalAlpha = Math.min(1, LIGHT.dark * 1.4); px(g2, x, y - 29, 1, 3, "#fff3b0"); px(g2, x - 1, y - 28, 3, 1, "#fff3b0"); g2.globalAlpha = 1;
+    });
+    return { x: x - 9, y: y - 30, w: 19, h: 31 };
   }
   function bubble(g, x, y, s) {
     const w = textW(s) + 4;
     px(g, x - Math.ceil(w / 2), y - 7, w, 7, "#fbf8f0"); px(g, x - Math.ceil(w / 2) - 1, y - 6, w + 2, 5, "#fbf8f0");
     px(g, x - 1, y, 2, 1, "#fbf8f0");
     text(g, s, x - Math.ceil(w / 2) + 2, y - 6, "#1d1a15");
+  }
+
+  // ---------------------------------------------------------------- the screening room
+  // A screen on the lawn shows the newest video of each channel in turn, nine seconds each: a frame
+  // of the video (or its poster), or a title card in the example. Click it, then Watch, to play the
+  // video in a box over the page. With nothing collected yet, it shows colour bars.
+  const REEL_MS = 9000, PW = 24, PH = 42;
+  const reel = { list: [], held: null, cur: null, since: 0 };
+  const stills = new Map();
+  function reelOf(list) {  // the newest video of each channel, then the newest others, eight at most
+    const out = [], seen = new Set();
+    for (const s of list || []) { const k = s.channel || s.node; if (!seen.has(k)) { seen.add(k); out.push(s); } }
+    for (const s of list || []) { if (out.length >= 4) break; if (!out.includes(s)) out.push(s); }
+    return out.slice(0, 8);
+  }
+  function reelNow() {  // what is on the screen; it holds still while you look at it
+    const L = reel.list;
+    if (!L.length) return null;
+    if (selected === "screen" && reel.held) { const s = L.find((x) => x.id === reel.held); if (s) return s; }
+    return L[Math.floor(Date.now() / REEL_MS) % L.length];
+  }
+  function screenFacts() {
+    const s = reelNow(), n = ((snap && snap.screenings) || []).length;
+    if (!s) return { quote: "Nothing to show yet. Videos play here once fleet pull has collected them.", params: [["Videos here", "0"]], cmd: "fleet pull", film: null };
+    const t = when(s.finished_at);
+    return { quote: "On the screen: " + titled(s) + ", from " + (s.channel || s.node) + ". Press Watch to see it.",
+      params: [["On the screen", short(s.title || s.id, 80)], ["Channel", s.channel || "?"], ["From", s.node || "?"], ["Finished", t ? agoAt(t) : "-"], ["Videos here", String(n)]],
+      cmd: null, film: s };
+  }
+
+  // The picture for a video: a frame from it, its poster, or (until one loads, or in the example) a title card.
+  function still(s) {
+    const e = stills.get(s.id);
+    if (e) return e;
+    const c = card(s, PW, PH);
+    stills.set(s.id, c);
+    if (stills.size > 40) stills.delete(stills.keys().next().value);
+    const fill = (img, iw, ih) => {  // fill the screen and cut what sticks out, as a portrait video plays
+      if (!iw || !ih) return;
+      const g = c.getContext("2d"), k = Math.max(PW / iw, PH / ih);
+      g.imageSmoothingEnabled = true;
+      g.drawImage(img, (PW - iw * k) / 2, (PH - ih * k) / 2, iw * k, ih * k);
+    };
+    if (s.poster) { const im = new Image(); im.onload = () => fill(im, im.naturalWidth, im.naturalHeight); im.src = s.poster; }
+    else if (s.video) {
+      const v = document.createElement("video");
+      v.muted = true; v.preload = "auto"; v.playsInline = true;
+      v.addEventListener("loadedmetadata", () => { v.currentTime = Math.min(2, (v.duration || 3) / 3); }, { once: true });
+      v.addEventListener("seeked", () => { fill(v, v.videoWidth, v.videoHeight); v.removeAttribute("src"); v.load(); }, { once: true });
+      v.src = s.video;
+    }
+    return c;
+  }
+  const ICONS = [[/space|star|planet|astro|cosmo/i, "planet"], [/histor|ancient|past/i, "column"], [/cook|food|kitchen|recipe|bak/i, "pot"],
+    [/nature|animal|wild|plant|ocean|sea/i, "leaf"], [/myster|unsolved|strange|weird/i, "ask"]];
+  function card(s, w, h) {  // a title card in the channel's colour
+    const c = document.createElement("canvas"), g = c.getContext("2d"), ch = s.channel || s.node || "";
+    c.width = w; c.height = h;
+    const col = pick(TRAILER, hash(ch)), kind = (ICONS.find(([re]) => re.test(ch)) || [0, "play"])[1];
+    for (let y = 0; y < h; y++) px(g, 0, y, w, 1, mix(col, "#14100e", 0.3 + 0.45 * (y / h)));
+    const k = Math.max(1, Math.floor(w / 22)), x = Math.floor(w / 2), y = Math.floor(h * (w >= 40 ? 0.3 : 0.4));
+    const sq = (dx, dy, ww, hh, cc) => px(g, x + dx * k, y + dy * k, ww * k, hh * k, cc);
+    if (kind === "planet") { for (let i = -5; i <= 5; i++) { const r = Math.round(Math.sqrt(25 - i * i)); sq(-r, i, 2 * r + 1, 1, i < 0 ? "#f0c36a" : "#d89a43"); } sq(-9, 0, 19, 1, "#f4efe2"); sq(-8, -1, 2, 1, "#f4efe2"); sq(7, 1, 2, 1, "#f4efe2"); }
+    else if (kind === "column") { sq(-5, -7, 11, 2, "#efe6d2"); sq(-3, -5, 7, 10, "#e2d7bf"); for (let i = -2; i <= 2; i += 2) sq(i, -5, 1, 10, "#bfb399"); sq(-5, 5, 11, 2, "#efe6d2"); }
+    else if (kind === "pot") { sq(-6, -1, 13, 1, "#e6e8ea"); sq(-5, 0, 11, 6, "#c9ccd1"); sq(-7, 1, 2, 1, "#9aa0a6"); sq(6, 1, 2, 1, "#9aa0a6"); for (let i = -3; i <= 3; i += 3) sq(i, -5 + (i & 1), 1, 3, "#f4efe2"); }
+    else if (kind === "leaf") { for (let i = -6; i <= 6; i++) { const r = Math.round(4 * Math.sqrt(1 - (i * i) / 49)); sq(-r + Math.round(i / 3), i, 2 * r + 1, 1, "#7cc26b"); } sq(0, -6, 1, 13, "#4f8a45"); }
+    else if (kind === "ask") { sq(-3, -6, 7, 2, "#f4efe2"); sq(2, -4, 2, 3, "#f4efe2"); sq(-1, -1, 3, 2, "#f4efe2"); sq(-1, 1, 2, 2, "#f4efe2"); sq(-1, 4, 2, 2, "#f4efe2"); }
+    else for (let dy = -4; dy <= 4; dy++) sq(-2, dy, 5 - Math.abs(dy), 1, "#f4efe2");  // a play button
+    if (w >= 40) {  // big enough for the title
+      const words = String(s.title || s.id || "").toUpperCase().split(/\s+/), lines = [];
+      let cur = "";
+      for (const wd of words) { const tryL = cur ? cur + " " + wd : wd; if (textW(tryL) <= w - 6 || !cur) cur = tryL; else { lines.push(cur); cur = wd; } }
+      if (cur) lines.push(cur);
+      lines.slice(0, 5).forEach((ln, i) => text(g, ln, Math.max(3, Math.floor((w - textW(ln)) / 2)), Math.floor(h * 0.58) + i * 7, "#fff3d6"));
+    } else {
+      sq(-4, 9, 9, 1, "rgba(255,243,214,.75)"); sq(-3, 11, 7, 1, "rgba(255,243,214,.5)");
+    }
+    return c;
+  }
+  const BARS = ["#c8c8c8", "#c8c800", "#00c8c8", "#00c800", "#c800c8", "#c80000", "#0000c8"];
+  function picture(g, x, y, s, t) {  // what the screen shows now
+    if (!s) {  // nothing collected yet: colour bars
+      BARS.forEach((c, i) => px(g, x + Math.floor((i * PW) / 7), y, Math.ceil(PW / 7), Math.round(PH * 0.7), c));
+      px(g, x, y + Math.round(PH * 0.7), PW, PH - Math.round(PH * 0.7), "#1b1b2a");
+      return;
+    }
+    if (reel.cur !== s.id) { reel.cur = s.id; reel.since = t; }
+    g.drawImage(still(s), x, y);
+    const f = (t - reel.since) / 450;  // the projector catches up: a dark frame, then the picture
+    if (f < 1 && !reduced) { g.globalAlpha = 1 - f; px(g, x, y, PW, PH, "#000"); g.globalAlpha = 1; }
+  }
+  function screenProp(g, t, gx, gy) {
+    const p = P(gx, gy), x = p[0] - 14, y = p[1] - 60, s = reelNow();
+    if (selected !== "screen") reel.held = null; else if (!reel.held && s) reel.held = s.id;
+    px(g, x + 5, y + 46, 2, 14, "#3a3530"); px(g, x + 21, y + 46, 2, 14, "#3a3530"); px(g, x + 5, y + 53, 18, 1, "#3a3530");  // legs and a brace
+    px(g, x, y, 28, 46, "#1d1714"); px(g, x + 1, y + 1, 26, 44, "#57493f");
+    const night = LIGHT ? clamp01((LIGHT.dark - 0.25) / 0.35) : 0;
+    if (night > 0) {  // after dark the picture glows: drawn over the night, with a pool of light below
+      px(g, x + 2, y + 2, PW, PH, "#000");
+      overlayQ.push((g2, t2) => {
+        picture(g2, x + 2, y + 2, s, t2);
+        g2.globalCompositeOperation = "lighter"; g2.globalAlpha = 0.22 * night;
+        ellipse(g2, p[0], p[1] + 5, 22, 8, "#8fa6c8");
+        g2.globalAlpha = 1; g2.globalCompositeOperation = "source-over";
+      });
+    } else picture(g, x + 2, y + 2, s, t);
+    return { x: x - 1, y: y - 1, w: 30, h: 62 };
   }
 
   // ---------------------------------------------------------------- one frame of film
@@ -2137,7 +2561,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   // lays down the sky, the town behind the lot, the lot, everyone on it and the town in front.
   let skyC, skyG, backC, backG, frontC, frontG, lotC, lotG, litBackC, litBackG, litLotC, litLotG, litFrontC, litFrontG, itemsC, itemsG, maskC, maskG, haloC, haloG;
   let viewKey = "", lightKey = "", lotLit = false, dirty = true, hits = [], selected = null, hover = null, LIGHT = null, haloOn = false;
-  let stars = [], clouds = [], overlayQ = [];
+  let stars = [], clouds = [], deck = [], banks = [], puddles = [], overlayQ = [];
   const clamp01 = (v) => Math.max(0, Math.min(1, v));
   function canvases() {
     if (skyC && skyC.width === W && skyC.height === H) return;
@@ -2146,10 +2570,12 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     [itemsC, itemsG] = mk(W, H); [maskC, maskG] = mk(W, H); [haloC, haloG] = mk(W, H);
     cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
   }
-  function buildView() {  // the town for this size of screen, its stars and its clouds
+  function buildView() {  // the town for this size of screen and this season, its stars, clouds and fog
     canvases();
     backG.clearRect(0, 0, W, H); frontG.clearRect(0, 0, W, H);
-    buildTown(backG, frontG);
+    swap = DR.swap;
+    try { buildTown(backG, frontG); } finally { swap = null; }
+    city.bulbsB = seenBulbs(backC, city.bulbsB); city.bulbsF = seenBulbs(frontC, city.bulbsF);
     const r = rng(hash("stars"));
     stars = [];
     for (let i = 0; i < (W * MTN()) / 240; i++) {
@@ -2162,16 +2588,33 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       for (let k = 0; k < 2 + Math.floor(r() * 3); k++) { const pw = 6 + Math.floor(r() * (w / 2)); puffs.push([2 + Math.floor(r() * (w - pw - 3)), -Math.floor(r() * 3), pw, 5]); }
       clouds.push({ y: 6 + r() * Math.max(10, MTN() - 44), w, sp: 0.0018 + r() * 0.0035, x0: r() * (W + 120), puffs });
     }
+    deck = [];  // the bigger clouds of a grey day
+    for (let i = 0; i < Math.max(6, Math.round(W / 55)); i++) {
+      const w = 46 + Math.floor(r() * 96), puffs = [[0, 5, w, 6]];
+      for (let k = 0; k < 3 + Math.floor(r() * 4); k++) { const pw = 10 + Math.floor(r() * (w / 2)); puffs.push([2 + Math.floor(r() * (w - pw - 3)), -Math.floor(r() * 6), pw, 9]); }
+      deck.push({ y: 1 + r() * Math.max(10, MTN() - 36), w, sp: 0.0011 + r() * 0.0022, x0: r() * (W + 200), puffs });
+    }
+    banks = [];  // banks of fog that drift over the land
+    for (let i = 0; i < 10 + Math.round(W / 80); i++) banks.push({ y: MTN() - 8 + r() * (H - MTN() + 8), w: 70 + r() * 180, h: 5 + r() * 10, sp: (0.003 + r() * 0.006) * (r() < 0.5 ? -1 : 1), x0: r() * (W + 300) });
+    puddles = [];  // where the rain gathers: the lanes of the lot and the boulevard
+    const rp = rng(hash("puddles"));
+    for (let y = 10; y < G - 2; y += 3 + rp() * 4) puddles.push([7.4 + rp() * 1.2, y, 4 + rp() * 4]);
+    for (let x = 10; x < G; x += 3 + rp() * 4) puddles.push([x, 7.4 + rp() * 1.2, 4 + rp() * 4]);
+    for (let a = -12; a < G + 2; a += 4 + rp() * 5) { puddles.push([G + 1.8 + rp() * 2.4, a, 4 + rp() * 5]); puddles.push([a, G + 1.8 + rp() * 2.4, 4 + rp() * 5]); }
   }
   function buildLot() {  // the lot as the fleet stands now
     lotG.clearRect(0, 0, W, H);
-    staticHits = []; lights.windows = []; lights.doors = [];
-    drawGround(lotG);
-    drawOffice(lotG);
-    const things = stagesNow.map((st) => ({ d: st.base + 4.5, f: () => drawStage(lotG, st) }));
-    things.push({ d: towerBase + 4.9, f: () => drawTower(lotG) });
-    things.sort((a, b) => a.d - b.d).forEach((x) => x.f());
-    drawFront(lotG);
+    staticHits = []; lights.windows = []; lights.doors = []; lights.bulbs = [];
+    swap = DR.swap;
+    try {
+      drawGround(lotG);
+      drawOffice(lotG);
+      const things = stagesNow.map((st) => ({ d: st.base + 4.5, f: () => drawStage(lotG, st) }));
+      things.push({ d: towerBase + 4.9, f: () => drawTower(lotG) });
+      things.sort((a, b) => a.d - b.d).forEach((x) => x.f());
+      drawFront(lotG);
+    } finally { swap = null; }
+    lights.bulbs = seenBulbs(lotC, lights.bulbs);
     placeLabels();
   }
 
@@ -2259,7 +2702,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 
   // ---------------------------------------------------------------- the sky alive
   function skyLife(g, t, Lt) {
-    const tt = reduced ? 0 : t, sa = clamp01((Lt.dark - 0.55) / 0.35);
+    const tt = reduced ? 0 : t, w = Lt.wx || {}, oc = w.cloud || 0, sa = clamp01((Lt.dark - 0.55) / 0.35) * (Lt.starA == null ? 1 : Lt.starA);
     if (sa > 0) {  // the stars come out, and twinkle
       const mp = Lt.moon.up > -0.05 ? moonAt(Lt) : null;
       for (const s of stars) {
@@ -2269,17 +2712,30 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         if (s.big && tw > 0.8) { g.globalAlpha *= 0.45; g.fillRect(s.x - 1, s.y, 3, 1); g.fillRect(s.x, s.y - 1, 1, 3); }
       }
       g.globalAlpha = 1;
-      if (!reduced) meteor(g, tt, sa);
+      if (!reduced && sa > 0.4) meteor(g, tt, sa);
     }
-    // clouds, in the colour of the hour
-    const cc = mix(mix(litCol("#ffffff", Lt), Lt.low, 0.2), Lt.mid, 0.3 * Lt.dark), cs = mix(cc, Lt.mid, 0.25), ct = mix(cc, "#ffffff", 0.25 * (1 - Lt.dark));
-    for (const c of clouds) {
-      const x = Math.round((((reduced ? c.x0 : c.x0 + tt * c.sp) % (W + 120)) + W + 120) % (W + 120) - 60), y = Math.round(c.y);
-      for (const [dx, dy, w, h] of c.puffs) px(g, x + dx, y + dy, w, h, cc);
-      for (const [dx, dy, w] of c.puffs.slice(1)) px(g, x + dx + 1, y + dy, w - 2, 1, ct);
+    // clouds, in the colour of the hour, greyer and more of them on a grey day
+    const base = mix(mix(litCol("#ffffff", Lt), Lt.low, 0.2), Lt.mid, 0.3 * Lt.dark);
+    const cc = mix(base, greyOf(Lt.mid, 0.6), Math.min(0.55, oc * 0.5)), cs = shade(mix(cc, Lt.mid, 0.25), -0.08 * oc - 0.12 * (w.rain || 0));
+    const ct = mix(cc, "#ffffff", 0.25 * (1 - Lt.dark) * (1 - oc * 0.7));
+    const nd = Math.round(deck.length * smooth((oc - 0.2) / 0.6));
+    for (let i = 0; i < nd; i++) {
+      const c = deck[i], x = Math.round((((reduced ? c.x0 : c.x0 + tt * c.sp) % (W + 200)) + W + 200) % (W + 200) - 100), y = Math.round(c.y);
+      for (const [dx, dy, pw, ph] of c.puffs) px(g, x + dx, y + dy, pw, ph, cc);
+      for (const [dx, dy, pw] of c.puffs.slice(1)) px(g, x + dx + 2, y + dy, pw - 4, 1, ct);
+      px(g, x + 3, y + 11, c.w - 6, 2, cs);
+    }
+    const nc = Math.round(clouds.length * Math.min(1, 0.45 + oc * 1.4));
+    for (let i = 0; i < nc; i++) {
+      const c = clouds[i], x = Math.round((((reduced ? c.x0 : c.x0 + tt * c.sp) % (W + 120)) + W + 120) % (W + 120) - 60), y = Math.round(c.y);
+      for (const [dx, dy, pw, ph] of c.puffs) px(g, x + dx, y + dy, pw, ph, cc);
+      for (const [dx, dy, pw] of c.puffs.slice(1)) px(g, x + dx + 1, y + dy, pw - 2, 1, ct);
       px(g, x + 2, y + 7, c.w - 4, 1, cs);
     }
-    if (!reduced) { birds(g, tt, Lt); plane(g, tt, Lt); }
+    if (!reduced) {
+      if (oc < 0.85 && (w.rain || 0) < 0.2 && (w.snow || 0) < 0.2 && (w.fog || 0) < 0.4) birds(g, tt, Lt);
+      if (oc < 0.8) plane(g, tt, Lt);
+    }
   }
   function meteor(g, tt, sa) {  // now and then, a shooting star
     const slot = 11000, n = Math.floor(tt / slot), h = hash("meteor" + n);
@@ -2392,6 +2848,14 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   function drawWalker(g, t, w) {
     const v = w.v, s = P(v.gx, v.gy), pose = reduced ? "stand" : Math.floor((t + w.ph) / 280) % 2 ? "walkA" : "walkB";
     g.drawImage(personSprite(Object.assign({}, w.look, { pose }), v.dir === "y+" || v.dir === "x-"), s[0] - 4, s[1] - 15);
+    const wx = LIGHT && LIGHT.wx;
+    if (wx && (wx.rain > 0.25 || wx.snow > 0.45) && w.ph % 10 < 7) umbrella(g, s[0], s[1] - 16, UMB[w.ph % UMB.length]);
+  }
+  const UMB = ["#c0392b", "#2e86c1", "#27ae60", "#f1c40f", "#8e44ad", "#2b2b33", "#e67e22"];
+  function umbrella(g, x, y, c) {
+    px(g, x - 1, y - 3, 3, 1, c); px(g, x - 3, y - 2, 7, 1, c); px(g, x - 4, y - 1, 9, 1, shade(c, -0.15));
+    for (let i = -4; i <= 4; i += 2) px(g, x + i, y, 1, 1, shade(c, -0.3));
+    px(g, x, y + 1, 1, 5, "#3a3530");
   }
   function drawCar(g, c, Lt, glows, cones) {
     const v = c.v, ax = v.dir[0] === "x", fwd = v.dir[1] === "+" ? 1 : -1, kind = c.kind, col = c.col;
@@ -2445,20 +2909,27 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     return { x: s[0] - 9, y: s[1] - 23, w: 18, h: 25 };
   }
   function frame(t) {
-    const min = nowMin(), Lt = lightAt(min);
+    const min = nowMin();
+    WX = weatherAt(min);
+    const Lt = weatherLight(lightAt(min), WX);
     LIGHT = Lt;
-    const vk = W + "x" + H + ":" + G + ":" + OY;
+    dressFor(WX);
+    const vk = W + "x" + H + ":" + G + ":" + OY + ":" + DR.key;
     if (vk !== viewKey) { buildView(); viewKey = vk; lightKey = ""; dirty = true; }
     if (dirty) { buildLot(); dirty = false; lotLit = false; }
-    const lk = String(Math.floor(lapse ? min / 5 : min));
+    const lk = String(Math.floor(lapse || R.run ? min / 5 : min)) + ":" + [WX.cloud, WX.rain, WX.snow, WX.fog].map((v) => Math.round(v * 16)).join();
     if (lk !== lightKey) { relight(Lt, true); lightKey = lk; lotLit = true; } else if (!lotLit) { relight(Lt, false); lotLit = true; }
     ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
     ctx.drawImage(skyC, 0, 0);
     skyLife(ctx, t, Lt);
     beams(ctx, t, Lt);
     ctx.drawImage(litBackC, 0, 0);
+    bulbs(ctx, city.bulbsB, t, Lt);
     beacons(ctx, t, Lt);
+    veil(ctx, Lt, 0.5);
     ctx.drawImage(litLotC, 0, 0);
+    wetGround(ctx, Lt);
+    bulbs(ctx, lights.bulbs, t, Lt);
     // everyone and everything that moves, in depth order, lit as a whole
     const g = itemsG, items = [], glows = [], cones = [];
     g.clearRect(0, 0, W, H);
@@ -2499,7 +2970,90 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     lotGlows(ctx, t, Lt, cones);
     ctx.drawImage(litFrontC, 0, 0);
     if (haloOn) { ctx.globalCompositeOperation = "lighter"; ctx.drawImage(haloC, 0, 0); ctx.globalCompositeOperation = "source-over"; }
+    bulbs(ctx, city.bulbsF, t, Lt);
+    veil(ctx, Lt, 0.2);
+    fogBanks(ctx, t, Lt);
+    fall(ctx, t, Lt);
     overlays(ctx, t, Lt);
+  }
+
+  // ---------------------------------------------------------------- the weather in each frame
+  function veil(g, Lt, k) {  // fog over everything drawn so far
+    const f = Lt.wx ? Lt.wx.fog : 0;
+    if (f < 0.02) return;
+    g.globalAlpha = f * k; g.fillStyle = Lt.fogC; g.fillRect(0, 0, W, H); g.globalAlpha = 1;
+  }
+  function fogBanks(g, t, Lt) {
+    const f = Lt.wx ? Lt.wx.fog : 0;
+    if (f < 0.05) return;
+    const tt = reduced ? 0 : t;
+    for (const b of banks) {
+      const x = ((b.x0 + tt * b.sp) % (W + 300) + W + 300) % (W + 300) - 150;
+      g.globalAlpha = 0.13 * f; ellipse(g, x, b.y, b.w / 2, b.h / 2, Lt.fogC);
+      g.globalAlpha = 0.1 * f; ellipse(g, x + b.w * 0.14, b.y - b.h * 0.25, b.w * 0.3, b.h * 0.34, Lt.fogC);
+    }
+    g.globalAlpha = 1;
+  }
+  function wetGround(g, Lt) {  // puddles, in the colour of the sky
+    const w = Lt.wx;
+    if (!w || DR.snow) return;
+    const k = clamp01((w.rain - 0.12) / 0.35);
+    if (k <= 0) return;
+    const c = mix(Lt.mid, litCol("#8696aa", Lt), 0.45), hl = mix(c, "#ffffff", 0.3);
+    for (const [gx, gy, r] of puddles) {
+      const q = P(gx, gy);
+      if (q[0] < -20 || q[0] > W + 20 || q[1] < TOWN() || q[1] > H + 6) continue;
+      g.globalAlpha = 0.5 * k; ellipse(g, q[0], q[1], r * 1.6, r * 0.7, c);
+      g.globalAlpha = 0.45 * k; px(g, q[0] - Math.round(r * 0.6), q[1] - 1, Math.round(r * 0.8), 1, hl);
+    }
+    g.globalAlpha = 1;
+  }
+  function fall(g, t, Lt) {  // rain and snow, over everything but the controls
+    const w = Lt.wx;
+    if (!w) return;
+    const tt = reduced ? 0 : t;
+    if (w.rain > 0.03) {
+      const n = Math.round(Math.min(1500, (W * H) / 240) * w.rain), cyc = H + 24, sp = W + 40;
+      g.fillStyle = Lt.dark > 0.5 ? "#8e9db5" : "#c4d0dd"; g.globalAlpha = 0.5;
+      for (let i = 0; i < n; i++) {
+        const h = Math.imul(i + 1, 2654435761) >>> 0, v = 0.3 + (h & 255) / 1275;
+        const y = ((tt * v + (h >>> 9) % cyc) % cyc) - 12, x = (((h >>> 3) % sp) - y * 0.22 + sp * 4) % sp - 20;
+        g.fillRect(x | 0, y | 0, 1, 4); g.fillRect((x - 1) | 0, (y + 4) | 0, 1, 3);
+      }
+      g.globalAlpha = 1;
+      const slot = Math.floor(tt / 130), ns = Math.round(70 * w.rain);  // drops landing on the lot and the boulevard
+      g.fillStyle = Lt.dark > 0.5 ? "#9fb0c8" : "#e2e9f0"; g.globalAlpha = 0.75;
+      for (let i = 0; i < ns; i++) {
+        const h = Math.imul(slot * 977 + i * 131 + 7, 2246822519) >>> 0, a = (h % 1000) / 1000, b = ((h >>> 10) % 1000) / 1000;
+        const q = h & 1 ? P(7 + a * (G - 7.5), 7 + b * (G - 7.5)) : (h & 2 ? P(G + 1.5 + a * 3, -10 + b * (G + 14)) : P(-10 + b * (G + 14), G + 1.5 + a * 3));
+        g.fillRect(q[0] - 1, q[1] - 1, 1, 1); g.fillRect(q[0] + 1, q[1] - 1, 1, 1); g.fillRect(q[0], q[1], 1, 1);
+      }
+      g.globalAlpha = 1;
+    }
+    if (w.snow > 0.03) {
+      const n = Math.round(Math.min(1100, (W * H) / 300) * w.snow), cyc = H + 10, sp = W + 30;
+      g.fillStyle = Lt.dark > 0.5 ? "#dce4f0" : "#ffffff";
+      for (let i = 0; i < n; i++) {
+        const h = Math.imul(i + 7, 2246822519) >>> 0, v = 0.018 + (h & 255) / 9000, ph = ((h >>> 8) % 628) / 100;
+        const y = ((tt * v + (h >>> 11) % cyc) % cyc) - 5, x = (((h >>> 4) % sp) + Math.sin(tt / 1400 + ph) * 5 - y * 0.12 + sp * 4) % sp - 15;
+        g.globalAlpha = 0.65 + (h & 3) * 0.1;
+        const z = (h & 15) === 0 ? 2 : 1;
+        g.fillRect(x | 0, y | 0, z, z);
+      }
+      g.globalAlpha = 1;
+    }
+  }
+  function bulbs(g, list, t, Lt) {  // the holiday lights after dark, each twinkling in its own time
+    if (!list || !list.length) return;
+    const night = clamp01((Lt.dark - 0.12) / 0.3), tt = reduced ? 0 : t;
+    if (night <= 0) return;  // by day they show as they were drawn
+    const on = (b) => reduced || ((tt / 700 + b.ph) | 0) % 4 !== 0;
+    g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.2 * night;
+    for (const b of list) if (on(b)) { g.fillStyle = HOLI[b.k]; g.fillRect(b.x - 1, b.y - 1, 3, 3); }
+    g.restore();
+    g.globalAlpha = night;
+    for (const b of list) if (on(b)) { g.fillStyle = HOLI_LIT[b.k]; g.fillRect(b.x, b.y, 1, 1); }
+    g.globalAlpha = 1;
   }
   function rectOf(key) {
     for (let i = hits.length - 1; i >= 0; i--) if (hits[i].key === key) return hits[i];
@@ -2579,7 +3133,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const c = castBy.get(v.step.stop.key + ":cans");
       if (c && !reduced && t % 900 < 450) { const p = P(c.at[0], c.at[1]); px(g, p[0] + 2, p[1] - 14, 1, 2, "#f2c12e"); }
     }
-    for (const f of overlayQ) f(g);
+    for (const f of overlayQ) f(g, t);
     const r = selected && rectOf(selected);
     if (r) arrow(g, r.x + r.w / 2, r.y - 2 - (reduced ? 0 : Math.floor(t / 320) % 2));
   }
@@ -2649,18 +3203,19 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     else if (!contact) { msg = "Lost contact with fleet studio on your PC. If you closed it, start it again with fleet studio."; lost = true; }
     else if (snap && snap.error) msg = String(snap.error);
     note.hidden = !msg; note.textContent = msg; note.classList.toggle("lost", lost);
-    badge.textContent = !LIVE ? "Example" : contact ? "Live" : "Lost contact";
-    badge.className = "badge" + (LIVE && contact ? " live" : "") + (lost ? " lost" : "");
+    badge.textContent = replayAt != null ? "Replay" : !LIVE ? "Example" : contact ? "Live" : "Lost contact";
+    badge.className = "badge" + (replayAt != null ? " past" : LIVE && contact ? " live" : "") + (lost ? " lost" : "");
   }
   function tick() {
     const gen = when(snap && snap.generated_at);
     $("take").textContent = "Production still · Take " + Math.max(1, looks) + " · " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    $("looked").textContent = gen ? "Looked at the lot " + ago(gen) + ", every " + ((snap && snap.every) || 20) + " s" : "Looking at the lot…";
+    $("looked").textContent = replayAt != null ? "Replay: the lot as it stood " + whenText(replayAt).toLowerCase()
+      : gen ? "Looked at the lot " + ago(gen) + ", every " + ((snap && snap.every) || 20) + " s" : "Looking at the lot…";
   }
 
   // The dialog box: who you picked, what they stand for, the real values and a command.
   const D = { name: $("d-name"), role: $("d-role"), where: $("d-where"), said: $("d-said"), typed: $("d-typed"),
-    params: $("d-params"), cmd: $("d-cmd"), code: $("d-code"), copy: $("d-copy") };
+    params: $("d-params"), cmd: $("d-cmd"), code: $("d-code"), copy: $("d-copy"), watch: $("d-watch") };
   let typing = 0, shownQuote = "";
   function select(key, from) {
     const m = castBy.get(key);
@@ -2676,12 +3231,14 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     if (from === "sheet") film.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
   }
   function fillDialog(m, fresh) {
+    if (m.live) Object.assign(m, m.live());  // someone whose words change between looks (the screen)
     D.name.textContent = m.name;
     D.role.textContent = "· " + m.role;
     D.where.textContent = m.where;
     D.params.innerHTML = [["Stands for", cap(m.stands)]].concat(m.params || [])
       .map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("");
     D.cmd.hidden = !m.cmd;
+    D.watch.hidden = !m.film;
     if (D.code.textContent !== (m.cmd || "")) { D.code.textContent = m.cmd || ""; D.copy.textContent = "Copy"; }
     if (fresh || m.quote !== shownQuote) type(m.quote, fresh);
     drawPortrait($("portrait"), m);
@@ -2710,10 +3267,17 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, byHand); else byHand();
   });
+  D.watch.addEventListener("click", () => {  // play what is on the screen in a box over the page
+    const m = castBy.get(selected), s = m && m.film;
+    if (s) FS.play(s, s.video ? null : card(s, 54, 96));
+  });
   $("d-prev").addEventListener("click", () => step(-1));
   $("d-next").addEventListener("click", () => step(1));
   $("d-close").addEventListener("click", closeDialog);
+  // Keys belong to the box over the page while it is open (the screening room's player).
+  const inBox = (e) => !!(e.target && e.target.closest && e.target.closest("dialog[open]"));
   document.addEventListener("keydown", (e) => {
+    if (inBox(e)) return;
     if (e.key === "Escape" && !dialog.hidden) { closeDialog(); e.preventDefault(); }
     else if (!dialog.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(document.activeElement)) {
       step(e.key === "ArrowRight" ? 1 : -1); e.preventDefault();
@@ -2734,6 +3298,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     else if (kind === "cans") cans(g, x, y, 3);
     else if (kind === "board") board(g, x, y, 4, 1);
     else if (kind === "clock") { px(g, x - 4, y - 8, 9, 6, "#1c1b1a"); px(g, x - 3, y - 6, 2, 2, "#f3a51f"); px(g, x + 1, y - 6, 2, 2, "#f3a51f"); px(g, x - 3, y - 2, 1, 2, "#3b3a37"); px(g, x + 3, y - 2, 1, 2, "#3b3a37"); }
+    else if (kind === "screen") { px(g, x - 4, y - 14, 9, 12, "#1d1714"); px(g, x - 3, y - 13, 7, 10, "#4bb0ff"); px(g, x - 3, y - 6, 7, 3, "#2e86c1"); px(g, x - 2, y - 2, 1, 2, "#3a3530"); px(g, x + 2, y - 2, 1, 2, "#3a3530"); }
     else if (kind === "marquee") { px(g, x - 4, y - 12, 9, 2, "#b3262e"); px(g, x - 4, y - 10, 9, 5, "#2a1f1c"); px(g, x - 3, y - 8, 7, 1, "#fff3d6"); px(g, x - 3, y - 5, 1, 5, "#3a3530"); px(g, x + 3, y - 5, 1, 5, "#3a3530"); px(g, x - 4, y - 13, 1, 1, "#ffe39a"); px(g, x + 4, y - 13, 1, 1, "#ffe39a"); }
   }
 
@@ -2919,9 +3484,19 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     T.auto.setAttribute("aria-pressed", String(lightMode === "auto" && !lapse));
     T.lapse.setAttribute("aria-pressed", String(!!lapse));
     if (document.activeElement !== T.slider || lapse) T.slider.value = String((Math.round(m / 5) * 5) % 1440);
-    T.clock.textContent = hhmmOf(m) + " · " + momentOf(m);
+    const ww = weatherWord(WX);
+    T.clock.textContent = hhmmOf(m) + " · " + momentOf(m) + (ww ? " · " + ww : "");
     T.slider.setAttribute("aria-valuetext", hhmmOf(m) + ", " + momentOf(m));
+    const sa = "Auto (" + (WX.holiday ? "holidays" : WX.season) + ")", wa = "Auto (" + (ww || "clear").toLowerCase() + ")";
+    if (WSEL.season.options[0].textContent !== sa) WSEL.season.options[0].textContent = sa;
+    if (WSEL.weather.options[0].textContent !== wa) WSEL.weather.options[0].textContent = wa;
   }
+  // Season and weather: auto follows this device's date and makes up the weather; a pick stays.
+  const WSEL = { season: $("w-season"), weather: $("w-pick") };
+  WSEL.season.value = seasonPick; WSEL.weather.value = weatherPick;
+  const remember = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* remembered for this visit only */ } };
+  WSEL.season.addEventListener("change", () => { seasonPick = WSEL.season.value; remember("fleet-lot-season", seasonPick); refresh(); syncTime(true); });
+  WSEL.weather.addEventListener("change", () => { weatherPick = WSEL.weather.value; remember("fleet-lot-weather", weatherPick); refresh(); syncTime(true); });
   T.auto.addEventListener("click", () => setLight("auto"));
   T.slider.addEventListener("input", () => setLight(String(T.slider.value)));
   T.lapse.addEventListener("click", () => {
@@ -2967,6 +3542,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   for (const ev of ["pointermove", "pointerdown", "wheel"]) film.addEventListener(ev, idle, { passive: true });
   document.addEventListener("keydown", (e) => {
     idle();
+    if (inBox(e)) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "") && document.activeElement !== T.slider;
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !typing;
     if ((e.key === "f" || e.key === "F") && plain) { isFull() ? exitFull() : enterFull(); e.preventDefault(); }
@@ -2981,6 +3557,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     build(); dirty = true;
     fit();
     status(); tally(); renderSheet(); tick();
+    hear();
     if (selected) {
       const m = castBy.get(selected);
       if (m) fillDialog(m, false);
@@ -2997,12 +3574,231 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     frame(now);
     syncTime(false);
   }
+
+  // ---------------------------------------------------------------- sound
+  // The lot can be heard, if you want it: off until you turn it on, and remembered on this device.
+  // A clapperboard when a take starts, applause when a video is done, a low horn when one fails and
+  // a falling note when a stage stops for the usage limit, each from the side its stage stands on.
+  // Under it, the town: traffic as busy as the roads, birds by day, crickets on warm nights, the
+  // rain and the wind. It is all made here as it plays; there are no sound files.
+  const SND = { btn: $("s-sound"), on: false, ac: null, out: null, white: null, brown: null, beds: null, timer: 0 };
+  const ACtx = window.AudioContext || window.webkitAudioContext;
+  try { SND.on = localStorage.getItem("fleet-lot-sound") === "on"; } catch (e) { /* off */ }
+  if (!ACtx) { SND.on = false; SND.btn.hidden = true; }
+  function soundUI() {
+    SND.btn.textContent = SND.on ? "Sound on" : "Sound off";
+    SND.btn.setAttribute("aria-pressed", String(SND.on));
+  }
+  function noise(ac, brown) {  // four seconds of noise that loops without a click
+    const n = ac.sampleRate * 4, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    let v = 0;
+    for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; if (brown) { v = (v + 0.02 * w) / 1.02; d[i] = v * 3.5; } else d[i] = w; }
+    if (brown) { const drift = d[n - 1] - d[0]; for (let i = 0; i < n; i++) d[i] -= (drift * i) / (n - 1); }
+    return b;
+  }
+  function audio() {  // the sound system, made the first time it is needed (after a click, as browsers ask)
+    if (SND.ac) return SND.ac;
+    const ac = new ACtx(), comp = ac.createDynamicsCompressor(), out = ac.createGain();
+    comp.threshold.value = -16; comp.knee.value = 10; comp.ratio.value = 4;
+    out.gain.value = 0; out.connect(comp); comp.connect(ac.destination);
+    SND.ac = ac; SND.out = out; SND.white = noise(ac, false); SND.brown = noise(ac, true);
+    const bed = (buf, type, f, q) => {
+      const s = ac.createBufferSource(), fl = ac.createBiquadFilter(), g = ac.createGain();
+      s.buffer = buf; s.loop = true; fl.type = type; fl.frequency.value = f; fl.Q.value = q; g.gain.value = 0;
+      s.connect(fl); fl.connect(g); g.connect(out); s.start(0, Math.random() * 3);
+      return g;
+    };
+    SND.beds = { traffic: bed(SND.brown, "lowpass", 340, 0.7), rain: bed(SND.white, "bandpass", 2400, 0.45), wind: bed(SND.brown, "bandpass", 480, 0.9) };
+    return ac;
+  }
+  function voice(ac, pan, level) {  // a short-lived way out, to the left or the right
+    const g = ac.createGain();
+    g.gain.value = level;
+    if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(p); p.connect(SND.out); } else g.connect(SND.out);
+    return g;
+  }
+  function burst(ac, at, dest, f, q, len, peak) {  // a snap of noise: a clap, the slate
+    const s = ac.createBufferSource(), fl = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = SND.white; fl.type = "bandpass"; fl.frequency.value = f; fl.Q.value = q;
+    g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(peak, at + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+    s.connect(fl); fl.connect(g); g.connect(dest);
+    s.start(at, Math.random() * 3.5); s.stop(at + len + 0.05);
+  }
+  function tone(ac, at, dest, type, f0, f1, len, peak) {  // a note that may slide
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, at);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, at + len);
+    g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(peak, at + Math.min(0.012, len / 4)); g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+    o.connect(g); g.connect(dest); o.start(at); o.stop(at + len + 0.05);
+  }
+  const SFX = {
+    slate(ac, at, pan) { const v = voice(ac, pan, 0.9); burst(ac, at, v, 2300, 1.1, 0.07, 1); burst(ac, at, v, 800, 0.9, 0.05, 0.55); tone(ac, at, v, "sine", 180, 110, 0.07, 0.45); },
+    applause(ac, at, pan) {
+      const v = voice(ac, pan, 0.5), len = 2.8;
+      for (let i = 0; i < 80; i++) {
+        const dt = Math.pow(Math.random(), 1.15) * len, swell = Math.sin(Math.PI * Math.min(1, 0.15 + dt / len));
+        burst(ac, at + dt, v, 1000 + Math.random() * 1600, 1.3, 0.03 + Math.random() * 0.035, 0.2 + 0.65 * swell);
+      }
+    },
+    fail(ac, at, pan) { const v = voice(ac, pan, 0.45); tone(ac, at, v, "triangle", 233, 220, 0.3, 0.6); tone(ac, at + 0.32, v, "triangle", 196, 165, 0.7, 0.6); },
+    hold(ac, at, pan) { const v = voice(ac, pan, 0.3); tone(ac, at, v, "sine", 660, 280, 0.8, 0.6); },
+  };
+  function bird(ac, at, pan) {  // two to four quick rising chirps
+    const v = voice(ac, pan, 0.1), n = 2 + Math.floor(Math.random() * 3), f = 2600 + Math.random() * 1500;
+    for (let i = 0; i < n; i++) tone(ac, at + i * 0.13, v, "sine", f, f * 1.35, 0.08, 0.7);
+  }
+  function cricket(ac, at, pan) {  // a chirp of three quick pulses
+    const v = voice(ac, pan, 0.045), f = 4300 + Math.random() * 500;
+    for (let i = 0; i < 3; i++) tone(ac, at + i * 0.045, v, "sine", f, f, 0.03, 0.8);
+  }
+  function ambience() {  // the town follows the hour, the roads and the weather
+    if (!SND.ac || SND.ac.state !== "running") return;
+    const ac = SND.ac, t = ac.currentTime, min = nowMin(), L = LIGHT || lightAt(min), w = WX;
+    const set = (g, v) => g.gain.setTargetAtTime(v, t, 1.5);
+    set(SND.beds.traffic, 0.05 + 0.15 * traffic(min));
+    set(SND.beds.rain, 0.24 * w.rain + 0.03 * w.snow);
+    set(SND.beds.wind, 0.06 * w.snow + 0.03 * w.fog + 0.03 * Math.max(0, w.cloud - 0.6));
+    const mild = w.season !== "winter" && w.rain < 0.2 && w.snow < 0.1;
+    if (mild && L.dark < 0.35 && Math.random() < 0.08) bird(ac, t + Math.random() * 0.4, Math.random() * 1.6 - 0.8);
+    if (mild && w.season !== "autumn" && L.dark > 0.65 && Math.random() < 0.4) cricket(ac, t + Math.random() * 0.4, Math.random() * 1.8 - 0.9);
+  }
+  function start(greet) {
+    if (!SND.on || !ACtx || document.hidden) return;
+    const ac = audio();
+    const go = () => {
+      SND.out.gain.cancelScheduledValues(ac.currentTime); SND.out.gain.setTargetAtTime(0.8, ac.currentTime, 0.25);
+      clearInterval(SND.timer); SND.timer = setInterval(ambience, 400); ambience();
+      if (greet) SFX.slate(ac, ac.currentTime + 0.05, 0);
+    };
+    if (ac.state === "running") go(); else ac.resume().then(go, () => { /* it waits for a click */ });
+  }
+  function hush() {
+    clearInterval(SND.timer); SND.timer = 0;
+    if (!SND.ac) return;
+    SND.out.gain.cancelScheduledValues(SND.ac.currentTime); SND.out.gain.setTargetAtTime(0, SND.ac.currentTime, 0.06);
+    const ac = SND.ac;
+    setTimeout(() => { if ((!SND.on || document.hidden) && ac.state === "running") ac.suspend().catch(() => {}); }, 400);
+  }
+  SND.btn.addEventListener("click", () => {
+    SND.on = !SND.on; soundUI();
+    try { localStorage.setItem("fleet-lot-sound", SND.on ? "on" : "off"); } catch (e) { /* this visit only */ }
+    if (SND.on) start(true); else hush();
+  });
+  // A browser lets a page make sound only after a click, a tap or a key, so sound left on waits for
+  // one (a phone counts a tap when the finger lifts).
+  const firstTouch = () => { if (SND.on && !document.hidden && (!SND.ac || SND.ac.state !== "running")) start(false); };
+  for (const ev of ["pointerdown", "pointerup", "touchend", "keydown"]) document.addEventListener(ev, firstTouch, true);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) hush(); else if (SND.ac) start(false); });
+  soundUI();
+
+  // What changed on the lot since the last look, as sounds. A replay that plays sounds its own day;
+  // nothing plays for the first look, a moment held in a replay, or while the page was away: a
+  // pile of old news is not news.
+  const heard = { live: null, run: null };
+  function hear() {
+    const which = replayAt == null ? "live" : R.run ? "run" : null;
+    if (which !== "run") heard.run = null;
+    if (!which) return;
+    const jobs = new Map(), stages = new Map();
+    for (const st of stagesNow) {
+      stages.set(st.key, st.ss.state);
+      for (const j of jobsOf(st.node)) jobs.set(st.key + "/" + j.id, j.state);
+    }
+    const before = heard[which];
+    heard[which] = { jobs, stages };
+    if (!before || !SND.on || !SND.ac || SND.ac.state !== "running") return;
+    const was = before.jobs, wasSt = before.stages;
+    const plays = [];
+    for (const st of stagesNow) {
+      const pan = st.edge === "L" ? -0.55 : 0.55;
+      for (const j of jobsOf(st.node)) {
+        const before = was.get(st.key + "/" + j.id);
+        if (before === j.state) continue;
+        if (j.state === "running") plays.push(["slate", pan]);
+        else if (j.state === "done" && before) plays.push(["applause", pan]);
+        else if (j.state === "failed" && before) plays.push(["fail", pan]);
+      }
+      const b = wasSt.get(st.key);
+      if (st.ss.state === "hold" && b && b !== "hold") plays.push(["hold", pan]);
+    }
+    const ac = SND.ac;
+    plays.slice(0, 4).forEach(([k, pan], i) => SFX[k](ac, ac.currentTime + 0.05 + i * 1.1, pan));
+  }
+
+  // ---------------------------------------------------------------- replay
+  // Replay plays back the last 24 hours on the lot, an hour every four seconds, or holds it at any
+  // moment picked on the strip. The lot is rebuilt from the times on the jobs (FS.at), in the light
+  // and the weather of that moment. Back to live, or the end of the day, returns to now.
+  let liveSnap = null;
+  const R = { open: $("r-open"), panel: $("replay"), play: $("r-play"), time: $("r-time"), live: $("r-live"), strip: null, run: null, timer: 0, sig: "" };
+  R.strip = FS.strip($("r-strip"), { label: "Moment to replay on the lot, in the last 24 hours", onPick: (t) => { stopRun(); replayTo(t); } });
+  function whenText(t) {
+    const d = new Date(t), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return (d.toDateString() === new Date().toDateString() ? "Today " : "Yesterday ") + hm;
+  }
+  const sigOf = (s) => ((s && s.nodes) || []).map((n) => stageState(n).state + ":" + jobsOf(n).map((j) => j.id + "=" + j.state).join(",")).join("|");
+  function replayTo(t) {
+    const end = Date.now();
+    if (t >= end - 30000) { live(); return; }
+    replayAt = Math.round(Math.max(end - DAY_MS, t));
+    FS.setNow(replayAt);
+    const s = FS.at(liveSnap, replayAt), sig = sigOf(s);
+    snap = s;
+    if (sig !== R.sig || !R.run) { R.sig = sig; refresh(); }  // while it plays, the lot is built again only when it changed
+    else { status(); tally(); tick(); }
+    showReplay();
+  }
+  function live() {
+    stopRun();
+    if (replayAt != null) {
+      replayAt = null; FS.setNow(null); R.sig = "";
+      snap = liveSnap; heard.live = null;
+      refresh();
+    }
+    showReplay();
+  }
+  function showReplay() {
+    const on = replayAt != null;
+    R.time.textContent = on ? whenText(replayAt) : "Live";
+    R.live.disabled = !on;
+    R.play.textContent = R.run ? "Pause" : "Play";
+    R.play.setAttribute("aria-pressed", String(!!R.run));
+    film.classList.toggle("replaying", on);
+    if (!R.panel.hidden) R.strip.set(liveSnap, replayAt);
+    syncTime(true);
+  }
+  function startRun() {  // an hour every four seconds, from where it is (or from a day ago)
+    const end = Date.now(), from = replayAt == null || replayAt >= end - 60000 ? end - DAY_MS : replayAt;
+    R.run = { from, at: performance.now() };
+    clearInterval(R.timer);
+    R.timer = setInterval(() => { if (R.run) replayTo(R.run.from + (performance.now() - R.run.at) * 900); }, 200);
+    replayTo(from);
+  }
+  function stopRun() { R.run = null; clearInterval(R.timer); R.timer = 0; }
+  function openReplay(on) {
+    R.panel.hidden = !on;
+    R.open.setAttribute("aria-pressed", String(on));
+    if (on) startRun(); else live();
+    fit();
+  }
+  R.open.addEventListener("click", () => openReplay(R.panel.hidden));
+  R.play.addEventListener("click", () => { if (R.run) { stopRun(); showReplay(); } else startRun(); });
+  R.live.addEventListener("click", live);
+  document.addEventListener("keydown", (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "");
+    if ((e.key === "r" || e.key === "R") && !inBox(e) && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) { openReplay(R.panel.hidden); e.preventDefault(); }
+  });
+  window.addEventListener("resize", () => { if (!R.panel.hidden) R.strip.draw(); });
+
+  // ---------------------------------------------------------------- action
   // Opened as a plain file from the repository, the board sits next to this page as studio.html.
   if (location.protocol === "file:") document.querySelectorAll('a[href="index.html"]').forEach((a) => { a.href = "studio.html"; });
   FS.watch((seen, ok) => {
-    if (seen) snap = seen; else if (!snap) snap = { nodes: [] };
+    if (seen) liveSnap = seen; else if (!liveSnap) liveSnap = { nodes: [] };
+    snap = replayAt == null ? liveSnap : FS.at(liveSnap, replayAt);
     contact = ok; looks += 1;
     refresh();
+    if (!R.panel.hidden) R.strip.set(liveSnap, replayAt);
   });
   setInterval(() => { if (snap) refresh(); }, 5000);
   setInterval(tick, 1000);

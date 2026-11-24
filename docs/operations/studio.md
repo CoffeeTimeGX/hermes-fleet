@@ -12,6 +12,9 @@ It has two views of the same fleet, with a link at the top of each to the other:
 - **Pixel lot**: the fleet drawn as a pixel-art film lot, where everyone at work stands
   for something real. Click anyone to see the real values behind them.
 
+Both views have a screening room, where you watch the videos you have collected, and
+can play back the last 24 hours.
+
 ![The studio board with an example fleet](../assets/studio.png)
 
 It only watches. Nothing on either view changes the fleet: to act, ask the director or
@@ -71,6 +74,16 @@ and what finished in the last 24 hours, with the reason a job waits or failed an
 whether a finished job was collected. Times are in the local time of the device you
 watch on.
 
+**The last 24 hours**, under the office, has a row for each VPS with its takes of the
+last day. The key under it says which colour is which. Click or drag along the strip to
+see the board as it stood at that moment: a banner at the top says when, and **Back to
+live** returns to now. **Play** runs the day from 24 hours ago, an hour every four
+seconds.
+
+**The screening room**, under the stages, shows the videos you have collected with
+`fleet pull`, newest first, each with a frame from the video. Click one to watch it in
+the page. Esc or **Close** stops it.
+
 ## The pixel lot
 
 Click **Pixel lot** at the top of the board. You see the same fleet as a still from a
@@ -111,6 +124,7 @@ Around the lot:
 | Sam, the gate guard | At the front gate | The private road to the VPSs: your Tailscale network. | Which VPSs your PC cannot reach |
 | Rio, the courier | At the pickup bay, or driving the van | Finished videos that wait to be collected on your PC. The van stops at each stage that has some. | How many wait on each VPS, `fleet pull` |
 | The marquee | By the red carpet | The newest video finished in the last 24 hours. | Its title, its VPS, and the counts for today |
+| The screen | On the lawn, by the marquee | The videos you have collected with `fleet pull`. It shows the newest of each channel in turn. | The video on the screen, its channel and VPS, and **Watch** |
 
 On each stage:
 
@@ -166,6 +180,63 @@ Your browser remembers **Auto** or the time you picked.
 
 If your device is set to reduce motion, nobody walks and nothing blinks. The light still
 follows the clock, and the picture still follows the fleet.
+
+### Seasons and weather
+
+The lot follows the season of your device's date: blossom and flowers in spring, green
+trees in summer, orange leaves in autumn and bare trees in winter. From 1 December to
+6 January, lights hang on the lot and a tree stands on the lawn.
+
+The weather is made up from the date and the hour, so every screen shows the same sky.
+Most days are fair. Some are grey or wet, some mornings start in fog, and a winter day can
+bring snow that stays all day. Like the town, the weather stands for nothing.
+
+![The pixel lot in rain, fog, snow with the holiday lights, and on a summer night](../assets/studio-pixel-weather.png)
+
+To look at another season or another weather, pick it under **Season** and **Weather** at
+the top right of the picture. **Auto** goes back to your device's date. Your browser
+remembers what you picked.
+
+### Sound
+
+The lot is quiet until you click **Sound off** at the top right of the picture. It then
+says **Sound on**, and you hear the town: traffic as busy as the roads, birds by day,
+crickets on warm nights, the rain and the wind. You also hear the fleet, from the side of
+the lot where it happens:
+
+| You hear | It means |
+| --- | --- |
+| A clapperboard | A job started rolling. |
+| Applause | A video is done. |
+| A low horn | A job failed. |
+| A falling note | A VPS reached its usage limit. |
+
+Your browser remembers the choice. Browsers play sound only after you click, tap or press
+a key on the page, so a lot left with sound on stays quiet until you do. The sound stops
+while the tab is hidden. All of it is made in the page as it plays: there are no sound
+files.
+
+### The screening room
+
+The screen on the lawn shows the newest video of each channel in turn, nine seconds each,
+with a frame from the video. After dark it glows. Click the screen, then **Watch**, to
+play the video over the page. Esc or **Close** stops it.
+
+Until `fleet pull` has collected a video, the screen shows colour bars. The example lot
+shows title cards instead, and has no videos to play.
+
+### Replay the last 24 hours
+
+Click **Replay** at the top right of the picture, or press R. The lot turns sepia and
+plays back the last 24 hours, an hour every four seconds, in the light and the weather of
+each moment. The sounds play as they would have live.
+
+A strip at the bottom shows each VPS's takes. Click or drag along it to hold the lot at a
+moment, or use the arrow keys on it: an hour with Shift. **Pause** stops the playback,
+**Back to live** returns to now, and **Replay** or R again closes the strip.
+
+The replay is rebuilt from the times on the jobs: when each started, finished, failed or
+waited for a usage limit. It does not show each step a session took.
 
 ### Full screen
 
@@ -239,6 +310,10 @@ of its `logs/transcript.jsonl`). Both views ask your PC for that every few secon
 - The server answers only requests addressed to your PC by its own name or address, so
   a web page from somewhere else cannot read the studio through your browser.
 - The page loads its fonts from Google Fonts; everything else comes from your PC.
+- The screening room plays the files in your results folder (`results_dir` in
+  `fleet.ini`) straight from your PC: only what finished jobs left in their `output`
+  folder, and only videos and pictures (MP4, MOV, WebM, PNG, JPEG, WebP, GIF). Nothing
+  is uploaded anywhere. MP4 videos play in every common browser.
 
 To see the studio without a fleet, open `home/studio/studio.html` (the board) or
 `home/studio/pixel.html` (the pixel lot) from the repository in your browser. They show
@@ -252,4 +327,8 @@ an example lot with made-up jobs.
 | *worker returned no status (run fleet sync)* | The worker on that VPS is missing or did not answer: run `fleet sync`. A VPS that was never set up needs [Provision a VPS](../vps/provisioning.md) first. |
 | `cannot open the studio on 127.0.0.1:8740` | Another program uses the port: `fleet studio --port 8750`. |
 | *Lost contact with fleet studio on your PC* | The studio stopped. Run `fleet studio` again. |
+| The screen shows colour bars, or the screening room says *No videos yet* | Nothing is collected yet: run `fleet pull`. |
+| *This job left no video file that the studio can play* | The job's `output` folder holds no MP4, MOV or WebM file. Look in your results folder, or at the job with `fleet logs vps1 <job-id>`. |
+| A video does not play | Your browser cannot play that format. Open the file from your results folder instead. |
+| You hear nothing with **Sound on** | Click or tap the page once. Check that the browser tab and your device are not muted. |
 | `Tailscale is not connected on this computer` | Open Tailscale on your PC and sign in, then run `fleet studio --tailnet` again. |

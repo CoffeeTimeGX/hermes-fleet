@@ -200,7 +200,8 @@ fleet studio [--tailnet] [--port PORT] [--every SECONDS] [--no-browser] [--json]
 Opens a page in your browser that shows every VPS at work, like a film lot seen from
 above: what each Claude session is doing now, what waits and what finished today. Its
 **Pixel lot** view (`/pixel.html`) draws the same fleet as a pixel-art studio, where you
-click anyone to see the real values they stand for. It looks at the VPSs every 20
+click anyone to see the real values they stand for. Both play back the last 24 hours,
+and play the videos you have collected with `fleet pull`. It looks at the VPSs every 20
 seconds, only watches, and runs until you press Ctrl+C. See
 [The studio](../operations/studio.md).
 

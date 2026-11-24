@@ -62,8 +62,9 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote, unquote
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -1773,7 +1774,113 @@ def studio_snapshot(cfg: Config, every: int) -> dict:
     res = parallel(nodes, lambda n: studio_node(cfg, n))
     out = [r if isinstance(r, dict) else dict(studio_base(n), reachable=False, error=str(r)[:300])
            for n, r in ((n, res[n.name]) for n in nodes)]
-    return {"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out}
+    try:
+        screenings = studio_screenings(cfg)
+    except OSError:
+        screenings = []
+    return {"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out, "screenings": screenings}
+
+
+# The screening room: the finished videos `fleet pull` collected, which the studio plays from
+# results_dir. Only these kinds of file, under a job's output folder, are ever served.
+MEDIA_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+               ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+VIDEO_TYPES = {".mp4", ".m4v", ".mov", ".webm"}
+MEDIA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,150}$")
+MEDIA_DEPTH = 3  # output/a/b/file.mp4 at most
+_media_seen: dict = {}
+
+
+def media_files(out: Path) -> list:
+    """The videos and pictures in a pulled job's output folder, as (relative path, size), looked
+    for once per change of the folder: a render can leave thousands of frames in it."""
+    try:
+        key = out.stat().st_mtime_ns
+    except OSError:
+        return []
+    seen = _media_seen.get(str(out))
+    if seen and seen[0] == key:
+        return seen[1]
+    found, looked = [], 0
+    for top, dirs, names in os.walk(out):
+        rel_dir = Path(top).relative_to(out)
+        if len(rel_dir.parts) >= MEDIA_DEPTH:
+            dirs[:] = []
+        dirs[:] = sorted(d for d in dirs if MEDIA_NAME_RE.match(d))
+        for name in sorted(names):
+            looked += 1
+            if Path(name).suffix.lower() in MEDIA_TYPES and MEDIA_NAME_RE.match(name):
+                p = Path(top) / name
+                if p.is_file() and not p.is_symlink():
+                    found.append((rel_dir / name, p.stat().st_size))
+        if looked > 5000:
+            break
+    if len(_media_seen) > 500:
+        _media_seen.clear()
+    _media_seen[str(out)] = (key, found)
+    return found
+
+
+def studio_screenings(cfg: Config, limit: int = 48) -> list:
+    """The newest finished jobs with a video in results_dir, from the end of its index."""
+    index = cfg.results_dir / "index.jsonl"
+    if not index.exists():
+        return []
+    with index.open("rb") as fh:
+        fh.seek(max(0, index.stat().st_size - 2_000_000))
+        lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    out, seen = [], set()
+    for line in reversed(lines):
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(j, dict):
+            continue
+        node, jid = str(j.get("node", "")), str(j.get("id", ""))
+        if j.get("state") != "done" or j.get("pull_error") or (node, jid) in seen:
+            continue
+        seen.add((node, jid))
+        if not NAME_RE.match(node) or not ID_RE.match(jid):
+            continue
+        files = media_files(cfg.results_dir / node / jid / "output")
+        videos = [(rel, size) for rel, size in files if rel.suffix.lower() in VIDEO_TYPES]
+        if not videos:
+            continue
+        # the video: one named final or video if there is one, else the biggest
+        rel, size = max(videos, key=lambda v: (any(w in v[0].stem.lower() for w in ("final", "video")), v[1]))
+        posters = [r for r, _ in files if r.suffix.lower() not in VIDEO_TYPES
+                   and any(w in r.stem.lower() for w in ("thumb", "cover", "poster"))]
+        out.append({"node": node, "id": jid, "channel": j.get("channel"), "title": j.get("title"),
+                    "finished_at": j.get("finished_at"), "pulled_at": j.get("pulled_at"),
+                    "video": media_url(node, jid, rel), "poster": media_url(node, jid, posters[0]) if posters else None,
+                    "bytes": size})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def media_url(node: str, jid: str, rel: Path) -> str:
+    return "media/" + quote(node) + "/" + quote(jid) + "/" + "/".join(quote(p) for p in rel.parts)
+
+
+def media_path(root: Path, path: str):
+    """The file a /media/<vps>/<job>/<file> address names, or None: only a picture or a video,
+    inside that job's output folder in results_dir, and no link out of it."""
+    parts = [unquote(p) for p in path.split("/")]
+    if len(parts) < 3 or len(parts) > 2 + MEDIA_DEPTH:
+        return None
+    node, jid, rel = parts[0], parts[1], parts[2:]
+    if not NAME_RE.match(node) or not ID_RE.match(jid) or not all(MEDIA_NAME_RE.match(p) for p in rel):
+        return None
+    if Path(rel[-1]).suffix.lower() not in MEDIA_TYPES:
+        return None
+    base = root / node / jid / "output"
+    try:
+        real, home = base.joinpath(*rel).resolve(strict=True), base.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return real if home in real.parents and real.is_file() else None
 
 
 def studio_page_html() -> bytes:
@@ -1809,7 +1916,7 @@ def studio_host_ok(host: str, allowed: set) -> bool:
     return bool(name) and name in allowed
 
 
-def studio_handler(files: dict, state: dict, lock, allowed: set):
+def studio_handler(files: dict, state: dict, lock, allowed: set, media_root=None):
     from http.server import BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
@@ -1840,7 +1947,54 @@ def studio_handler(files: dict, state: dict, lock, allowed: set):
                 with lock:
                     snap = state["snapshot"]
                 return self.send(200, json.dumps(snap, default=str).encode("utf-8"), "application/json")
+            if path.startswith("/media/") and media_root is not None:
+                f = media_path(media_root, path[len("/media/"):])
+                if f is not None:
+                    return self.media(f)
             return self.send(404, b"not found\n", "text/plain; charset=utf-8")
+
+        def media(self, f: Path):
+            """A video or a picture, whole or the part a player asks for (Range)."""
+            size = f.stat().st_size
+            start, end, code = 0, size - 1, 200
+            want = self.headers.get("Range")
+            if want:
+                m = re.match(r"^bytes=(\d*)-(\d*)$", want.strip())
+                if m and m.group(1):
+                    start, end = int(m.group(1)), min(size - 1, int(m.group(2)) if m.group(2) else size - 1)
+                elif m and m.group(2):
+                    start = max(0, size - int(m.group(2)))
+                if not m or not (m.group(1) or m.group(2)) or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                code = 206
+            self.send_response(code)
+            self.send_header("Content-Type", MEDIA_TYPES[f.suffix.lower()])
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            if code == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                with f.open("rb") as fh:
+                    fh.seek(start)
+                    left = end - start + 1
+                    while left > 0:
+                        chunk = fh.read(min(262144, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass  # the player stopped reading: it moved on to another part
 
         do_HEAD = do_GET
 
@@ -1913,7 +2067,7 @@ def cmd_studio(cfg: Config, a) -> int:
             stop.wait(a.every)
 
     try:
-        srv = studio_server(host, a.port, studio_handler(studio_files(), state, lock, allowed))
+        srv = studio_server(host, a.port, studio_handler(studio_files(), state, lock, allowed, cfg.results_dir))
     except OSError as e:
         raise FleetError(f"cannot open the studio on {host}:{a.port} ({e.strerror or e}). "
                          f"Another program may use that port: pick another with --port") from None
