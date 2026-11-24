@@ -178,6 +178,17 @@ on a spare screen day and night. Browsers allow that only on your PC's own addre
 (`127.0.0.1`). On a phone opened with `--tailnet`, set the phone's screen to stay on
 yourself. Turn the phone sideways for a bigger lot.
 
+### Zoom in
+
+To look closer, click **+** at the top right of the picture, or hold Ctrl and turn the
+mouse wheel over the picture. A touchpad pinch works too, and in full screen the mouse
+wheel zooms on its own. On a phone, pinch the picture with two fingers. The pixels stay
+sharp at every step, up to six times the whole view.
+
+Zoomed in, drag the picture to look around. **−** zooms out, and **See all** shows the
+whole picture again. The keys + and - zoom too, and 0 shows the whole picture. When you
+pick a name on the call sheet, the picture moves to show that person.
+
 ## Watch from your phone
 
 Start the studio on your PC's Tailscale address instead:

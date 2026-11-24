@@ -94,8 +94,17 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .film::before { top: 8px; }
 .film::after { bottom: 8px; }
 .screen { position: relative; margin: 0 auto; width: fit-content; max-width: 100%; }
-#scene { display: block; image-rendering: crisp-edges; image-rendering: pixelated; touch-action: manipulation; }
+.view { position: relative; overflow: hidden; }
+#scene { display: block; image-rendering: crisp-edges; image-rendering: pixelated; touch-action: pan-y; transform-origin: 0 0; }
 #scene.point { cursor: pointer; }
+/* Zoomed in, the picture is dragged to look around, and fingers move it instead of the page. */
+.view.zoomed #scene { cursor: grab; touch-action: none; }
+.view.zoomed #scene.point { cursor: pointer; }
+.view.drag #scene, .view.drag #scene.point { cursor: grabbing; }
+.zhint {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; white-space: nowrap;
+  font: 600 14px/1 var(--font-pixel); color: #fff; background: rgba(16, 14, 12, .85); border: 2px solid rgba(255, 255, 255, .7); padding: 10px 14px 9px;
+}
 .labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .tag {
   position: absolute; transform: translate(-50%, -100%); white-space: nowrap;
@@ -109,11 +118,11 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .screen.small .hud { top: 4px; gap: 3px; }
 .screen.small .hud-l { left: 4px; }
 .screen.small .hud-r { right: 4px; }
-.screen.small .badge, .screen.small .clock, .screen.small .time button, .screen.small .hbtn { font-size: 10px; padding: 3px 5px 2px; }
+.screen.small .badge, .screen.small .clock, .screen.small .time button, .screen.small .hbtn, .screen.small .zoom button { font-size: 10px; padding: 3px 5px 2px; }
 .screen.small .time input { display: none; }
 /* On a small screen the controls sit under the picture, so they hide none of the sky. */
 .film:not(.is-full) .screen.small { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 6px; width: min-content; }
-.film:not(.is-full) .screen.small #scene { flex: none; }
+.film:not(.is-full) .screen.small .view { flex: none; }
 .film:not(.is-full) .screen.small .hud { position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
 .hud { position: absolute; top: 8px; display: flex; flex-direction: column; gap: 5px; transition: opacity .4s; }
 .hud-l { left: 8px; align-items: flex-start; }
@@ -125,6 +134,11 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .time { display: inline-flex; align-items: center; border: 2px solid #fff; background: #111; }
 .time button, .hbtn { font: 600 12px/1 var(--font-pixel); color: #cfc9bb; background: transparent; border: 0; padding: 5px 7px 4px; cursor: pointer; white-space: nowrap; }
 .hbtn { color: #fff; background: #111; border: 2px solid #fff; }
+.hrow { display: flex; gap: 5px; align-items: center; }
+.zoom { display: inline-flex; border: 2px solid #fff; background: #111; }
+.zoom button { font: 600 12px/1 var(--font-pixel); color: #fff; background: transparent; border: 0; padding: 5px 8px 4px; min-width: 26px; cursor: pointer; white-space: nowrap; }
+.zoom button:hover:not(:disabled) { background: #2a2a2a; }
+.zoom button:disabled { color: #6f6a60; cursor: default; }
 .time button:hover, .hbtn:hover { color: #fff; background: #2a2a2a; }
 .time button[aria-pressed="true"], .hbtn[aria-pressed="true"] { background: #fff; color: #111; }
 .time input[type="range"] { width: 128px; margin: 0 6px; accent-color: #e3b54b; cursor: pointer; }
@@ -133,7 +147,7 @@ h1 { font: 700 clamp(26px, 4.2vw, 40px)/1 var(--font-pixel); letter-spacing: .01
 .film.full { position: fixed; inset: 0; z-index: 1000; height: 100dvh; }
 .film.is-full::before, .film.is-full::after { display: none; }
 .film.idle .hud-r, .film.idle .nametag { opacity: 0; pointer-events: none; }
-.film.idle, .film.idle #scene { cursor: none; }
+.film.idle, .film.idle #scene, .film.idle .view.zoomed #scene { cursor: none; }
 html.lot-full, html.lot-full body { overflow: hidden; }
 .nametag {
   position: absolute; z-index: 3; pointer-events: none; transform: translate(-50%, calc(-100% - 6px)); white-space: nowrap;
@@ -208,7 +222,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     <div>
       <p class="eyebrow">Hermes Fleet Studio · the lot</p>
       <h1>Everyone at work</h1>
-      <p class="lede">Each VPS is a sound stage and each job a crew. Click anyone on the lot to see what they stand for. The light follows this device's clock; press F for full screen.</p>
+      <p class="lede">Each VPS is a sound stage and each job a crew. Click anyone on the lot to see what they stand for. Zoom with + and &minus;, then drag to look around. The light follows this device's clock; press F for full screen.</p>
     </div>
     <nav class="views" aria-label="Views">
       <a href="index.html">Board</a>
@@ -220,11 +234,19 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   <figure class="still">
     <div class="film" id="film">
       <div class="screen" id="screen">
-        <canvas id="scene" width="544" height="320" role="img" aria-label="The film lot, drawn in pixel art"></canvas>
-        <div class="labels" id="labels" aria-hidden="true"></div>
+        <div class="view" id="view">
+          <canvas id="scene" width="544" height="320" role="img" aria-label="The film lot, drawn in pixel art"></canvas>
+          <div class="labels" id="labels" aria-hidden="true"></div>
+          <p class="zhint" id="zhint" hidden>Hold Ctrl and scroll to zoom</p>
+        </div>
         <div class="hud hud-l"><span class="badge" id="badge">Example</span><span class="clock" id="t-clock">--:--</span></div>
         <div class="hud hud-r">
-          <button type="button" class="hbtn" id="t-full" aria-pressed="false" title="Full screen (F)">Full screen</button>
+          <div class="hrow">
+            <div class="zoom" role="group" aria-label="Zoom">
+              <button type="button" id="z-out" title="Zoom out (-)" aria-label="Zoom out" disabled>&minus;</button><button type="button" id="z-fit" title="See the whole picture (0)" hidden>See all</button><button type="button" id="z-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+            </div>
+            <button type="button" class="hbtn" id="t-full" aria-pressed="false" title="Full screen (F)">Full screen</button>
+          </div>
           <div class="time" role="group" aria-label="Time of day on the lot">
             <button type="button" id="t-auto" aria-pressed="true" title="Follow this device's clock">Auto</button><input type="range" id="t-slider" min="0" max="1435" step="5" value="720" aria-label="Time of day"><button type="button" id="t-lapse" aria-pressed="false" title="Run a whole day in one minute">Day in 1 min</button>
           </div>
@@ -2197,8 +2219,9 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const k = clamp01((Lt.dark - h.thr) / 0.2);
       if (k <= 0) continue;
       any = true;
-      g.globalAlpha = 0.13 * k; disc(g, h.x, h.y, h.r, h.c);
-      g.globalAlpha = 0.26 * k; disc(g, h.x, h.y, Math.max(1, Math.round(h.r / 2)), h.c);
+      g.globalAlpha = 0.08 * k; disc(g, h.x, h.y, h.r, h.c);  // three rings, so it fades out softly up close
+      g.globalAlpha = 0.12 * k; disc(g, h.x, h.y, Math.max(1, Math.round(h.r * 0.66)), h.c);
+      g.globalAlpha = 0.22 * k; disc(g, h.x, h.y, Math.max(1, Math.round(h.r * 0.33)), h.c);
     }
     g.restore();
     return any;
@@ -2578,7 +2601,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   const $ = (id) => document.getElementById(id);
   const film = $("film"), screenEl = $("screen"), labelsEl = $("labels"), tagEl = $("nametag"), dialog = $("dialog");
   const coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
-  let scale = 1;
+  let scale = 1, zoom = 1, panX = 0, panY = 0, levels = [1], dragged = false;
+  const viewW = () => parseFloat(cv.style.width) || cv.clientWidth, viewH = () => parseFloat(cv.style.height) || cv.clientHeight;
   // The size of the world follows the screen: whole pixels when they fit (2, 3 or more screen
   // pixels to one), more town and more sky on a bigger screen, the lot always whole in the middle.
   function fit() {
@@ -2591,17 +2615,20 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     if (k >= 2) { w = Math.floor((cw * dpr) / k); h = Math.floor((ch * dpr) / k); s = k / dpr; }
     else { s = Math.min(cw / LW, ch / LH); w = Math.max(LW, Math.floor(cw / s)); h = Math.max(LH, Math.floor(ch / s)); }
     if (w !== W || h !== H || OX !== Math.round(w / 2)) setFrame(w, h);
+    const vw0 = viewW(), vh0 = viewH(), cx = (vw0 / 2 - panX) / (vw0 * zoom), cy = (vh0 / 2 - panY) / (vh0 * zoom);
     cv.style.width = (w * s).toFixed(2) + "px"; cv.style.height = (h * s).toFixed(2) + "px"; labelsEl.style.height = cv.style.height;
     scale = s;
     screenEl.classList.toggle("small", w * s < 700);
     film.classList.toggle("stacked", !full && (w * s < 860 || h * s < 500));
-    placeLabels();
+    levels = zoomLevels();
+    if (zoom > 1 && vw0 > 0) { zoom = nearest(zoom); panX = (w * s) / 2 - cx * w * s * zoom; panY = (h * s) / 2 - cy * h * s * zoom; }
+    applyZoom();
   }
   function placeLabels() {
     labelsEl.innerHTML = stagesNow.map((st) => {
       if (!st.top) return "";
       const ch = (st.node.channels || [])[0];
-      return '<span class="tag" style="left:' + (st.top[0] * scale).toFixed(1) + "px;top:" + (st.top[1] * scale).toFixed(1) + 'px"><i style="--c:' + CSSC[st.ss.state] + '"></i>' +
+      return '<span class="tag" style="left:' + (panX + st.top[0] * scale * zoom).toFixed(1) + "px;top:" + (panY + st.top[1] * scale * zoom).toFixed(1) + 'px"><i style="--c:' + CSSC[st.ss.state] + '"></i>' +
         esc(st.node.name) + "<span> · " + (ch ? esc(ch) + " · " : "") + esc(st.ss.sign) + "</span></span>";
     }).join("");
   }
@@ -2641,8 +2668,9 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const fresh = key !== selected || dialog.hidden;
     selected = key;
     fillDialog(m, fresh);
-    const r = rectOf(key);  // keep the box clear of who you picked
-    dialog.classList.toggle("right", !!r && r.x + r.w / 2 < W * 0.48);
+    const r = rectOf(key);  // bring them into view, and keep the box clear of them
+    reveal(r);
+    dialog.classList.toggle("right", !!r && panX + (r.x + r.w / 2) * scale * zoom < viewW() * 0.48);
     dialog.hidden = false;
     markSheet();
     if (from === "sheet") film.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
@@ -2753,8 +2781,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const m = key && castBy.get(key), r = key && rectOf(key);
     if (!m || !r) { tagEl.hidden = true; return; }
     tagEl.innerHTML = esc(m.name) + " <span>· " + esc(m.role) + "</span>";
-    tagEl.style.left = ((r.x + r.w / 2) * scale).toFixed(1) + "px";
-    tagEl.style.top = (r.y * scale).toFixed(1) + "px";
+    tagEl.style.left = (panX + (r.x + r.w / 2) * scale * zoom).toFixed(1) + "px";
+    tagEl.style.top = (panY + r.y * scale * zoom).toFixed(1) + "px";
     tagEl.hidden = false;
   }
   cv.addEventListener("pointermove", (e) => {
@@ -2764,7 +2792,115 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     showTag(key);
   });
   cv.addEventListener("pointerleave", () => { hover = null; showTag(null); cv.classList.remove("point"); });
-  cv.addEventListener("click", (e) => { const [x, y] = worldAt(e), key = pickAt(x, y); if (key) select(key); else closeDialog(); });
+  cv.addEventListener("click", (e) => {
+    if (dragged) { dragged = false; return; }  // the end of a drag picks nobody
+    const [x, y] = worldAt(e), key = pickAt(x, y);
+    if (key) select(key); else closeDialog();
+  });
+
+  // ---------------------------------------------------------------- zoom and drag
+  // The picture zooms in steps of whole screen pixels for each pixel of the lot, so it stays sharp,
+  // up to six times the whole view. Zoomed in, it is dragged to look around and the names follow.
+  // The mouse wheel zooms with Ctrl (a touchpad pinch sends that too), or alone in full screen.
+  const viewEl = $("view"), zhint = $("zhint"), Z = { out: $("z-out"), fit: $("z-fit"), in: $("z-in") };
+  function zoomLevels() {
+    const e0 = scale * (window.devicePixelRatio || 1), out = [1];
+    for (let n = Math.floor(e0) + 1; n <= Math.floor(e0 * 6 + 1e-6); n++) { const z = n / e0; if (z >= out[out.length - 1] * 1.18) out.push(z); }
+    return out;
+  }
+  function nearest(z) { return levels.reduce((a, b) => (Math.abs(Math.log(b / z)) < Math.abs(Math.log(a / z)) ? b : a), 1); }
+  function applyZoom() {
+    const vw = viewW(), vh = viewH(), dpr = window.devicePixelRatio || 1;
+    if (zoom < 1.001) { zoom = 1; panX = 0; panY = 0; }
+    panX = Math.round(Math.min(0, Math.max(vw - vw * zoom, panX)) * dpr) / dpr;
+    panY = Math.round(Math.min(0, Math.max(vh - vh * zoom, panY)) * dpr) / dpr;
+    cv.style.transform = zoom === 1 ? "" : "translate(" + panX + "px, " + panY + "px) scale(" + zoom + ")";
+    viewEl.classList.toggle("zoomed", zoom > 1);
+    Z.out.disabled = zoom === 1; Z.in.disabled = zoom >= levels[levels.length - 1] - 1e-6; Z.fit.hidden = zoom === 1;
+    placeLabels(); showTag(hover);
+  }
+  function zoomTo(z, ox, oy) {  // ox, oy: the point of the view that stays put, in CSS pixels
+    const vw = viewW(), vh = viewH();
+    if (ox == null) { ox = vw / 2; oy = vh / 2; }
+    z = Math.max(1, Math.min(levels[levels.length - 1], z));
+    const wx = (ox - panX) / zoom, wy = (oy - panY) / zoom;
+    zoom = z; panX = ox - wx * z; panY = oy - wy * z;
+    applyZoom();
+  }
+  function zoomStep(d, ox, oy) {
+    const next = d > 0 ? levels.find((z) => z > zoom + 1e-6) : levels.filter((z) => z < zoom - 1e-6).pop();
+    if (next) zoomTo(next, ox, oy);
+  }
+  function reveal(r) {  // zoomed in, bring someone into the middle of the view when they are out of it
+    if (zoom === 1 || !r) return;
+    const k = scale * zoom, vw = viewW(), vh = viewH(), x = panX + (r.x + r.w / 2) * k, y = panY + (r.y + r.h / 2) * k;
+    if (x > 24 && x < vw - 24 && y > 24 && y < vh - 24) return;
+    panX = vw / 2 - (r.x + r.w / 2) * k; panY = vh / 2 - (r.y + r.h / 2) * k;
+    applyZoom();
+  }
+  Z.in.addEventListener("click", () => zoomStep(1));
+  Z.out.addEventListener("click", () => zoomStep(-1));
+  Z.fit.addEventListener("click", () => zoomTo(1));
+  let wheelAcc = 0, hintAt = -1e9, hintT = 0;
+  viewEl.addEventListener("wheel", (e) => {
+    if (!isFull() && !e.ctrlKey && !e.metaKey) {  // the page scrolls as usual; say once in a while how to zoom
+      const now = performance.now();
+      if (now - hintAt > 8000) { hintAt = now; zhint.hidden = false; clearTimeout(hintT); hintT = setTimeout(() => { zhint.hidden = true; }, 1600); }
+      return;
+    }
+    e.preventDefault();
+    zhint.hidden = true;
+    wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(wheelAcc) < 40) return;
+    const r = viewEl.getBoundingClientRect();
+    zoomStep(wheelAcc < 0 ? 1 : -1, e.clientX - r.left, e.clientY - r.top);
+    wheelAcc = 0;
+  }, { passive: false });
+  // One pointer drags the zoomed picture; two fingers pinch it, and it settles on the nearest sharp step.
+  const pts = new Map();
+  let drag = null, pinch = null;
+  const local = (e) => { const r = viewEl.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const startDrag = (id) => { const q = pts.get(id); drag = zoom > 1 && q ? { id, x: q[0], y: q[1], px: panX, py: panY } : null; };
+  cv.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    pts.set(e.pointerId, local(e));
+    if (pts.size === 1) dragged = false;
+    if (pts.size === 2) {
+      const [a, b] = Array.from(pts.values());
+      pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z: zoom, px: panX, py: panY, m: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
+      pinch.last = pinch.m; drag = null;
+    } else if (pts.size === 1) startDrag(e.pointerId);
+    if (pinch || drag) { try { cv.setPointerCapture(e.pointerId); } catch (err) { /* the drag ends where the pointer leaves */ } }
+  });
+  cv.addEventListener("pointermove", (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, local(e));
+    if (pinch && pts.size >= 2) {
+      const [a, b] = Array.from(pts.values()), d = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const z = Math.max(1, Math.min(levels[levels.length - 1], (pinch.z * d) / pinch.d));
+      const wx = (pinch.m[0] - pinch.px) / pinch.z, wy = (pinch.m[1] - pinch.py) / pinch.z;
+      zoom = z; panX = m[0] - wx * z; panY = m[1] - wy * z; pinch.last = m; dragged = true;
+      applyZoom();
+    } else if (drag && e.pointerId === drag.id) {
+      const [x, y] = pts.get(e.pointerId);
+      if (!dragged && Math.hypot(x - drag.x, y - drag.y) < 5) return;
+      dragged = true; viewEl.classList.add("drag");
+      panX = drag.px + x - drag.x; panY = drag.py + y - drag.y;
+      applyZoom();
+    }
+  });
+  const lift = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    if (pinch && pts.size < 2) {
+      const at = pinch.last; pinch = null;
+      zoomTo(nearest(zoom), at[0], at[1]);
+      if (pts.size === 1) startDrag(Array.from(pts.keys())[0]);
+    }
+    if (drag && e.pointerId === drag.id) drag = null;
+    if (!pts.size) viewEl.classList.remove("drag");
+  };
+  cv.addEventListener("pointerup", lift);
+  cv.addEventListener("pointercancel", lift);
   // ---------------------------------------------------------------- the time of day and full screen
   // Auto follows this device's clock; the slider holds the lot at one minute of the day; the
   // time-lapse runs a whole day in a minute from where it is. Full screen fills the screen with
@@ -2832,7 +2968,11 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   document.addEventListener("keydown", (e) => {
     idle();
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "") && document.activeElement !== T.slider;
-    if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) { isFull() ? exitFull() : enterFull(); e.preventDefault(); }
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !typing;
+    if ((e.key === "f" || e.key === "F") && plain) { isFull() ? exitFull() : enterFull(); e.preventDefault(); }
+    else if ((e.key === "+" || e.key === "=") && plain) { zoomStep(1); e.preventDefault(); }
+    else if ((e.key === "-" || e.key === "_") && plain) { zoomStep(-1); e.preventDefault(); }
+    else if (e.key === "0" && plain) { zoomTo(1); e.preventDefault(); }
     else if (e.key === "Escape" && !e.defaultPrevented && film.classList.contains("full")) exitFull();
   });
 
