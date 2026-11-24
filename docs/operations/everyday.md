@@ -16,10 +16,15 @@ shell on Linux and macOS.
 2. **Do something else.** Each VPS works through its queue on its own, also while your
    PC is off.
 3. **Get the results.** Every 30 minutes Hermes downloads what finished and sends you a
-   message with each job's summary. Each morning at 9 it sends a short report on the
-   whole fleet.
-4. **Deal with problems when Hermes tells you.** The health check messages you only
+   message with each job's summary and what the [video check](video-check.md) found.
+   Each morning at 9 it sends a short report on the whole fleet.
+4. **Publish.** Send the good ones to YouTube, TikTok or Instagram with
+   [`fleet publish`](publishing.md), or ask Hermes to.
+5. **Deal with problems when Hermes tells you.** The health check messages you only
    when something changes: a VPS stops answering, a job fails, the disk gets low.
+
+On Sundays Hermes also sends you next week's topics to approve. See
+[Week plan](week-plan.md).
 
 ## What to ask, and what Hermes runs
 
@@ -38,9 +43,17 @@ shell on Linux and macOS.
 | *"Move vps2's waiting jobs to vps4."* | `fleet handover vps2 vps4` |
 | *"Pause vps2, I want to update it."* | `fleet pause vps2` |
 | *"Start vps2 again."* | `fleet resume vps2` |
+| *"Is that video all right?"* | `fleet check vps1 <job-id>` |
+| *"What happened yesterday?"* | `fleet report` |
+| *"Plan next week."* | `fleet plan slots --week next`, then `fleet plan import <file>` |
+| *"Approve all."* or *"Approve 12-14."* | `fleet plan approve all` or `fleet plan approve 12-14` |
+| *"Put that video on YouTube and TikTok."* | `fleet publish vps1 <job-id> --to youtube,tiktok` |
+| *"vps1 should only work 8 to 11 pm."* | `fleet schedule set vps1 --hours 20:00-23:00` |
+| *"Let vps1 work for two more hours."* | `fleet schedule open vps1 --for 2h` |
 
 For anything that changes a server (closing SSH, rebooting, deleting) or moves work to
-another VPS, the director says what it will run and waits for your yes.
+another VPS, the director says what it will run and waits for your yes. It approves no
+week plan topic, posts nothing to Instagram and changes no schedule unless you ask.
 
 ## Check the fleet
 
@@ -59,7 +72,7 @@ vps5  UNREACHABLE               -       -        -     -       -         -      
 
 | Column | Meaning |
 | --- | --- |
-| `SERVICE` | `active` when the worker runs. `PAUSED` after `fleet pause`. `LIMIT until 17:05` while the Claude account waits for its usage limit to reset (in your PC's local time). `UNREACHABLE` when your PC cannot reach the VPS; the last column says why. |
+| `SERVICE` | `active` when the worker runs. `PAUSED` after `fleet pause`. `LIMIT until 17:05` while the Claude account waits for its usage limit to reset (in your PC's local time). `OFF DUTY until 08:00` outside the VPS's [work schedule](schedule.md). `UNREACHABLE` when your PC cannot reach the VPS; the last column says why. |
 | `QUEUED` | Jobs waiting to start. |
 | `RUNNING` | Jobs running now, out of how many the VPS may run at once (`sessions` in your inventory). |
 | `DONE`, `FAILED` | Finished jobs still on the VPS. Pulled jobs stay listed until the nightly cleanup deletes them, 7 days after the pull. |
@@ -230,6 +243,8 @@ jobs for its channel wait there too, unless you move them with `fleet handover`.
 ## Where to go next
 
 - [The studio](studio.md): watch every VPS at work in your browser.
+- [Work schedule](schedule.md): the hours each VPS works.
+- [Week plan](week-plan.md), [Video check](video-check.md) and [Publishing](publishing.md).
 - [Job format](job-format.md): every setting a job can have.
 - [Scheduled checks](scheduled-checks.md): what Hermes checks and when it messages you.
 - [Runbooks](../runbooks/index.md): what to do when something goes wrong.

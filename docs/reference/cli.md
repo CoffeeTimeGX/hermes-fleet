@@ -37,7 +37,7 @@ each one separately: one unreachable VPS never stops the others.
 | --- | --- |
 | `0` | Success. |
 | `1` | Something failed, or one of the VPSs did. The message says what. |
-| `2` | `fleet health` found problems. |
+| `2` | `fleet health` found problems, or `fleet check` found problems in a video. |
 | `130` | You pressed Ctrl+C. |
 
 `fleet exec` returns the exit code of the remote command (the first non-zero one when it
@@ -188,8 +188,90 @@ fleet resume TARGETS
 ```
 
 `pause` stops a VPS from starting new jobs; running jobs finish normally. `resume` starts
-the queue again, and also ends a usage-limit wait early. Both need `TARGETS`; use `all`
-for every VPS.
+the queue again, and also ends a usage-limit wait early. It does not override the VPS's
+[work schedule](../operations/schedule.md). Both need `TARGETS`; use `all` for every VPS.
+
+### fleet schedule
+
+```
+fleet schedule [show] [TARGETS] [--json]
+fleet schedule set TARGETS [24/7] [--hours H] [--days D] [--off DATES] [--cycle WORK/REST]
+                   [--gap G] [--random N/day [--min-gap G]] [--cap N] [--tz ZONE]
+fleet schedule open TARGETS [--for LENGTH]
+fleet schedule close TARGETS
+```
+
+The hours each VPS works. It trumps everything: no job starts outside it, whoever
+queued it, and running jobs always finish. Without a schedule a VPS works 24/7.
+
+| Option | Example | Off |
+| --- | --- | --- |
+| `--hours` | `08:00-12:00,14:00-23:00`, `22:00-07:00` | `all` |
+| `--days` | `mon-fri`, `weekends`, `mon,wed,fri` | `all` |
+| `--off` | `2026-12-24..2026-12-26,2027-01-01`, `today`, `tomorrow` | `none` |
+| `--cycle` | `3h/1h`: 3 hours of work, 1 hour of rest | `off` |
+| `--gap` | `45m`: a rest after each video | `0` |
+| `--random` | `4/day`: 4 random start times a day; `--min-gap 1h` spaces them | `off` |
+| `--cap` | `3`: at most 3 jobs a day | `0` |
+| `--tz` | `Europe/Paris`, `UTC`, `+01:00` | |
+
+Each option changes only itself. `24/7` clears everything first. `open` gives extra work
+time now (one hour by default, at most 7 days), whatever the schedule says; `close` ends
+it. See [Work schedule](../operations/schedule.md).
+
+### fleet check
+
+```
+fleet check NODE JOB_ID [--json]
+```
+
+Looks at a finished job's video again and prints the verdict. Exits with 2 when it finds
+problems. See [Video check](../operations/video-check.md).
+
+### fleet report
+
+```
+fleet report [--hours HOURS] [--json]
+```
+
+The daily report: what each VPS made, the videos with problems, the failed jobs, the
+week plan, what was published, and what needs you. `--hours` looks further back than
+the last 24 hours. Hermes sends it every morning at 9.
+
+### fleet plan
+
+```
+fleet plan show [--week this|next|all] [--status STATUS] [--channel C] [--json]
+fleet plan slots [--week this|next] [--channel C] [--json]
+fleet plan add --channel C --day YYYY-MM-DD --title T [--time HH:MM] [--brief B]
+fleet plan import FILE.json
+fleet plan approve NUMBERS
+fleet plan reject NUMBERS
+fleet plan edit NUMBER [--title T] [--brief B] [--day YYYY-MM-DD] [--time HH:MM] [--channel C]
+fleet plan remove NUMBERS
+fleet plan run [--dry-run] [--quiet]
+```
+
+The week plan: topics that wait for your yes, then are queued on their channel's VPS at
+their time. `NUMBERS` are plan numbers like `12`, `12,14`, `12-15` or `all` (every
+draft). `import` takes a JSON list of `{"channel", "day", "title", "brief"}`, or `-` to
+read it from the keyboard or a pipe. `run` queues what is due; Hermes runs it every
+hour. See [Week plan](../operations/week-plan.md).
+
+### fleet publish
+
+```
+fleet publish NODE JOB_ID --to youtube,tiktok,instagram [--at "YYYY-MM-DD HH:MM"] [--now]
+              [--video-url URL] [--channel C] [--anyway] [--dry-run] [--json]
+fleet publish --login youtube|tiktok|instagram --channel C [--made-for-kids yes|no]
+              [--no-ai-label] [--ig-user-id ID] [--port PORT]
+fleet publish --accounts
+```
+
+Sends a pulled video to YouTube as a private video, to the TikTok inbox, or to Instagram
+as a public Reel (that one needs `--now`). `--at` makes the YouTube video go public by
+itself at that time. `--login` signs a channel in, once per platform. See
+[Publishing](../operations/publishing.md).
 
 ### fleet studio
 
@@ -255,7 +337,7 @@ not fail it.
 fleet hermes-cron [--deliver TARGET]
 ```
 
-Creates the three scheduled Hermes jobs in the `director` profile, unless they already
+Creates the five scheduled Hermes jobs in the `director` profile, unless they already
 exist (`hermes -p director cron list` shows them). `--deliver` says where their messages
 go; the default is `telegram`. See [Scheduled checks](../operations/scheduled-checks.md).
 

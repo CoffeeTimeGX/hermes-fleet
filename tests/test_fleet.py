@@ -878,6 +878,9 @@ class ProfileHermes(FakeHermes):
         if args[:2] == ("cron", "create"):
             self.cron.append(args[args.index("--name") + 1])
             return subprocess.CompletedProcess(args, 0, b"", b"")
+        if args[:2] == ("cron", "remove") and args[2] in self.cron:
+            self.cron.remove(args[2])
+            return subprocess.CompletedProcess(args, 0, b"", b"")
         return super().__call__(exe, *args, timeout=timeout)
 
 
@@ -926,8 +929,8 @@ class DirectorProfileTest(TempDirTest):
         self.assertEqual(rc, 0)
         home = self.tmp / "hermes" / "profiles" / "director"
         self.assertEqual((home / "SOUL.md").read_bytes(), (REPO / "home" / "hermes" / "SOUL.md").read_bytes())
-        self.assertTrue((home / "scripts" / "fleet_health.py").is_file())
-        self.assertTrue((home / "scripts" / "fleet_pull.py").is_file())
+        for script in ("fleet_health.py", "fleet_pull.py", "fleet_report.py", "fleet_plan.py"):
+            self.assertTrue((home / "scripts" / script).is_file(), script)
         self.assertEqual(fake.store["terminal.cwd"], fleet.REPO_ROOT.as_posix())
         self.assertEqual({p for p, args in fake.calls if args[0] == "config"}, {"director"})
         self.assertIn("model: openrouter / some/model", out)
@@ -939,10 +942,24 @@ class DirectorProfileTest(TempDirTest):
             with self.assertRaisesRegex(fleet.FleetError, "run `fleet init` first"):
                 fleet.cmd_hermes_cron(cfg, a)
             (self.tmp / "profiles" / "director").mkdir(parents=True)
-            self.assertEqual(quietly(fleet.cmd_hermes_cron, cfg, a)[0], 0)
-            self.assertEqual(fake.cron, ["fleet-health", "fleet-pull", "fleet-daily-report"])
+            fake.cron = ["fleet-health", "fleet-daily-report"]  # made by an older fleet
+            rc, out, _ = quietly(fleet.cmd_hermes_cron, cfg, a)
+            self.assertEqual(rc, 0)
+            self.assertIn("- fleet-daily-report (replaced by fleet-report)", out)
+            self.assertEqual(fake.cron, ["fleet-health", "fleet-pull", "fleet-report", "fleet-plan", "fleet-week-plan"])
             self.assertIn("= fleet-health already exists", quietly(fleet.cmd_hermes_cron, cfg, a)[1])
         self.assertEqual({p for p, args in fake.calls if args[0] == "cron"}, {"director"})
+        creates = {args[args.index("--name") + 1]: args for _, args in fake.calls if args[:2] == ("cron", "create")}
+        self.assertEqual(creates["fleet-report"][2:6], ("0 9 * * *", "--no-agent", "--script", "fleet_report.py"))
+        self.assertEqual(creates["fleet-plan"][2:6], ("every 1h", "--no-agent", "--script", "fleet_plan.py"))
+        week = creates["fleet-week-plan"]
+        self.assertEqual(week[2], "0 10 * * 0")
+        self.assertIn("fleet plan import", week[3])
+        self.assertIn("Do not approve anything yourself", week[3])
+        self.assertIn("fleet-ops", week)
+        scripts = self.tmp / "profiles" / "director" / "scripts"
+        self.assertIn("'plan', 'run', '--quiet'", (scripts / "fleet_plan.py").read_text(encoding="utf-8"))
+        self.assertIn("['report']", (scripts / "fleet_report.py").read_text(encoding="utf-8"))
 
 
 class HermesSettingsTest(unittest.TestCase):
@@ -1360,6 +1377,958 @@ class StudioTest(TempDirTest):
         with mock.patch.object(fleet, "tailscale_binary", return_value=None):
             with self.assertRaisesRegex(fleet.FleetError, "not installed"):
                 fleet.tailscale_self()
+
+
+# --------------------------------------------------------------------------- video check and report
+
+def load_checker():
+    path = REPO / "vps" / "worker" / "fleet-check"
+    loader = importlib.machinery.SourceFileLoader("fleet_check", str(path))
+    spec = importlib.util.spec_from_loader("fleet_check", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+checker = load_checker()
+
+
+class VideoCheckTest(TempDirTest):
+    """vps/worker/fleet-check, the check each VPS runs on a finished job's video."""
+
+    def workspace(self, job=None, files=()):
+        ws = self.tmp / f"ws{len(list(self.tmp.iterdir()))}"
+        (ws / "output").mkdir(parents=True)
+        (ws / "job.json").write_text(json.dumps(job or {}), encoding="utf-8")
+        for name in files:
+            (ws / "output" / name).parent.mkdir(parents=True, exist_ok=True)
+            (ws / "output" / name).write_bytes(b"x" * 10)
+        return ws
+
+    def test_tags_are_counted_the_way_youtube_does(self):
+        self.assertEqual(checker.tags_length(["a", "b c"]), 1 + 5 + 1)
+        self.assertEqual(checker.tags_length([]), 0)
+
+    def test_metadata(self):
+        out = self.workspace() / "output"
+        self.assertIn("missing", checker.metadata_problems(out)[1][0])
+        (out / "metadata.json").write_text("{not json", encoding="utf-8")
+        self.assertIn("not valid JSON", checker.metadata_problems(out)[1][0])
+        (out / "metadata.json").write_text(json.dumps({"title": "x" * 101, "description": "a <b>", "tags": "a,b"}),
+                                           encoding="utf-8")
+        probs = " | ".join(checker.metadata_problems(out)[1])
+        for words in ("101 characters", "description has a <", "list of words"):
+            self.assertIn(words, probs)
+        (out / "metadata.json").write_text(json.dumps({"title": "Fine", "tags": ["t"] * 300}), encoding="utf-8")
+        self.assertIn("tags add up to 599", checker.metadata_problems(out)[1][0])
+        (out / "metadata.json").write_text(json.dumps({"title": "Fine", "description": "ok", "tags": ["a"]}),
+                                           encoding="utf-8")
+        self.assertEqual(checker.metadata_problems(out)[1], [])
+
+    def test_which_video(self):
+        ws = self.workspace(files=("clip.mp4", "parts/part1.mp4", "final cut.mov"))
+        (ws / "output" / "parts" / "part1.mp4").write_bytes(b"x" * 1000)
+        self.assertEqual(checker.find_video(ws, None).name, "final cut.mov")  # named final beats bigger
+        (ws / "output" / "video.mp4").write_bytes(b"x")
+        self.assertEqual(checker.find_video(ws, None).name, "video.mp4")
+        self.assertEqual(checker.find_video(ws, "output/clip.mp4").name, "clip.mp4")
+        self.assertIsNone(checker.find_video(ws, "../outside.mp4"))
+        self.assertEqual(checker.find_video(ws, 5).name, "video.mp4")  # not a name: chosen as usual
+        self.assertIsNone(checker.find_video(ws / "nothing", None))
+
+    def test_without_ffprobe_the_check_is_skipped(self):
+        ws = self.workspace(files=("video.mp4",))
+        with mock.patch.object(checker, "run", return_value=(127, "", "[Errno 2] No such file or directory")):
+            v = checker.check(ws)
+        self.assertIsNone(v["ok"])
+        self.assertIn("ffprobe is not installed", v["skipped"])
+
+    def test_turned_off_and_settings(self):
+        self.assertEqual(checker.check(self.workspace({"checks": False}))["skipped"], "this job turns the check off")
+        info = {"format": {"duration": "30.5", "size": "48000000"},
+                "streams": [{"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "30000/1001",
+                             "codec_name": "h264"}, {"codec_type": "audio", "codec_name": "aac"}]}
+        ws = self.workspace({"checks": {"min_seconds": "45", "width": 1080, "height": "1920", "max_megabytes": 40,
+                                        "thumbnail": False, "metadata": False}}, files=("video.mp4",))
+        with mock.patch.object(checker, "probe", return_value=(info, None)), \
+                mock.patch.object(checker, "black_keyframes", return_value=(0, 10)), \
+                mock.patch.object(checker, "loudest_db", return_value=-3.0):
+            v = checker.check(ws)
+        self.assertFalse(v["ok"])
+        self.assertEqual(v["facts"]["fps"], 29.97)
+        self.assertEqual(v["problems"], ["it is 30 seconds long; this job wants at least 45",
+                                         "the file is 48 MB; this job wants at most 40 MB",
+                                         "it is 1920x1080; this job wants 1080x1920"])
+
+    def test_a_phone_video_on_its_side_counts_as_upright(self):
+        info = {"format": {"duration": "10"}, "streams": [{"codec_type": "video", "width": 1920, "height": 1080,
+                                                            "side_data_list": [{"rotation": -90}]}]}
+        self.assertEqual(checker.picture(info)[2]["width"], 1080)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_real_videos(self):
+        ws = self.workspace({"checks": {"vertical": True}})
+        out = ws / "output"
+
+        def ff(*args):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True, stdin=subprocess.DEVNULL)
+        ff("-f", "lavfi", "-i", "testsrc2=s=180x320:r=10:d=2", "-f", "lavfi", "-i", "sine=f=440:d=2",
+           "-shortest", "-pix_fmt", "yuv420p", str(out / "video.mp4"))
+        ff("-f", "lavfi", "-i", "testsrc2=s=1280x720:d=1", "-frames:v", "1", str(out / "thumbnail.png"))
+        (out / "metadata.json").write_text(json.dumps({"title": "A test"}), encoding="utf-8")
+        v = checker.check(ws)
+        self.assertTrue(v["ok"], v)
+        self.assertEqual((v["facts"]["width"], v["facts"]["height"]), (180, 320))
+        ff("-f", "lavfi", "-i", "color=c=black:s=320x180:r=10:d=2", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
+           "-t", "2", "-pix_fmt", "yuv420p", str(out / "video.mp4"))
+        probs = " | ".join(checker.check(ws)["problems"])
+        for words in ("not vertical", "picture is black", "sound is silent"):
+            self.assertIn(words, probs)
+        r = subprocess.run([sys.executable, str(REPO / "vps" / "worker" / "fleet-check"), str(ws)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertFalse(json.loads(r.stdout)["ok"])
+
+
+class ReportTest(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.cfg = make_cfg(self.tmp, "vps1", "vps2")
+        self.cfg.nodes["vps1"].channels = "Space Facts"
+        self.cfg.path.write_text("", encoding="utf-8")
+
+    def test_check_words(self):
+        self.assertEqual(fleet.check_line(None), "")
+        self.assertEqual(fleet.check_line({"ok": True}), "video ok")
+        self.assertEqual(fleet.check_line({"ok": False, "problems": ["a", "b"]}), "CHECK: a (+1 more)")
+        self.assertEqual(fleet.check_line({"ok": None, "skipped": "off"}), "not checked: off")
+        lines = fleet.describe_check({"ok": False, "problems": ["no sound"], "video": "output/video.mp4",
+                                      "facts": {"seconds": 52.4, "width": 1080, "height": 1920, "fps": 30.0,
+                                                "megabytes": 21.5, "video_codec": "h264", "title": "T"}})
+        self.assertEqual(lines[:2], ["1 problem(s):", "  - no sound"])
+        self.assertIn("output/video.mp4: 52 s, 1080x1920, 30 fps, 21.5 MB, h264", lines[2])
+        self.assertIn("  title: T", lines)
+
+    def report(self, jobs, statuses=None, silent=()):
+        st = statuses or {"vps1": healthy(), "vps2": healthy()}
+        with mock.patch.object(fleet, "parallel", return_value=st), \
+                mock.patch.object(fleet, "fetch_jobs", return_value=(jobs, list(silent))):
+            return fleet.report_data(self.cfg, 24)
+
+    def test_report(self):
+        now = fleet.now_iso()
+        jobs = [{"node": "vps1", "id": "a", "state": "done", "finished_at": now, "title": "Saturn",
+                 "check": {"ok": False, "problems": ["the sound is silent"]}},
+                {"node": "vps1", "id": "b", "state": "done", "finished_at": now, "check": {"ok": True}},
+                {"node": "vps1", "id": "old", "state": "failed", "finished_at": "2020-01-01T00:00:00Z"},
+                {"node": "vps2", "id": "c", "state": "failed", "finished_at": now, "reason": "provider exited 1"},
+                {"node": "vps2", "id": "q", "state": "inbox"}]
+        d = self.report(jobs, {"vps1": healthy(), "vps2": healthy(paused=True)})
+        self.assertEqual([(n["node"], n["made"], n["made_ok"], n["failed"], n["queued"]) for n in d["nodes"]],
+                         [("vps1", 2, 1, 0, 0), ("vps2", 0, 0, 1, 1)])
+        out = fleet.report_text(d)
+        self.assertIn("vps1 (Space Facts): 2 video(s) made", out)
+        self.assertIn("vps2 (any channel): 0 video(s) made, 1 failed, 1 queued", out)
+        self.assertIn('- vps1 "Saturn" (a): the sound is silent. Again: fleet retry vps1 a', out)
+        self.assertIn("- vps2 c: provider exited 1. Again: fleet retry vps2 c", out)
+        self.assertIn("Needs you:\n- vps2: paused", out)
+        self.assertNotIn("old", out)
+
+    def test_quiet_day_and_a_silent_vps(self):
+        out = fleet.report_text(self.report([], silent=["vps2"]))
+        self.assertIn("vps2 (any channel): did not answer", out)
+        self.assertTrue(out.endswith("Nothing needs you."))
+
+
+# --------------------------------------------------------------------------- week plan
+
+class PlanTest(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.cfg = make_cfg(self.tmp, "vps1", "vps2")
+        self.cfg.nodes["vps1"].channels = "Space Facts"
+        self.cfg.nodes["vps2"].channels = "History"
+        self.cfg.path.write_text("", encoding="utf-8")
+        self.today = fleet.datetime.now().date()
+
+    def plan(self, *specs, action="show", **kw):
+        base = dict(action=action, args=list(specs), week=None, status=None, channel=None, day=None, time=None,
+                    title=None, brief=None, quiet=False, dry_run=False, json=False)
+        base.update(kw)
+        return quietly(fleet.cmd_plan, self.cfg, argparse.Namespace(**base))
+
+    def items(self):
+        return fleet.load_plan(self.cfg)["items"]
+
+    def day(self, n):
+        return (self.today + fleet.timedelta(days=n)).isoformat()
+
+    def test_numbers(self):
+        plan = {"items": [{"id": 3, "status": "draft"}, {"id": 4, "status": "approved"}, {"id": 5, "status": "draft"}]}
+        self.assertEqual(fleet.plan_ids(["1-3", "#7,9", "all"], plan), [1, 2, 3, 7, 9, 5])
+        with self.assertRaisesRegex(fleet.FleetError, "not a plan number"):
+            fleet.plan_ids(["three"], plan)
+        self.assertEqual(fleet.compact_ids([{"id": k} for k in (7, 3, 4, 5, 9, 10)]), "3-5,7,9-10")
+
+    def test_week_range(self):
+        lo, hi = fleet.week_range("next")
+        self.assertEqual((lo.weekday(), (hi - lo).days), (0, 6))
+        self.assertGreater(lo, self.today)
+        lo, hi = fleet.week_range("this")
+        self.assertEqual((lo, hi.weekday()), (self.today, 6))
+
+    def test_slots_follow_each_channels_days(self):
+        chans = self.tmp / "channels"
+        chans.mkdir()
+        (chans / "history.json").write_text(json.dumps({"channel": "History", "prompt": "x",
+                                                         "plan": {"days": ["mon", "Thursday"], "time": "07:30"}}),
+                                            encoding="utf-8")
+        rc, out, _ = self.plan(action="slots", week="next", json=True)
+        slots = json.loads(out)
+        self.assertEqual(len([s for s in slots if s["channel"] == "Space Facts"]), 7)
+        self.assertEqual([(s["weekday"], s["time"]) for s in slots if s["channel"] == "History"],
+                         [("Mon", "07:30"), ("Thu", "07:30")])
+
+    def test_import_approve_and_run(self):
+        src = self.tmp / "next.json"
+        src.write_text(json.dumps([
+            {"channel": "space facts", "day": self.day(0), "time": "00:00", "title": "Saturn", "brief": "rings"},
+            {"channel": "History", "day": self.day(1), "title": "Printing", "brief": "Gutenberg"}]), encoding="utf-8")
+        rc, out, _ = self.plan(str(src), action="import")
+        self.assertEqual(rc, 0)
+        self.assertIn("2 topic(s) wait for the owner's yes: fleet plan approve 1-2", out)
+        self.assertEqual([(i["id"], i["channel"], i["status"], i["time"]) for i in self.items()],
+                         [(1, "Space Facts", "draft", "00:00"), (2, "History", "draft", "09:00")])
+        self.assertIn("already planned as #1", self.plan(str(src), action="import")[1])  # importing again adds nothing
+        self.assertEqual(len(self.items()), 2)
+        sent = []
+
+        def dispatch(cfg, jobs, spec, dry_run, as_json):
+            sent.extend(jobs)
+            print(json.dumps([{"node": "vps1", "id": j["id"], "channel": j["channel"]} for j in jobs]))
+            return 0
+        with mock.patch.object(fleet, "dispatch_jobs", dispatch):
+            self.assertIn("nothing is due yet", self.plan(action="run")[1])  # drafts are never queued
+            self.assertIn("approved #1", self.plan("all", action="approve")[1])
+            rc, out, _ = self.plan(action="run", quiet=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual([j["title"] for j in sent], ["Saturn"])  # #2 waits for its day
+        job = sent[0]
+        self.assertEqual((job["channel"], job["plan_id"]), ("Space Facts", 1))
+        self.assertIn('"Saturn"', job["prompt"])
+        topic = {f["path"]: f["content"] for f in job["files"]}["topic.md"]
+        self.assertIn("# Saturn", topic)
+        self.assertIn("rings", topic)
+        self.assertIn("queued #1 ", out)
+        done = {i["id"]: i for i in self.items()}
+        self.assertEqual((done[1]["status"], done[1]["node"], done[1]["job_id"]), ("queued", "vps1", job["id"]))
+        self.assertEqual(done[2]["status"], "approved")
+        with mock.patch.object(fleet, "dispatch_jobs", dispatch):
+            self.assertEqual(self.plan(action="run", quiet=True)[1], "")  # nothing new: a quiet run prints nothing
+        self.assertIn("already queued", self.plan("1", action="reject")[1])
+
+    def test_a_run_that_stopped_half_way_does_not_queue_twice(self):
+        fleet.save_plan(self.cfg, {"next_id": 2, "items": [
+            {"id": 1, "channel": "History", "day": self.day(0), "time": "00:00", "title": "T", "status": "approved",
+             "job_id": "20260101-000000-history-abcde"}]})
+
+        def dispatch(cfg, jobs, spec, dry_run, as_json):
+            print(f"fleet: vps2: could not queue {jobs[0]['id']}: job id {jobs[0]['id']} already exists on vps2",
+                  file=sys.stderr)
+            print("[]")
+            return 1
+        with mock.patch.object(fleet, "dispatch_jobs", dispatch):
+            self.plan(action="run")
+        self.assertEqual((self.items()[0]["status"], self.items()[0]["node"]), ("queued", "vps2"))
+
+    def test_a_vps_that_cannot_take_it_is_tried_again(self):
+        fleet.save_plan(self.cfg, {"next_id": 2, "items": [
+            {"id": 1, "channel": "History", "day": self.day(0), "time": "00:00", "title": "T", "status": "approved"}]})
+
+        def dispatch(cfg, jobs, spec, dry_run, as_json):
+            print(f"fleet: {jobs[0]['id']}: channel 'History' is made on vps2, and no VPS can take a claude job",
+                  file=sys.stderr)
+            print("[]")
+            return 1
+        with mock.patch.object(fleet, "dispatch_jobs", dispatch):
+            out = self.plan(action="run", quiet=True)[1]
+            self.assertIn("NOT QUEUED #1", out)
+            self.assertEqual(self.plan(action="run", quiet=True)[1], "")  # not every hour
+        item = self.items()[0]
+        self.assertEqual((item["status"], item["tries"]), ("approved", 2))
+        self.assertIn("no VPS can take", item["error"])
+        d = mock.patch.object(fleet, "parallel", return_value={"vps1": healthy(), "vps2": healthy()})
+        with d, mock.patch.object(fleet, "fetch_jobs", return_value=([], [])):
+            self.assertIn("Week plan: #1 ", fleet.report_text(fleet.report_data(self.cfg, 24)))
+
+    def test_channel_job_file_and_placeholders(self):
+        chans = self.tmp / "channels"
+        chans.mkdir()
+        (chans / "space-facts.json").write_text(json.dumps({
+            "prompt": "Make {title} for {channel} on {day}. {brief}", "checks": {"vertical": True},
+            "files": [{"path": "brief.md", "content": "Topic: {title} {unknown}"}],
+            "plan": {"days": "weekdays"}, "max_turns": 50}), encoding="utf-8")
+        item = {"id": 7, "channel": "Space Facts", "day": "2026-12-01", "title": "Rings {brief}", "brief": "B"}
+        job = fleet.plan_job(self.cfg, item)
+        self.assertEqual(job["prompt"], "Make Rings {brief} for Space Facts on 2026-12-01. B")  # one pass only
+        self.assertEqual(job["checks"], {"vertical": True})
+        self.assertEqual(job["max_turns"], 50)
+        self.assertNotIn("plan", job)
+        files = {f["path"]: f["content"] for f in job["files"]}
+        self.assertEqual(files["brief.md"], "Topic: Rings {brief} {unknown}")
+        self.assertIn("topic.md", files)
+        (chans / "space-facts.json").write_text("{broken", encoding="utf-8")
+        with self.assertRaisesRegex(fleet.FleetError, "space-facts.json"):
+            fleet.plan_job(self.cfg, item)
+        # a file with only the days and time still gets the full default prompt
+        (chans / "space-facts.json").write_text(json.dumps({"plan": {"days": "mon", "time": "07:30"}}), encoding="utf-8")
+        job = fleet.plan_job(self.cfg, item)
+        self.assertIn("Make one video for the channel \"Space Facts\"", job["prompt"])
+        self.assertIn("metadata.json", job["prompt"])
+        self.assertEqual(job["timeout_minutes"], 180)
+
+    def test_checks_on_what_hermes_sends(self):
+        def bad(raw, words):
+            with self.assertRaisesRegex(fleet.FleetError, words):
+                fleet.plan_item(self.cfg, raw, "item")
+        bad({"channel": "Cooking", "day": self.day(1), "title": "x"}, "no VPS makes videos for channel 'Cooking'")
+        bad({"channel": "History", "day": "tomorrow", "title": "x"}, "must be a date")
+        bad({"channel": "History", "day": self.day(-1), "title": "x"}, "in the past")
+        bad({"channel": "History", "day": self.day(1), "time": "9am", "title": "x"}, "HH:MM")
+        bad({"channel": "History", "day": self.day(1), "title": ""}, "title")
+        bad(["History"], "an object")
+        rc, out, _ = self.plan(action="add", channel="History", day=self.day(2), title="Rome", brief="")
+        self.assertIn("added #1", out)
+        self.assertIn("changed #1", self.plan("1", action="edit", title="Rome, briefly")[1])
+        self.assertEqual(self.items()[0]["title"], "Rome, briefly")
+        self.assertIn("removed #1", self.plan("1", action="remove")[1])
+        self.assertEqual(self.items(), [])
+
+    def test_the_lock(self):
+        lock = self.tmp / "plan.lock"
+        with fleet.plan_locked(self.cfg):
+            self.assertTrue(lock.exists())
+        self.assertFalse(lock.exists())
+        lock.write_text("", encoding="utf-8")
+        os.utime(lock, (1, 1))  # left behind long ago by a crash
+        with fleet.plan_locked(self.cfg):
+            pass
+        self.assertFalse(lock.exists())
+
+
+# --------------------------------------------------------------------------- publishing
+
+class FakePlatforms:
+    """One local server that answers like Google, YouTube, TikTok and Instagram do
+    (the CLI talks to it through FLEET_PUBLISH_FAKE_API)."""
+
+    def __init__(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from urllib.parse import parse_qs, urlparse
+        self.calls, self.ig_status, self.got = [], ["IN_PROGRESS", "FINISHED"], {"yt": 0, "tt": 0}
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def answer(self, code, obj=None, headers=None):
+                body = json.dumps({} if obj is None else obj).encode()
+                self.send_response(code)
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self.route("GET")
+
+            def do_POST(self):
+                self.route("POST")
+
+            def do_PUT(self):
+                self.route("PUT")
+
+            def route(self, method):
+                u = urlparse(self.path)
+                size = int(self.headers.get("Content-Length") or 0)
+                data = self.rfile.read(size) if size else b""
+                form = {k: v[0] for k, v in parse_qs(data.decode("latin-1")).items()} \
+                    if "form-urlencoded" in (self.headers.get("Content-Type") or "") else {}
+                fake.calls.append({"method": method, "path": u.path, "query": parse_qs(u.query), "form": form,
+                                   "headers": dict(self.headers), "data": data})
+                rng = re.match(r"bytes (\d+)-(\d+)/(\d+)", self.headers.get("Content-Range") or "")
+                p = u.path
+                if p == "/google_token":
+                    tok = {"access_token": "g-" + form.get("grant_type", "?"), "expires_in": 3599}
+                    if form.get("grant_type") == "authorization_code":
+                        tok["refresh_token"] = "google-refresh"
+                    return self.answer(200, tok)
+                if p == "/youtube_upload/videos":
+                    return self.answer(200, headers={"Location": fake.base + "/yt-session"})
+                if p == "/yt-session":
+                    first, last, total = map(int, rng.groups())
+                    fake.got["yt"] += last - first + 1
+                    if last + 1 < total:
+                        return self.answer(308, headers={"Range": f"bytes=0-{last}"})
+                    return self.answer(200, {"id": "vid123"})
+                if p == "/youtube_upload/thumbnails/set":
+                    return self.answer(200, {"items": []})
+                if p == "/tiktok_api/oauth/token/":
+                    return self.answer(200, {"access_token": "tt-" + form.get("grant_type", "?"), "expires_in": 86400,
+                                             "refresh_token": "tiktok-refresh-2", "refresh_expires_in": 31536000,
+                                             "open_id": "open-1", "scope": "user.info.basic,video.upload"})
+                if p == "/tiktok_api/post/publish/inbox/video/init/":
+                    return self.answer(200, {"data": {"publish_id": "pub-1", "upload_url": fake.base + "/tt-upload"},
+                                             "error": {"code": "ok", "message": ""}})
+                if p == "/tt-upload":
+                    first, last, total = map(int, rng.groups())
+                    fake.got["tt"] += len(data)
+                    return self.answer(201 if last + 1 == total else 206)
+                if p == "/tiktok_api/post/publish/status/fetch/":
+                    return self.answer(200, {"data": {"status": "SEND_TO_USER_INBOX"}, "error": {"code": "ok"}})
+                if p == "/instagram_api/me":
+                    return self.answer(200, {"user_id": "1789", "username": "spacefacts"})
+                if p == "/instagram_api/1789/media":
+                    return self.answer(200, {"id": "container-1"})
+                if p == "/instagram_api/container-1":
+                    return self.answer(200, {"status_code": fake.ig_status.pop(0)})
+                if p == "/instagram_api/1789/media_publish":
+                    return self.answer(200, {"id": "media-1"})
+                if p == "/instagram_root/refresh_access_token":
+                    return self.answer(200, {"access_token": "ig-renewed", "expires_in": 5184000})
+                return self.answer(404, {"error": {"message": f"no route {method} {p}"}})
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def paths(self, method=None):
+        return [c["path"] for c in self.calls if method in (None, c["method"])]
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class PublishTest(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakePlatforms()
+        self.addCleanup(self.fake.close)
+        env = mock.patch.dict(os.environ, {"FLEET_PUBLISH_FAKE_API": self.fake.base, "FLEET_PUBLISH_POLL_SECONDS": "0",
+                                           "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.cfg = make_cfg(self.tmp, "vps1")
+        self.cfg.nodes["vps1"].channels = "Space Facts"
+        self.cfg.path.write_text("", encoding="utf-8")
+        self.pub = self.cfg.secrets_dir / "publish"
+        self.pub.mkdir(parents=True)
+        self.browser_saw = []
+
+    def args(self, **kw):
+        base = dict(node=None, job_id=None, to=None, at=None, now=False, video_url=None, channel=None, anyway=False,
+                    dry_run=False, json=False, login=None, made_for_kids=None, no_ai_label=False, ig_user_id=None,
+                    port=0, accounts=False)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def browser(self, url):
+        """Stands in for the owner's browser: it signs in and goes back to the CLI."""
+        from urllib.parse import parse_qs, urlparse
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        self.browser_saw.append(q)
+        back = f"{q['redirect_uri']}?code=the-code&state={q['state']}"
+        threading.Thread(target=lambda: urllib_get(back), daemon=True).start()
+        return True
+
+    def login(self, platform, **kw):
+        with mock.patch("webbrowser.open", side_effect=self.browser):
+            return quietly(fleet.cmd_publish, self.cfg, self.args(login=platform, channel="space facts", **kw))
+
+    def job(self, size=600_000, check=True, jid="20261124-090000-space-facts-abcde"):
+        d = self.cfg.results_dir / "vps1" / jid
+        (d / "output").mkdir(parents=True)
+        (d / "logs").mkdir()
+        (d / "output" / "video.mp4").write_bytes(os.urandom(size))
+        (d / "output" / "thumbnail.png").write_bytes(b"\x89PNG fake")
+        (d / "output" / "metadata.json").write_text(json.dumps({
+            "title": "Five facts about Saturn", "description": "Rings.", "tags": ["space", "saturn rings"]}),
+            encoding="utf-8")
+        (d / "job.json").write_text(json.dumps({"channel": "Space Facts"}), encoding="utf-8")
+        verdict = {"ok": True, "problems": [], "video": "output/video.mp4"} if check else \
+            {"ok": False, "problems": ["the sound is silent"], "video": "output/video.mp4"}
+        (d / "logs" / "check.json").write_text(json.dumps(verdict), encoding="utf-8")
+        return jid, d
+
+    def test_youtube_sign_in_and_private_draft(self):
+        with self.assertRaisesRegex(fleet.FleetError, "no Google app yet"):
+            self.login("youtube", made_for_kids="no")  # the owner's own OAuth client comes first
+        (self.pub / "youtube-client.json").write_text(json.dumps(
+            {"installed": {"client_id": "cid", "client_secret": "csecret"}}), encoding="utf-8")
+        rc, out, err = self.login("youtube", made_for_kids="no")
+        self.assertEqual(rc, 0, err)
+        q = self.browser_saw[-1]
+        self.assertEqual((q["scope"], q["code_challenge_method"], q["access_type"]), (fleet.YOUTUBE_SCOPE, "S256", "offline"))
+        self.assertTrue(q["redirect_uri"].startswith("http://127.0.0.1:"))
+        token_call = [c for c in self.fake.calls if c["path"] == "/google_token"][-1]["form"]
+        self.assertEqual(len(token_call["code_verifier"]), 64)
+        acct_file = self.pub / "youtube-space-facts.json"
+        acct = json.loads(acct_file.read_text(encoding="utf-8"))
+        self.assertEqual((acct["refresh_token"], acct["made_for_kids"], acct["synthetic_media"], acct["channel"]),
+                         ("google-refresh", False, True, "Space Facts"))
+        if POSIX:
+            self.assertEqual(acct_file.stat().st_mode & 0o777, 0o600)
+        jid, d = self.job()
+        acct["expires_at"] = 0  # an old access token: it is renewed first
+        acct_file.write_text(json.dumps(acct), encoding="utf-8")
+        with mock.patch.object(fleet, "YOUTUBE_CHUNK", 256 * 1024):
+            rc, out, err = quietly(fleet.cmd_publish, self.cfg, self.args(node="vps1", job_id=jid, to="youtube"))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("uploaded as a private draft, it stays private until you publish it", out)
+        self.assertIn("https://studio.youtube.com/video/vid123/edit (thumbnail set)", out)
+        insert = next(c for c in self.fake.calls if c["path"] == "/youtube_upload/videos")
+        meta = json.loads(insert["data"])
+        self.assertEqual(meta["status"], {"privacyStatus": "private", "selfDeclaredMadeForKids": False,
+                                          "containsSyntheticMedia": True})
+        self.assertEqual(meta["snippet"]["tags"], ["space", "saturn rings"])
+        self.assertEqual(insert["headers"]["Authorization"], "Bearer g-refresh_token")
+        self.assertEqual(self.fake.paths("PUT"), ["/yt-session"] * 3)
+        self.assertEqual(self.fake.got["yt"], 600_000)
+        self.assertEqual(json.loads((d / "publish.json").read_text(encoding="utf-8"))["youtube"]["video_id"], "vid123")
+        log = [json.loads(x) for x in (self.cfg.results_dir / "publish.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual((log[-1]["platform"], log[-1]["id"]), ("youtube", jid))
+        self.assertEqual(fleet.publish_summary(self.cfg, 0), {"youtube": 1})
+
+    def test_youtube_goes_public_only_at_the_time_asked(self):
+        (self.pub / "youtube-client.json").write_text(json.dumps({"installed": {"client_id": "c", "client_secret": "s"}}),
+                                                      encoding="utf-8")
+        self.login("youtube", made_for_kids="yes")
+        jid, _ = self.job()
+        when = (fleet.datetime.now() + fleet.timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
+        rc, out, err = quietly(fleet.cmd_publish, self.cfg, self.args(node="vps1", job_id=jid, to="youtube", at=when))
+        self.assertEqual(rc, 0, err)
+        status = json.loads(next(c for c in self.fake.calls if c["path"] == "/youtube_upload/videos")["data"])["status"]
+        self.assertEqual((status["privacyStatus"], status["selfDeclaredMadeForKids"]), ("private", True))
+        self.assertTrue(status["publishAt"].endswith("Z"))
+        self.assertIn("goes public by itself", out)
+        with self.assertRaisesRegex(fleet.FleetError, "15 minutes from now"):
+            fleet.publish_at("2020-01-01 10:00")
+
+    def test_tiktok_inbox(self):
+        with self.assertRaisesRegex(fleet.FleetError, "fill in your TikTok app"):
+            self.login("tiktok")
+        self.assertEqual(json.loads((self.pub / "tiktok-app.json").read_text(encoding="utf-8")),
+                         {"client_key": "", "client_secret": ""})  # a template to fill in
+        (self.pub / "tiktok-app.json").write_text(json.dumps({"client_key": "ck", "client_secret": "cs"}),
+                                                  encoding="utf-8")
+        port = free_port()
+        with mock.patch.object(fleet, "TIKTOK_PORT", port):
+            rc, out, err = self.login("tiktok")
+        self.assertEqual(rc, 0, err)
+        q = self.browser_saw[-1]
+        self.assertEqual(q["redirect_uri"], f"http://127.0.0.1:{port}/callback/")
+        self.assertRegex(q["code_challenge"], r"^[0-9a-f]{64}$")  # hex, as TikTok's desktop kit wants
+        self.assertEqual(q["scope"], "user.info.basic,video.upload")
+        jid, _ = self.job(size=2_500_000)
+        with mock.patch.object(fleet, "TIKTOK_CHUNK", 1_000_000):
+            rc, out, err = quietly(fleet.cmd_publish, self.cfg, self.args(node="vps1", job_id=jid, to="tiktok"))
+        self.assertEqual(rc, 0, err)
+        init = json.loads(next(c for c in self.fake.calls if c["path"].endswith("/inbox/video/init/"))["data"])
+        self.assertEqual(init["source_info"], {"source": "FILE_UPLOAD", "video_size": 2_500_000,
+                                               "chunk_size": 1_000_000, "total_chunk_count": 2})
+        ranges = [c["headers"]["Content-Range"] for c in self.fake.calls if c["path"] == "/tt-upload"]
+        self.assertEqual(ranges, ["bytes 0-999999/2500000", "bytes 1000000-2499999/2500000"])  # the last takes the rest
+        self.assertEqual(self.fake.got["tt"], 2_500_000)
+        self.assertIn("is in your TikTok inbox", out)
+        self.assertIn("#space #saturnrings", out)
+
+    def test_instagram_posts_only_with_now(self):
+        jid, _ = self.job()
+        with self.assertRaisesRegex(fleet.FleetError, "Instagram has no drafts"):
+            fleet.cmd_publish(self.cfg, self.args(node="vps1", job_id=jid, to="instagram"))
+        with mock.patch("getpass.getpass", return_value=" ig-token "):
+            rc, out, err = quietly(fleet.cmd_publish, self.cfg, self.args(login="instagram", channel="Space Facts"))
+        self.assertEqual(rc, 0, err)
+        acct_file = self.pub / "instagram-space-facts.json"
+        acct = json.loads(acct_file.read_text(encoding="utf-8"))
+        self.assertEqual((acct["access_token"], acct["user_id"], acct["username"]), ("ig-token", "1789", "spacefacts"))
+        acct["refreshed_at"] -= 2 * 86400  # two days old: renewed before it is used
+        acct_file.write_text(json.dumps(acct), encoding="utf-8")
+        rc, out, err = quietly(fleet.cmd_publish, self.cfg, self.args(
+            node="vps1", job_id=jid, to="instagram", now=True, video_url="https://media.example.test/v.mp4"))
+        self.assertEqual(rc, 0, err)
+        made = next(c for c in self.fake.calls if c["path"] == "/instagram_api/1789/media")["form"]
+        self.assertEqual((made["media_type"], made["video_url"], made["access_token"]),
+                         ("REELS", "https://media.example.test/v.mp4", "ig-renewed"))
+        self.assertTrue(made["caption"].startswith("Five facts about Saturn"))
+        self.assertIn("/instagram_api/1789/media_publish", self.fake.paths("POST"))
+        self.assertIn("posted as a Reel (media media-1)", out)
+
+    def test_instagram_shares_the_video_with_funnel_and_stops_after(self):
+        seen = []
+        with mock.patch.object(fleet, "tailscale_binary", return_value="tailscale"), \
+                mock.patch.object(fleet, "tailscale_self", return_value=("100.64.0.1", "my-pc.tail-net.ts.net")), \
+                mock.patch.object(fleet.subprocess, "run", side_effect=lambda argv, **kw: seen.append(argv) or ran()):
+            with contextlib.redirect_stdout(io.StringIO()), fleet.shared_publicly(self.tmp / "v.mp4") as url:
+                self.assertRegex(url, r"^https://my-pc\.tail-net\.ts\.net/fleet-[\w-]+\.mp4$")
+        on, off = seen
+        self.assertEqual(on[:4], ["tailscale", "funnel", "--bg", "--https=443"])
+        self.assertEqual(off, ["tailscale", "funnel", "--https=443", on[4], "off"])
+        self.assertEqual(on[4], "--set-path=" + url.split(".ts.net", 1)[1])
+
+    def test_refusals(self):
+        with self.assertRaisesRegex(fleet.FleetError, "run fleet pull vps1 first"):
+            fleet.cmd_publish(self.cfg, self.args(node="vps1", job_id="nothing-here", to="youtube"))
+        jid, _ = self.job(check=False)
+        with self.assertRaisesRegex(fleet.FleetError, "the sound is silent.*--anyway"):
+            fleet.cmd_publish(self.cfg, self.args(node="vps1", job_id=jid, to="youtube"))
+        with self.assertRaisesRegex(fleet.FleetError, "no youtube account for Space Facts"):
+            fleet.cmd_publish(self.cfg, self.args(node="vps1", job_id=jid, to="youtube", anyway=True))
+        with self.assertRaisesRegex(fleet.FleetError, "not vimeo"):
+            fleet.cmd_publish(self.cfg, self.args(node="vps1", job_id=jid, to="vimeo"))
+        with self.assertRaisesRegex(fleet.FleetError, "--channel"):
+            fleet.cmd_publish(self.cfg, self.args(login="youtube"))
+        self.assertEqual(self.fake.calls, [])
+
+    def test_dry_run_sends_nothing(self):
+        (self.pub / "tiktok-space-facts.json").write_text(json.dumps({"platform": "tiktok", "channel": "Space Facts"}),
+                                                          encoding="utf-8")
+        jid, _ = self.job()
+        rc, out, _ = quietly(fleet.cmd_publish, self.cfg, self.args(node="vps1", job_id=jid, to="tiktok", dry_run=True))
+        self.assertEqual(rc, 0)
+        self.assertIn("title: Five facts about Saturn", out)
+        self.assertIn("an upload to the TikTok inbox", out)
+        self.assertEqual(self.fake.calls, [])
+        self.assertIn("tiktok", quietly(fleet.cmd_publish, self.cfg, self.args(accounts=True))[1])
+
+    def test_captions(self):
+        self.assertEqual(fleet.caption({"caption": " Mine "}), "Mine")
+        self.assertEqual(fleet.caption({"title": "T", "description": "D", "tags": ["a b", "c-d"]}), "T\n\nD\n\n#ab #cd")
+        self.assertEqual(len(fleet.caption({"title": "x" * 3000})), 2200)
+
+
+def urllib_get(url: str) -> None:
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=10) as r:
+        r.read()
+
+
+# --------------------------------------------------------------------------- schedules
+
+def load_scheduler():
+    path = REPO / "vps" / "worker" / "fleet-schedule"
+    loader = importlib.machinery.SourceFileLoader("fleet_schedule", str(path))
+    spec = importlib.util.spec_from_loader("fleet_schedule", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+scheduler = load_scheduler()
+
+
+def utc(s: str) -> float:
+    """A UTC time like "2026-11-24 09:00" (a Tuesday) as an epoch."""
+    return fleet.datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=fleet.timezone.utc).timestamp()
+
+
+class ScheduleRulesTest(TempDirTest):
+    """vps/worker/fleet-schedule, which each VPS asks before it starts a job."""
+
+    def sched(self, node="vps1", **parts):
+        return scheduler.Schedule(scheduler.check(dict({"tz": "UTC", "seed": "abcd"}, **parts), now=utc("2026-11-24 00:00")),
+                                  node)
+
+    def state(self, s, when, starts=(), last_end=""):
+        return s.state(utc(when), [(utc(e), j) for e, j in starts], utc(last_end) if last_end else 0)
+
+    def test_hours_and_a_night_window(self):
+        s = self.sched(hours=[["08:00", "12:00"], ["22:00", "02:00"]])
+        self.assertEqual(self.state(s, "2026-11-24 07:00")["reason"], "off duty until 08:00")
+        st = self.state(s, "2026-11-24 09:00")
+        self.assertEqual((st["open"], st["until"], st["note"]), (True, utc("2026-11-24 12:00"), "working until 12:00"))
+        self.assertEqual(self.state(s, "2026-11-24 12:30")["reason"], "off duty until 22:00")
+        self.assertTrue(self.state(s, "2026-11-25 01:30")["open"])  # the night that started on Tuesday
+        self.assertEqual(self.state(s, "2026-11-25 02:00")["reason"], "off duty until 08:00")
+
+    def test_days_and_days_off(self):
+        s = self.sched(hours=[["22:00", "07:00"]], days=["mon", "tue", "wed", "thu", "fri"])
+        self.assertTrue(self.state(s, "2026-11-28 06:00")["open"])  # Saturday morning ends Friday's night
+        self.assertEqual(self.state(s, "2026-11-28 08:00")["reason"], "day off until Mon 22:00")
+        s = self.sched(off=[["2026-11-25", "2026-11-26"], ["2026-01-01", "2026-01-02"]])
+        self.assertEqual(s.s["off"], [["2026-11-25", "2026-11-26"]])  # ranges that are over leave the list
+        self.assertEqual(self.state(s, "2026-11-25 10:00")["reason"], "day off until Fri 00:00")
+        self.assertTrue(self.state(s, "2026-11-24 23:59")["open"])
+
+    def test_work_then_rest(self):
+        s = self.sched(hours=[["08:00", "23:00"]], cycle=[180, 60])
+        self.assertEqual([(a - utc("2026-11-24 00:00")) / 3600 for a, _ in s.blocks(fleet.datetime(2026, 11, 24).date())],
+                         [8, 12, 16, 20])
+        self.assertEqual(self.state(s, "2026-11-24 11:30")["reason"], "resting until 12:00")
+        self.assertTrue(self.state(s, "2026-11-24 22:59")["open"])
+
+    def test_pause_after_each_video(self):
+        s = self.sched(gap=45)
+        self.assertEqual(self.state(s, "2026-11-24 10:00", last_end="2026-11-24 09:40")["reason"],
+                         "pause after a video until 10:25")
+        self.assertTrue(self.state(s, "2026-11-24 10:25", last_end="2026-11-24 09:40")["open"])
+
+    def test_daily_cap_counts_each_job_once(self):
+        s = self.sched(hours=[["08:00", "23:00"]], cap=2)
+        again = [("2026-11-24 09:00", "a"), ("2026-11-24 11:00", "a")]  # a job back from a usage limit
+        self.assertTrue(self.state(s, "2026-11-24 15:00", again)["open"])
+        st = self.state(s, "2026-11-24 15:00", again + [("2026-11-24 12:00", "b")])
+        self.assertEqual(st["reason"], "done for the day (2 videos) until tomorrow 08:00")
+        self.assertTrue(self.state(s, "2026-11-24 15:00", [("2026-11-23 20:00", "x"), ("2026-11-23 21:00", "y")])["open"])
+
+    def test_random_start_times(self):
+        s = self.sched(hours=[["08:00", "23:00"]], random=[4, 60])
+        day = fleet.datetime(2026, 11, 24).date()
+        picks = s.picks(day)
+        self.assertEqual(picks, self.sched(hours=[["08:00", "23:00"]], random=[4, 60]).picks(day))  # the same all day
+        self.assertNotEqual(picks, self.sched("vps2", hours=[["08:00", "23:00"]], random=[4, 60]).picks(day))
+        self.assertEqual(len(picks), 4)
+        self.assertTrue(all(utc("2026-11-24 08:00") <= p < utc("2026-11-24 23:00") for p in picks))
+        self.assertTrue(all(b - a >= 3600 for a, b in zip(picks, picks[1:])))
+        self.assertTrue(all(p % 60 == 0 for p in picks))
+        before = s.state(picks[0] - 60, [], 0)
+        self.assertEqual(before["until"], picks[0])
+        self.assertTrue(before["reason"].startswith(("off duty until", "next random start at")))
+        self.assertTrue(s.state(picks[0], [], 0)["open"])
+        late = picks[1] - 60  # the first start time is still good until the second one
+        self.assertTrue(s.state(late, [], 0)["open"])
+        used = [(picks[0] + 120, "a")]
+        st = s.state(picks[0] + 180, used, 0)
+        self.assertEqual((st["open"], st["until"]), (False, picks[1]))
+        self.assertTrue(st["reason"].startswith("next random start at "))
+        w = s.workday(picks[1] + 60, used, 0)
+        self.assertEqual([p["state"] for p in w["picks"]], ["used", "now", "ahead", "ahead"])
+        squeezed = self.sched(hours=[["08:00", "09:00"]], random=[6, 60]).picks(day)  # cannot fit 6 an hour apart
+        self.assertEqual(len(squeezed), 6)
+        self.assertTrue(all(utc("2026-11-24 08:00") <= p < utc("2026-11-24 09:00") for p in squeezed))
+
+    def test_extra_time_beats_everything(self):
+        s = self.sched(hours=[["08:00", "09:00"]], cap=1, open_until=int(utc("2026-11-24 20:00")))
+        st = self.state(s, "2026-11-24 19:00", [("2026-11-24 08:10", "a")])
+        self.assertEqual((st["open"], st["kind"], st["until"]), (True, "extra", utc("2026-11-24 20:00")))
+        self.assertEqual(self.state(s, "2026-11-24 20:00")["reason"], "off duty until tomorrow 08:00")
+
+    def test_odd_schedules_are_refused(self):
+        bad = [({"hours": [["08:00", "08:00"]]}, "same time"), ({"hours": [["8:00", "9:00"]]}, "two times"),
+               ({"hours": [["08:00", "12:00"], ["11:00", "13:00"]]}, "overlap"),
+               ({"hours": [["22:00", "07:00"], ["06:00", "09:00"]]}, "overlap"), ({"tz": "Mars/Base"}, "unknown"),
+               ({"tz": "+15:00"}, "out of range"), ({"cycle": [5, 5]}, "10 to 1440"), ({"random": [0, 5]}, "1 to 48"),
+               ({"days": []}, "days"), ({"days": ["monday"]}, "days"), ({"off": [["2026-12-02", "2026-12-01"]]}, "before"),
+               ({"cap": True}, "cap"), ({"gap": "45"}, "gap"), ([], "object")]
+        for s, words in bad:
+            with self.assertRaisesRegex(ValueError, words, msg=s):
+                scheduler.check(s)
+
+    def test_words(self):
+        w = scheduler.summary
+        self.assertEqual(w({"tz": "UTC"}), "works 24/7")
+        self.assertEqual(w({"hours": [["08:00", "12:00"], ["14:00", "23:00"]], "days": ["mon", "tue", "wed", "thu", "fri"],
+                            "gap": 45, "cap": 3}),
+                         "works 08:00-12:00 and 14:00-23:00 on weekdays; a 45 min pause after each video; "
+                         "at most 3 videos a day")
+        self.assertEqual(w({"days": ["mon", "wed"], "cycle": [180, 90], "random": [1, 0], "off": [["2026-12-24", "2026-12-24"]]}),
+                         "works around the clock on Mon and Wed; in blocks of 3h with 1h30 of rest between them; "
+                         "1 random start time a day; days off: 24 Dec")
+        self.assertEqual(scheduler.days_words(["tue", "wed", "thu"]), "from Tue to Thu")
+
+    @unittest.skipUnless(scheduler.ZoneInfo, "no zoneinfo")
+    def test_summer_time(self):
+        try:
+            s = self.sched(tz="Europe/Paris", hours=[["08:00", "09:00"]])
+        except ValueError:
+            self.skipTest("no time zone data here (pip install tzdata)")
+        self.assertEqual(s.windows(fleet.datetime(2026, 3, 28).date()), [(utc("2026-03-28 07:00"), utc("2026-03-28 08:00"))])
+        self.assertEqual(s.windows(fleet.datetime(2026, 3, 29).date()), [(utc("2026-03-29 06:00"), utc("2026-03-29 07:00"))])
+        self.assertEqual(s.clock(utc("2026-03-29 06:00"), utc("2026-03-29 01:00")), "08:00")
+
+
+class ScheduleFileTest(TempDirTest):
+    """What the worker loop and `fleet-worker schedule` do with fleet-schedule."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = utc("2026-11-24 10:00")
+
+    def save(self, **changes):
+        return scheduler.save(str(self.tmp), changes, now=self.now)
+
+    def test_changes_merge_and_24_7_removes_the_file(self):
+        self.save(hours=[["08:00", "23:00"]], tz_default="+01:00")
+        self.save(cap=3, tz_default="+02:00")  # a guessed offset follows the PC's clock
+        s = json.loads((self.tmp / "schedule.json").read_text(encoding="utf-8"))
+        self.assertEqual((s["hours"], s["cap"], s["tz"]), ([["08:00", "23:00"]], 3, "+02:00"))
+        seed = s["seed"]
+        self.save(tz="UTC", random=[2, 30])
+        self.save(cap=None, tz_default="+05:00")  # an explicit zone stays
+        s = json.loads((self.tmp / "schedule.json").read_text(encoding="utf-8"))
+        self.assertEqual((s.get("cap"), s["tz"], s["seed"]), (None, "UTC", seed))
+        self.assertIsNone(self.save(reset=True))
+        self.assertFalse((self.tmp / "schedule.json").exists())
+        self.assertIsNone(scheduler.status(str(self.tmp), now=self.now))
+        with self.assertRaisesRegex(ValueError, "open_for"):
+            self.save(open_for=-5)
+
+    def test_open_for_then_close(self):
+        self.save(hours=[["01:00", "02:00"]], tz="UTC")
+        self.assertEqual(scheduler.gate(str(self.tmp), now=self.now), f"{int(self.now) + 300}\toff duty until tomorrow 01:00")
+        self.save(open_for=90)
+        st = scheduler.status(str(self.tmp), now=self.now)
+        self.assertEqual((st["open"], st["note"]), (True, "extra work time until 11:30"))
+        self.assertEqual(scheduler.gate(str(self.tmp), now=self.now), f"{int(self.now) + 300}\t")
+        self.save(open_for=0)
+        self.assertFalse(scheduler.status(str(self.tmp), now=self.now)["open"])
+
+    def test_the_gate_reads_starts_and_ends(self):
+        self.save(gap=30, cap=2, tz="UTC")
+        (self.tmp / ".starts").write_text(f"{int(self.now) - 7200} a\n{int(self.now) - 3600} b\nnot a line\n",
+                                          encoding="utf-8")
+        (self.tmp / ".last-end").write_text(str(int(self.now) - 600), encoding="utf-8")
+        until, why = scheduler.gate(str(self.tmp), now=self.now).split("\t")
+        self.assertEqual(why, "done for the day (2 videos) until tomorrow 00:00")
+        self.assertEqual(int(until), int(self.now) + 300)  # asked again within five minutes
+        st = scheduler.status(str(self.tmp), now=self.now)
+        self.assertEqual(st["workday"]["started"], 2)
+        self.assertIn("now: done for the day", scheduler.text(st))
+
+    def test_an_unreadable_schedule_starts_nothing(self):
+        (self.tmp / "schedule.json").write_text("{not json", encoding="utf-8")
+        until, why = scheduler.gate(str(self.tmp), now=self.now).split("\t")
+        self.assertTrue(why.startswith("the schedule could not be read"))
+        self.assertEqual(int(until), int(self.now) + 60)
+        st = scheduler.status(str(self.tmp), now=self.now)
+        self.assertEqual((st["open"], st["kind"]), (False, "error"))
+        self.save(reset=True, hours=[["08:00", "20:00"]])  # setting it again mends it
+        self.assertTrue(scheduler.status(str(self.tmp), now=self.now)["open"])
+
+
+class ScheduleCliTest(TempDirTest):
+    def test_parsers(self):
+        self.assertEqual([fleet.parse_minutes(v, "x") for v in ("45m", "2h", "1h30", "1.5h", "90", "90min", "off")],
+                         [45, 120, 90, 90, 90, 90, 0])
+        self.assertEqual(fleet.parse_hours("8-12, 14:30-23"), [["08:00", "12:00"], ["14:30", "23:00"]])
+        self.assertEqual(fleet.parse_hours("22:00-07:00"), [["22:00", "07:00"]])
+        self.assertEqual(fleet.parse_hours("18:00 to 24:00"), [["18:00", "24:00"]])
+        self.assertIsNone(fleet.parse_hours("00:00-24:00"))
+        self.assertIsNone(fleet.parse_hours("all"))
+        self.assertEqual(fleet.parse_days("mon-fri"), ["mon", "tue", "wed", "thu", "fri"])
+        self.assertEqual(fleet.parse_days("fri-mon"), ["mon", "fri", "sat", "sun"])
+        self.assertEqual(fleet.parse_days("Saturday, sunday"), ["sat", "sun"])
+        self.assertIsNone(fleet.parse_days("every day"))
+        self.assertEqual(fleet.parse_off("2026-12-24..2026-12-26,2027-01-01"),
+                         [["2026-12-24", "2026-12-26"], ["2027-01-01", "2027-01-01"]])
+        self.assertEqual(fleet.parse_cycle("3h/45m"), [180, 45])
+        self.assertEqual([fleet.parse_count(v, "x") for v in ("4", "4/day", "4 a day", "none")], [4, 4, 4, 0])
+        for fn, v in ((fleet.parse_minutes, "soon"), (fleet.parse_hours, "25-26"), (fleet.parse_hours, "24-02"),
+                      (fleet.parse_days, "mon-funday"), (fleet.parse_off, "2026-02-30"), (fleet.parse_cycle, "3h"),
+                      (fleet.parse_count, "lots")):
+            with self.assertRaises(fleet.FleetError, msg=v):
+                fn(v, "x") if fn in (fleet.parse_minutes, fleet.parse_count) else fn(v)
+
+    def test_command_line(self):
+        a = fleet.parse_cli(["schedule", "vps1,vps2"])  # no action: show
+        self.assertEqual((a.action, a.args), ("show", ["vps1,vps2"]))
+        a = fleet.parse_cli(["--config", "x.ini", "schedule", "set", "vps1", "24/7", "--cap", "3"])
+        self.assertEqual((a.action, a.args, a.cap), ("set", ["vps1", "24/7"], "3"))
+        self.assertEqual(fleet.parse_cli(["schedule"]).action, "show")
+        self.assertEqual(fleet.parse_cli(["schedule", "--json"]).action, "show")
+
+    def args(self, action="set", *words, **kw):
+        base = dict(action=action, args=list(words), hours=None, days=None, off=None, cycle=None, gap=None, random=None,
+                    min_gap=None, cap=None, tz=None, for_=None, json=False)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def run_schedule(self, a, answer=None, cfg=None):
+        cfg = cfg or make_cfg(self.tmp, "vps1", "vps2", channels="Space Facts")
+        sent = []
+
+        def fake_remote(c, n, command, stdin=None, **kw):
+            sent.append((n.name, command, json.loads(stdin) if stdin else None))
+            return ran(out=json.dumps(answer).encode())
+        with mock.patch.object(fleet, "remote", side_effect=fake_remote), \
+                mock.patch.object(fleet, "pc_zone", return_value="+01:00"):
+            rc, out, err = quietly(fleet.cmd_schedule, cfg, a)
+        return rc, out, err, sent
+
+    def test_set_sends_the_changes(self):
+        a = self.args("set", "vps1", hours="08:00-23:00", days="weekdays", gap="45m", random="4/day", cap="3")
+        rc, out, _, sent = self.run_schedule(a, {"summary": "works 08:00-23:00 on weekdays", "tz": "+01:00",
+                                                 "config": {"tz": "+01:00", "tz_guess": True},
+                                                 "note": "working until 23:00", "open": True, "workday": {}})
+        self.assertEqual(rc, 0)
+        (node, command, changes), = sent
+        self.assertEqual(node, "vps1")
+        self.assertTrue(command.endswith("schedule set"))
+        self.assertEqual(changes, {"hours": [["08:00", "23:00"]], "days": ["mon", "tue", "wed", "thu", "fri"], "gap": 45,
+                                   "random": [4, 30], "cap": 3, "tz_default": "+01:00"})
+        self.assertIn("vps1 (Space Facts): works 08:00-23:00 on weekdays. Times in UTC+01:00.", out)
+        self.assertIn("To follow summer time, add timezone = Area/City", out)
+        _, _, _, sent = self.run_schedule(self.args("set", "all", "24/7", tz="Europe/Paris"))
+        self.assertEqual([s[2] for s in sent], [{"reset": True, "tz": "Europe/Paris", "tz_default": "+01:00"}] * 2)
+        cfg = make_cfg(self.tmp, "vps1")
+        cfg.timezone = "Europe/Paris"  # [defaults] timezone in fleet.ini
+        _, _, _, sent = self.run_schedule(self.args("set", "vps1", cap="0"), cfg=cfg)
+        self.assertEqual(sent[0][2], {"cap": None, "tz": "Europe/Paris", "tz_default": "+01:00"})
+
+    def test_open_close_and_show(self):
+        _, _, _, sent = self.run_schedule(self.args("open", "vps1,vps2", for_="2h"))
+        self.assertEqual(sorted((s[0], s[2]["open_for"]) for s in sent), [("vps1", 120), ("vps2", 120)])
+        _, _, _, sent = self.run_schedule(self.args("close", "vps2"))
+        self.assertEqual(sent[0][2], {"open_for": 0})
+        rc, out, _, sent = self.run_schedule(self.args("show"), None)
+        self.assertEqual(rc, 0)
+        self.assertEqual([s[1].endswith("schedule show --json") for s in sent], [True, True])
+        self.assertIn("vps2 (Space Facts): works 24/7", out)
+
+    def test_refusals(self):
+        for a, words in ((self.args("set", "vps1"), "say what to change"), (self.args("open"), "name the VPSs"),
+                         (self.args("show", "24/7"), "24/7 goes with set"),
+                         (self.args("set", "vps1", min_gap="1h"), "--min-gap goes with --random"),
+                         (self.args("set", "vps1", tz="Paris time"), "time zone"),
+                         (self.args("open", "vps1", for_="200h"), "7 days"), (self.args("set", "vps9", cap="1"), "unknown node")):
+            with self.assertRaisesRegex(fleet.FleetError, words):
+                self.run_schedule(a)
+
+    def test_a_vps_off_duty_keeps_its_jobs(self):
+        off = {"open": False, "kind": "off", "reason": "off duty until 08:00", "until": fleet.time.time() + 3600}
+        self.assertEqual(fleet.node_readiness(healthy(schedule=off), "claude"), "held by its schedule (off duty until 08:00)")
+        self.assertIsNone(fleet.node_readiness(healthy(schedule={"open": True, "kind": "open"}), "claude"))
+        cfg = make_cfg(self.tmp, "vps1", "vps2", channels="all")
+        cfg.nodes["vps1"].channels = "Space Facts"
+        uploaded = []
+        statuses = {"vps1": healthy(schedule=off), "vps2": healthy(schedule=dict(off, until=fleet.time.time() + 60))}
+        with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)), \
+                mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j: uploaded.append(n.name)):
+            rc, _, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job({"prompt": "a", "channel": "Space Facts"}),
+                                                            fleet.validate_job({"prompt": "b", "channel": "History"})],
+                                 "auto", False, False)
+        self.assertEqual((rc, uploaded), (0, ["vps1", "vps2"]))  # its own VPS keeps it; the shared one opens first
+        self.assertIn("waits in its queue until its schedule lets it start", err)
+        bad = {"error": "not JSON", "open": False, "kind": "error", "reason": "the schedule could not be read: not JSON"}
+        with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(healthy(schedule=bad), node=n.name)):
+            problems = fleet.health_problems(make_cfg(self.tmp, "vps1"))
+        self.assertIn("vps1: its schedule could not be read (not JSON)", problems["vps1:schedule"])
+        never = dict(off, until=None, reason="day off, no work time in the next 60 days")
+        st = healthy(schedule=never, queue=dict(healthy()["queue"], inbox=2))
+        with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(st, node=n.name)):
+            self.assertIn("no work time in the next 60 days", fleet.health_problems(make_cfg(self.tmp, "vps1"))["vps1:schedule"])
+            rc, out, _ = quietly(fleet.cmd_status, make_cfg(self.tmp, "vps1"), argparse.Namespace(targets=None, json=False))
+        self.assertIn("OFF DUTY", out)
 
 
 # --------------------------------------------------------------------------- command line

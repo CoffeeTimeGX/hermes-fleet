@@ -133,8 +133,9 @@ The short version (details on the [Telegram page](telegram.md)):
 fleet hermes-cron
 ```
 
-Three cron jobs for the director: a health check every 10 minutes that messages you only
-when something changes, a pull every 30 minutes, and a daily report at 9 am. See
+Five cron jobs for the director: a health check every 10 minutes that messages you only
+when something changes, a pull every 30 minutes, a daily report at 9 am, the week plan's
+hourly queueing, and next week's topics on Sundays. See
 [Scheduled checks](../operations/scheduled-checks.md).
 
 ## 7. Next

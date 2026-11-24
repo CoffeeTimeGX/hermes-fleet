@@ -22,6 +22,10 @@ Your PC never runs a session itself; it only talks to this worker over SSH.
   .paused                           present while the VPS is paused, with the reason
   .limit                            present while a usage limit holds the queue
   .heartbeat                        the time of the worker's last round
+  schedule.json                     the VPS's work schedule; none means 24/7
+  .schedule-gate                    the schedule's last answer, kept up to 5 minutes
+  .starts                           when each job started, for the daily cap and random starts
+  .last-end                         when the last job ended, for the pause after a video
 /etc/fleet/worker.env               the worker's settings, written by the bootstrap
 /etc/fleet/worker.local.env         your own settings, if any (they win)
 /etc/fleet/locked-down              present once public SSH is closed
@@ -35,7 +39,7 @@ A job's workspace, `work/<id>/`:
 | `job.json` | The job as it was queued. |
 | `status.json` | The worker's record: state, times, attempts, exit code, reason. |
 | `output/` | The deliverables and `SUMMARY.txt`. |
-| `logs/` | `provider.log`, `transcript.jsonl`, `claude.stderr`, and `limit.json` after a usage limit. |
+| `logs/` | `provider.log`, `transcript.jsonl`, `claude.stderr`, `limit.json` after a usage limit, and `check.json` with the [video check](../operations/video-check.md)'s verdict. |
 | `result.json` | Claude Code's final result. |
 | `.prepared` | The template and files are in place; they are not copied again on a retry. |
 | `.pulled` | Your PC has the job, since the time inside. |
@@ -47,7 +51,7 @@ A job's workspace, `work/<id>/`:
 stateDiagram-v2
   [*] --> inbox: fleet dispatch
   inbox --> running: claimed by the worker
-  running --> done: the provider exited with 0
+  running --> done: the provider exited with 0, then the video check
   running --> failed: error, time-out, cancel
   running --> inbox: usage limit, or process lost with retries left
   inbox --> failed: fleet cancel
@@ -64,13 +68,22 @@ Every 5 seconds the worker:
 
 1. writes its heartbeat,
 2. checks whether it may start jobs: not while the VPS is paused, has less than 3 GB
-   free, or waits for a usage limit,
+   free, waits for a usage limit, or is outside its
+   [work schedule](../operations/schedule.md),
 3. claims the oldest job in the inbox while fewer jobs run than `MAX_PARALLEL`, and
    starts it in a process session of its own, under a time limit.
 
 At start, and about every 5 minutes, it looks for running jobs whose process is gone,
 after a reboot or a crash. Such a job goes back to the inbox while it has retries left
 (`max_retries`, 1 by default), and is filed as failed otherwise.
+
+When a job ends well, the worker runs `app/worker/fleet-check` on its workspace before
+the job counts as done. The check never fails the job: its verdict goes into
+`logs/check.json` and, shortened, into `status.json`.
+
+The schedule is read by `app/worker/fleet-schedule`. Its answer is kept in
+`.schedule-gate` for at most 5 minutes, and a job's start or end, a `fleet schedule set`
+and a worker restart clear it. A `schedule.json` that cannot be read starts no job.
 
 The worker can restart (after `fleet sync`, for example) without touching the running
 jobs, because each one runs in its own session. The restarted worker finds them again.
@@ -116,7 +129,10 @@ fleet exec vps1 -- fleet-worker status
 | `fleet-worker release ID NODE`, `released ID`, `unrelease ID` | The three steps of a handover: take a waiting job out of the queue for NODE, let it go once NODE has it, or put it back. `fleet handover` runs them. |
 | `fleet-worker finished [--json]` | Finished jobs that are not pulled yet. |
 | `fleet-worker mark-pulled ID` | Mark a job as pulled. |
-| `fleet-worker pause [REASON]`, `resume` | Stop and restart starting new jobs; `resume` also ends a usage-limit wait. |
+| `fleet-worker pause [REASON]`, `resume` | Stop and restart starting new jobs; `resume` also ends a usage-limit wait, but not the schedule. |
+| `fleet-worker check ID` | Run the video check on a finished job again and print its verdict. |
+| `fleet-worker schedule [show [--json]]` | The work schedule and what it says now. |
+| `fleet-worker schedule set` | Change the schedule with the JSON changes read from its input. `fleet schedule set` sends them. |
 | `fleet-worker gc [--days N]` | Delete the workspaces pulled more than N days ago (7 by default). |
 | `fleet-worker recover` | Look for jobs whose process is gone, as the worker does every 5 minutes. |
 | `fleet-worker version` | The worker's version. |
@@ -157,6 +173,7 @@ fields other tools may use:
 | `worker_version`, `service` | The worker's version, and the systemd state of its service. |
 | `heartbeat_age_s` | Seconds since the worker's last round (`-1` before the first). |
 | `max_parallel`, `paused`, `paused_reason`, `on_hold` | Capacity, and why no new job starts, if none does. |
+| `schedule` | `null` for 24/7. Otherwise `open` (whether a job may start now), `kind` (`open` or `extra` while one may; `off`, `dayoff`, `rest`, `gap`, `random`, `cap` or `error` while none may), `reason`, `until` (Unix time), `summary`, `tz` and `workday` (the work day's times and random starts). |
 | `limit` | The usage-limit wait, while it lasts: `provider`, `kind`, `message`, `until` (Unix time) and `until_iso`. |
 | `queue` | `inbox`, `running`, `done`, `failed` and `unpulled` counts. |
 | `stuck_handovers` | Jobs left in `jobs/outgoing/` for more than 10 minutes: a handover that stopped halfway. |

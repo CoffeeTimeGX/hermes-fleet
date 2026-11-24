@@ -41,6 +41,25 @@ Two things are not covered by `fleet sync`:
   `fleet bootstrap vps1 --skip-upgrade`. It is safe to repeat, keeps public SSH closed
   on a locked-down VPS, and does not stop running jobs.
 
+### From version 1.6 to 1.7
+
+Version 1.7 adds the [video check](video-check.md), the [week plan](week-plan.md),
+[publishing](publishing.md) and the [work schedule](schedule.md). After `git pull`:
+
+```powershell
+fleet sync
+fleet hermes-cron
+fleet init
+```
+
+- `fleet sync` brings the video check and the schedule to every VPS.
+- `fleet hermes-cron` adds the hourly week plan job and Sunday's planning, and replaces
+  the old `fleet-daily-report` with `fleet-report`, which costs no model use.
+- `fleet init` gives Hermes the new version of its instructions.
+- Once per VPS, for schedules in a named time zone such as `Europe/Paris`:
+  `fleet bootstrap vps1 --skip-upgrade`. It installs the time zone data if the VPS lacks
+  it. `fleet schedule set` tells you when a VPS needs it.
+
 ## Claude Code on the VPSs
 
 Claude Code's own auto-updater is off on the VPSs, so all five stay on the same version

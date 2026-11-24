@@ -54,7 +54,7 @@ After that, you mostly talk to Hermes. See [Everyday use](operations/everyday.md
 
 - [ ] `fleet doctor` passes on your PC
 - [ ] The director answers in the terminal (`hermes -p director`) and on Telegram
-- [ ] `fleet hermes-cron` created the three scheduled jobs
+- [ ] `fleet hermes-cron` created the five scheduled jobs
 - [ ] Tailscale: policy pasted, auth key in `secrets/tailscale.env`
 - [ ] Five VPSs created with Ubuntu 24.04 and the fleet key, public IPs and channels in
       `fleet.ini` (`fleet list` shows them)

@@ -1,6 +1,6 @@
 # Scheduled checks
 
-Hermes watches the fleet for you with three scheduled jobs of its `director` profile.
+Hermes watches the fleet for you with five scheduled jobs of its `director` profile.
 `fleet hermes-cron` creates them once, during the home setup:
 
 ```
@@ -10,20 +10,25 @@ fleet hermes-cron
 ```
 + fleet-health
 + fleet-pull
-+ fleet-daily-report
++ fleet-report
++ fleet-plan
++ fleet-week-plan
 These jobs belong to the 'director' profile (hermes -p director cron list). They run inside
-the Hermes gateway: keep it running (hermes gateway status).
+the Hermes gateway: keep it running (hermes gateway status). Their times are in the profile's timezone.
 ```
 
-Running it again changes nothing: jobs that already exist are left alone.
+Running it again only adds the jobs that are missing. It also replaces the
+`fleet-daily-report` job of older versions with `fleet-report`.
 
 | Job | When | What it does | Costs |
 | --- | --- | --- | --- |
 | `fleet-health` | every 10 minutes | Runs `fleet health --changes-only` and messages you when a problem appears or goes away. | nothing |
 | `fleet-pull` | every 30 minutes | Runs `fleet pull --quiet` and messages you the summary of each job it downloaded. | nothing |
-| `fleet-daily-report` | every day at 9 am | Hermes reads `fleet status` and `fleet jobs` and writes you a short report. | one short Hermes conversation |
+| `fleet-report` | every day at 9 am | Runs `fleet report` and sends you the daily report. | nothing |
+| `fleet-plan` | every hour | Runs `fleet plan run --quiet`: queues the approved topics whose time has come. | nothing |
+| `fleet-week-plan` | Sundays at 10 am | Hermes plans next week's topics and sends them to you to approve. See [Week plan](week-plan.md). | one Hermes conversation |
 
-The first two are plain scripts: Hermes runs them without its model and sends whatever
+The first four are plain scripts: Hermes runs them without its model and sends whatever
 they print. When they print nothing, you get no message. That is how the fleet stays
 quiet when all is well.
 
@@ -61,6 +66,11 @@ It looks for these problems:
 | Security updates need a reboot | `fleet reboot <vps>` when no job runs |
 | A usage-limit wait longer than 6 hours (a weekly limit) | Nothing to do, unless another VPS should take its queue: [Usage limits](usage-limits.md) |
 | A handover stopped halfway (a job has been `outgoing` for more than 10 minutes) | Run the same `fleet handover` again: it finishes the move without making a second copy |
+| A VPS's work schedule cannot be read (no job starts there then) | Set it again: [Work schedule](schedule.md) |
+| Jobs wait, but the VPS's schedule has no work time in the next 60 days | Change the schedule, or give it extra time with `fleet schedule open` |
+
+Off duty is not a problem: it is what you asked for, so the health check stays quiet
+about it.
 
 The check remembers what it reported in `~/.config/fleet/state/health.json` on your PC.
 
@@ -81,10 +91,27 @@ not reach, because the health check already reports that.
 
 ## The daily report
 
-At 9 am, Hermes runs `fleet status` and `fleet jobs` with its `fleet-ops` skill and
-sends you a report of at most 12 lines: each VPS's health, the jobs that finished and
-failed in the last 24 hours, what is still queued or running, and anything you need to
-do. This is the only one of the three that uses Hermes' model.
+At 9 am, Hermes runs `fleet report` and sends you what it prints:
+
+```
+Fleet report for Tue 24 Nov, the last 24 hours
+vps1 (Space Facts): 2 video(s) made, 1 queued
+vps2 (History): 1 video(s) made, off duty until 18:00
+vps3 (Cooking): 0 video(s) made, 1 failed, usage limit until 14:05
+Videos with problems:
+- vps1 "How far away is the edge of the universe?" (20261124-013002-space-facts-p0x7d): the sound is silent (its loudest moment is -91 dB). Again: fleet retry vps1 20261124-013002-space-facts-p0x7d
+Failed:
+- vps3 "Five-minute pancakes" (20261124-020011-cooking-a9k2m): timed out after 180m. Again: fleet retry vps3 20261124-020011-cooking-a9k2m
+Week plan: 3 video(s) queued, 6 approved and waiting for their day
+Published: 1 TikTok inbox upload(s), 2 YouTube draft(s)
+Needs you:
+- Week plan: 2 topic(s) wait for your yes. Answer "approve all" or "approve 15-16"; see them with: fleet plan show
+```
+
+It covers each VPS, the [video check](video-check.md)'s problems, failed jobs, the
+[week plan](week-plan.md), what was [published](publishing.md), and what needs you: the
+open health problems, topics that wait for your yes, and sign-ins that end soon. Run
+`fleet report` yourself at any time; `--hours 72` looks back three days.
 
 ## Where the messages go
 
@@ -101,12 +128,13 @@ at the wrong hour, set your timezone in the director's settings (`timezone:` in 
 timezone:
 
 ```
-hermes -p director cron edit fleet-daily-report --timezone Europe/London
+hermes -p director cron edit fleet-report --timezone Europe/London
 ```
 
 Use your own zone's name from the
 [tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones). The
-10-minute and 30-minute jobs do not depend on the timezone.
+10-minute, 30-minute and hourly jobs do not depend on the timezone. The week plan's own
+times, and the VPSs' work schedules, are in your PC's time.
 
 ## They run only while the gateway runs
 
@@ -119,17 +147,19 @@ everything and the next health check reports what is still wrong. See
 
 ```
 hermes -p director cron list                        # the jobs and their next run
-hermes -p director cron run fleet-daily-report      # run one within the next minute, as an extra
+hermes -p director cron run fleet-report            # run one within the next minute, as an extra
 hermes -p director cron pause fleet-health          # stop one for a while
 hermes -p director cron resume fleet-health
-hermes -p director cron remove fleet-daily-report   # delete one (fleet hermes-cron creates it again)
+hermes -p director cron remove fleet-report        # delete one (fleet hermes-cron creates it again)
 ```
 
-The two script jobs run small Python files that `fleet init` wrote into the director's
-`scripts/` folder: `fleet_health.py` and `fleet_pull.py`. They point at your copy of the
+The four script jobs run small Python files that `fleet init` wrote into the director's
+`scripts/` folder: `fleet_health.py`, `fleet_pull.py`, `fleet_report.py` and
+`fleet_plan.py`. They point at your copy of the
 repository and your inventory. To change a threshold of the health check, edit the
 argument list in `fleet_health.py`, for example
 `["health", "--changes-only", "--min-disk-pct", "10"]`. The options are
 `--min-disk-pct` (default 15), `--max-backlog` (default 25) and `--remind-hours`
 (default 6); see the [command reference](../reference/cli.md#fleet-health).
-`fleet init` writes both files again each time it runs, so repeat the edit after it.
+`fleet init` and `fleet hermes-cron` write these files again each time they run, so
+repeat the edit after them.

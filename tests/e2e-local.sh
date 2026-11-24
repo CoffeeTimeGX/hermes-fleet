@@ -63,7 +63,7 @@ start_worker() {
 
 echo "== inventory, code and credentials"
 check "list shows the inventory" bash -c "python3 '$REPO/home/bin/fleet' --config '$T/fleet.ini' list | grep -q vps3"
-[[ "$(F sync | grep -c 'synced worker 1.6.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
+[[ "$(F sync | grep -c 'synced worker 1.7.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
 for n in vps1 vps2 vps3; do printf 'ANTHROPIC_API_KEY=sk-test\n# CLAUDE_CODE_OAUTH_TOKEN=\n' >"$T/secrets/$n/claude.env"; done
 chmod 600 "$T"/secrets/*/claude.env
 chmod 644 "$T/secrets/vps1/claude.env"
@@ -280,6 +280,65 @@ echo '{"id":"lost2","state":"running","attempts":2}' >"$W1/work/lost2/status.jso
 FLEET_ROOT="$W1" FLEET_NODE=vps1 "$W1/app/worker/fleet-worker" recover
 wait_for 20 J '.[] | select(.id == "lost1") | .state == "done" and .attempts == 2' && pass "a lost job is requeued and finishes" || fail "lost1"
 check "a lost job without retries left is failed" J '.[] | select(.id == "lost2") | .state == "failed" and (.reason | test("no retries left"))'
+
+echo "== video check"
+if command -v ffmpeg >/dev/null 2>&1; then
+  good="$(F dispatch --prompt "VIDEO about Saturn" --channel "Space Facts" --to vps1 --json | jq -r '.[0].id')"
+  bad="$(F dispatch --prompt "VIDEOBAD about Mars" --channel "Space Facts" --to vps1 --json | jq -r '.[0].id')"
+  wait_for 60 J --arg a "$good" --arg b "$bad" '[.[] | select((.id == $a or .id == $b) and .state == "done")] | length == 2' \
+    || { F jobs; fail "video jobs did not finish"; }
+  check "a good video passes the check" J --arg id "$good" '.[] | select(.id == $id) | .check.ok == true'
+  check "a black, silent video without a thumbnail fails it" J --arg id "$bad" '.[] | select(.id == $id)
+    | .check.ok == false and any(.check.problems[]; test("silent")) and any(.check.problems[]; test("black"))
+    and any(.check.problems[]; test("thumbnail"))'
+  check "the verdict is kept with the job" jq -e '.ok == true and .facts.width == 360' "$T/nodes/vps1/work/$good/logs/check.json"
+  out="$(F pull vps1)"
+  grep -A3 "vps1/$bad" <<<"$out" | grep -q "CHECK: .*silent" && grep -A3 "vps1/$good" <<<"$out" | grep -q "video ok" \
+    && pass "pull says what the check found" || { echo "$out"; fail "pull check lines"; }
+  has "the video looks right" F check vps1 "$good" && pass "fleet check looks again" || fail "fleet check"
+  if F check vps1 "$bad" >/dev/null 2>&1; then fail "fleet check exits 0 for a bad video"; fi
+  pass "fleet check exits non-zero for a video with problems"
+  out="$(F report)"
+  grep -q "^Videos with problems:" <<<"$out" && grep -q "Again: fleet retry vps1 $bad" <<<"$out" \
+    && grep -q "^vps1 (any channel): .* made" <<<"$out" \
+    && pass "the daily report lists the videos with problems" || { echo "$out"; fail "report"; }
+  F report --json | jq -e --arg id "$good" '.nodes[] | select(.node == "vps1") | .made_ok >= 1' >/dev/null \
+    && pass "report --json counts the good videos" || fail "report --json"
+else
+  echo "SKIP the video check: ffmpeg is not installed"
+fi
+
+echo "== schedule (it trumps everything)"
+later="$(date -u -d '+2 hours' +%H:00)-$(date -u -d '+3 hours' +%H:00)"
+has "off duty until" F schedule set vps1 --hours "$later" --tz UTC && pass "a schedule outside now puts the VPS off duty" \
+  || fail "schedule set"
+sched_id="$(FC dispatch --prompt "after hours" --channel "Space Facts" --json 2>"$T/warn.txt" | jq -r '.[0].id')"
+check "dispatch says the job waits for the schedule" grep -q "held by its schedule (off duty until" "$T/warn.txt"
+sleep 3
+[[ "$(state_of "$sched_id")" == "inbox" ]] && pass "nothing starts outside the schedule" || fail "a job started off duty"
+has "its schedule still decides" F resume vps1 && [[ "$(state_of "$sched_id")" == "inbox" ]] \
+  && pass "fleet resume does not override the schedule" || fail "resume vs schedule"
+has "vps1 .*OFF DUTY until" F status vps1 && pass "fleet status shows the VPS off duty" || fail "status off duty"
+S '.nodes[] | select(.name == "vps1") | .status.schedule.open == false' >/dev/null \
+  && pass "the studio sees the schedule" || fail "studio schedule"
+check "the worker log says why it waits" grep -q "not starting new jobs: off duty until" "$W1/logs/worker.log"
+has "extra work time until" F schedule open vps1 --for 30m && pass "schedule open gives extra time" || fail "schedule open"
+wait_for 20 J --arg id "$sched_id" '.[] | select(.id == $id) | .state == "done"' \
+  && pass "the waiting job starts in the extra time" || fail "extra time"
+has "off duty until" F schedule close vps1 && pass "schedule close ends the extra time" || fail "schedule close"
+has "pause after a video until" F schedule set vps1 24/7 --gap 2h && pass "a pause after each video" || fail "gap"
+gap_id="$(FC dispatch --prompt "after the pause" --channel "Space Facts" --json 2>/dev/null | jq -r '.[0].id')"
+sleep 3
+[[ "$(state_of "$gap_id")" == "inbox" ]] && pass "the next job waits for the pause to end" || fail "gap ignored"
+has "works 24/7" F schedule set vps1 24/7 && check "24/7 removes the schedule" test ! -e "$W1/schedule.json"
+wait_for 20 J --arg id "$gap_id" '.[] | select(.id == $id) | .state == "done"' && pass "24/7 starts it" || fail "24/7"
+echo '{not json' >"$W1/schedule.json"
+has "vps1: its schedule could not be read" F health && pass "an unreadable schedule is a health problem" || fail "bad schedule"
+bad_id="$(FC dispatch --prompt "bad schedule" --channel "Space Facts" --json 2>/dev/null | jq -r '.[0].id')"
+sleep 3
+[[ "$(state_of "$bad_id")" == "inbox" ]] && pass "and starts nothing" || fail "an unreadable schedule started a job"
+F schedule set vps1 24/7 >/dev/null
+wait_for 20 J --arg id "$bad_id" '.[] | select(.id == $id) | .state == "done"' && pass "setting it again mends it" || fail "mend"
 
 echo "== health"
 F health --changes-only >"$T/h1.txt"

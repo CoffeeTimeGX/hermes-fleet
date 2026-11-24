@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+"""fleet-schedule: when this VPS may start new jobs. Standard library only.
+
+The owner sets the schedule from the home PC (`fleet schedule set`). It lives in
+$FLEET_ROOT/schedule.json and trumps everything else: no job starts outside it, whoever
+queued it (Hermes, the week plan, a retry or the owner). Jobs that are running always
+finish. With no schedule file the VPS works 24/7.
+
+  fleet-schedule gate ROOT    for the worker loop: one line "<until><TAB><reason>". The
+                              reason is empty when a job may start now. The answer holds
+                              until the epoch <until>, unless a job starts or ends first
+  fleet-schedule status ROOT  the schedule and what it means right now, as JSON (null: 24/7)
+  fleet-schedule text ROOT    the same in words
+  fleet-schedule set ROOT     merge the changes on stdin (a JSON object) into the schedule,
+                              check it and save it, then print the new status
+
+The schedule. Every part is optional, and times are local times in "tz":
+  tz          "Europe/Paris", "UTC" or a fixed offset like "+01:00"
+  hours       [["08:00", "12:00"], ["22:00", "07:00"]]: work windows. One may cross
+              midnight: it belongs to the day it starts on. Left out: all day
+  days        ["mon", "tue", ...]: the days that have work windows. Left out: every day
+  off         [["2026-12-24", "2026-12-26"]]: days off, as ranges that include both ends
+  cycle       [180, 60]: inside each window, work 180 minutes, rest 60, and so on
+  gap         45: rest 45 minutes after each job ends
+  random      [4, 30]: 4 start times a day, picked at random inside the work time and at
+              least 30 minutes apart. Each one lets one job start, and it stays good until
+              the next one comes
+  cap         3: start at most 3 jobs in one work day
+  open_until  an epoch (`fleet schedule open`): work now, whatever the rest says, until then
+
+The changes `set` takes: any of the parts above (null removes it), "reset": true (start
+again from 24/7), "open_for": minutes (sets open_until from now; 0 ends it) and
+"tz_default": the PC's own zone, used when the owner named none (it is then marked
+"tz_guess", and follows the PC's zone the next time the schedule changes).
+
+Besides schedule.json it reads .starts (one "epoch job-id" line per job start, which cap
+and random count) and .last-end (when the last job ended, for gap). The worker writes both.
+"""
+from __future__ import annotations
+
+import json
+import os
+import random
+import re
+import sys
+import time
+from datetime import date, datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python 3.8 and older
+    ZoneInfo = None
+
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+HHMM = re.compile(r"^([01]\d|2[0-4]):([0-5]\d)$")
+OFFSET = re.compile(r"^([+-])(\d{2}):(\d{2})$")
+DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+PARTS = ("tz", "hours", "days", "off", "cycle", "gap", "random", "cap", "open_until")
+HORIZON_DAYS = 60  # how far ahead the next start is looked for
+GATE_MAX = 300     # the worker never keeps an answer longer than this (seconds)
+KIND_WORDS = {"off": "off duty", "dayoff": "day off", "rest": "resting", "gap": "pause after a video",
+              "cap": "done for the day"}
+
+
+def zone(tz: str):
+    if tz in ("", "UTC", "Z"):
+        return timezone.utc
+    m = OFFSET.match(tz)
+    if m:
+        mins = int(m.group(2)) * 60 + int(m.group(3))
+        if mins > 14 * 60 or int(m.group(3)) >= 60:
+            raise ValueError(f"the time zone offset {tz} is out of range")
+        return timezone(timedelta(minutes=mins if m.group(1) == "+" else -mins))
+    if ZoneInfo is None:
+        raise ValueError(f"this VPS's Python cannot read time zone names like {tz}; use an offset like +01:00")
+    try:
+        return ZoneInfo(tz)
+    except Exception:  # ZoneInfoNotFoundError, or ValueError for a name like ../x
+        if os.name == "posix" and not any(os.path.isdir(d) for d in ("/usr/share/zoneinfo", "/usr/lib/zoneinfo")):
+            raise ValueError(f"this VPS has no time zone data for {tz}: run fleet bootstrap on it with "
+                             f"--skip-upgrade (it installs tzdata), or use an offset like +01:00") from None
+        raise ValueError(f"unknown time zone {tz!r} (use a name like Europe/Paris, UTC or an offset "
+                         f"like +01:00)") from None
+
+
+def minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def whole(v, name: str, low: int, high: int) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+        raise ValueError(f"{name} must be a whole number from {low} to {high}, not {v!r}")
+    return v
+
+
+def check(s: dict, now: float = None, today: date = None) -> dict:
+    """The schedule, checked and tidied. A ValueError says what is wrong with it."""
+    if not isinstance(s, dict):
+        raise ValueError("a schedule is a JSON object")
+    now = time.time() if now is None else now
+    tz = s.get("tz") or "UTC"
+    if not isinstance(tz, str) or len(tz) > 64:
+        raise ValueError("tz must be a time zone name")
+    z = zone(tz)
+    today = today or datetime.fromtimestamp(now, z).date()
+    out = {"version": 1, "tz": tz}
+    if s.get("tz_guess") is True:  # the PC's zone, not one the owner named: the next change may update it
+        out["tz_guess"] = True
+    if s.get("hours") is not None:
+        hours = s["hours"]
+        if not isinstance(hours, list) or not 1 <= len(hours) <= 12:
+            raise ValueError("hours must list 1 to 12 work windows")
+        spans = []
+        for w in hours:
+            if not (isinstance(w, list) and len(w) == 2 and all(isinstance(x, str) and HHMM.match(x) for x in w)):
+                raise ValueError(f'a work window is two times like ["08:00", "23:00"], not {w!r}')
+            a, b = minutes(w[0]), minutes(w[1])
+            if a >= 1440:
+                raise ValueError(f"a work window cannot start at {w[0]}")
+            if a == b % 1440:
+                raise ValueError(f"the work window {w[0]}-{w[1]} starts and ends at the same time "
+                                 f"(for all day, leave the hours out)")
+            spans.append((a, a + (b - a) % 1440, w))
+        spans.sort()
+        for i, (a, b, w) in enumerate(spans):
+            for a2, b2, w2 in spans[i + 1:]:
+                for shift in (-1440, 0, 1440):
+                    if a2 + shift < b and a < b2 + shift:
+                        raise ValueError(f"the work windows {w[0]}-{w[1]} and {w2[0]}-{w2[1]} overlap")
+        out["hours"] = [list(w) for _, _, w in spans]
+    if s.get("days") is not None:
+        days = s["days"]
+        if not isinstance(days, list) or not days or any(d not in WEEKDAYS for d in days):
+            raise ValueError(f"days must list days like mon, tue, ... sun, not {days!r}")
+        if set(days) != set(WEEKDAYS):
+            out["days"] = [d for d in WEEKDAYS if d in days]
+    if s.get("off"):
+        off = s["off"]
+        if not isinstance(off, list) or len(off) > 200:
+            raise ValueError("off must list at most 200 ranges of days")
+        ranges = []
+        for r in off:
+            if not (isinstance(r, list) and len(r) == 2 and all(isinstance(x, str) and DAY.match(x) for x in r)):
+                raise ValueError(f'a range of days off is two dates like ["2026-12-24", "2026-12-26"], not {r!r}')
+            try:
+                a, b = date.fromisoformat(r[0]), date.fromisoformat(r[1])
+            except ValueError:
+                raise ValueError(f"{r[0]} or {r[1]} is not a date") from None
+            if b < a:
+                raise ValueError(f"the days off {r[0]} to {r[1]} end before they start")
+            if b >= today:  # ranges that are over leave the list
+                ranges.append([a.isoformat(), b.isoformat()])
+        if ranges:
+            out["off"] = sorted(ranges)
+    if s.get("cycle") is not None:
+        c = s["cycle"]
+        if not isinstance(c, list) or len(c) != 2:
+            raise ValueError("cycle is [work minutes, rest minutes]")
+        out["cycle"] = [whole(c[0], "the work part of a cycle", 10, 1440), whole(c[1], "the rest part of a cycle", 5, 1440)]
+    if s.get("gap"):
+        out["gap"] = whole(s["gap"], "gap", 1, 1440)
+    if s.get("random") is not None:
+        r = s["random"]
+        if not isinstance(r, list) or len(r) != 2:
+            raise ValueError("random is [starts a day, minimum minutes between them]")
+        out["random"] = [whole(r[0], "random starts a day", 1, 48), whole(r[1], "the minimum gap between random starts", 0, 720)]
+    if s.get("cap"):
+        out["cap"] = whole(s["cap"], "cap", 1, 500)
+    if s.get("open_until") is not None:
+        u = whole(s["open_until"], "open_until", 0, 2 ** 40)
+        if u > now:
+            out["open_until"] = u
+    seed = s.get("seed")
+    if isinstance(seed, str) and re.match(r"^[0-9a-f]{4,32}$", seed):
+        out["seed"] = seed
+    if isinstance(s.get("set_at"), str):
+        out["set_at"] = s["set_at"][:32]
+    return out
+
+
+def is_always(s: dict) -> bool:
+    """True when the schedule asks for nothing: the VPS works 24/7."""
+    return not any(s.get(k) for k in PARTS if k != "tz")
+
+
+class Schedule:
+    def __init__(self, s: dict, node: str = ""):
+        self.s = s
+        self.zone = zone(s.get("tz") or "UTC")
+        self.node = node
+        self.wins = [(minutes(a), minutes(b)) for a, b in (s.get("hours") or [["00:00", "24:00"]])]
+        self.days = set(s.get("days") or WEEKDAYS)
+        self.off = [(date.fromisoformat(a), date.fromisoformat(b)) for a, b in (s.get("off") or [])]
+        self.cycle = s.get("cycle")
+        self.gap = (s.get("gap") or 0) * 60
+        self.cap = s.get("cap") or 0
+        self.random = s.get("random")
+        self._blocks, self._picks = {}, {}
+
+    # ------------------------------------------------------------ time
+    def at(self, d: date, mins: int) -> float:
+        """The epoch of the local time `mins` minutes after the start of day d (mins may pass 1440)."""
+        d2 = d + timedelta(days=mins // 1440)
+        m = mins % 1440
+        return datetime(d2.year, d2.month, d2.day, m // 60, m % 60, tzinfo=self.zone).timestamp()
+
+    def day_of(self, t: float) -> date:
+        return datetime.fromtimestamp(t, self.zone).date()
+
+    def clock(self, t: float, now: float) -> str:
+        """A time as the owner reads it: 08:00, tomorrow 08:00, Mon 08:00 or Mon 30 Nov 08:00."""
+        lt, today = datetime.fromtimestamp(t, self.zone), self.day_of(now)
+        days = (lt.date() - today).days
+        hm = lt.strftime("%H:%M")
+        if days == 0:
+            return hm
+        if days == 1:
+            return "tomorrow " + hm
+        if 1 < days < 7:
+            return f"{DAY_NAMES[lt.weekday()]} {hm}"
+        return f"{DAY_NAMES[lt.weekday()]} {lt.day} {lt.strftime('%b')} {hm}"
+
+    # ------------------------------------------------------------ work time
+    def day_off(self, d: date) -> bool:
+        return WEEKDAYS[d.weekday()] not in self.days or any(a <= d <= b for a, b in self.off)
+
+    def windows(self, d: date) -> list:
+        """The work windows that start on day d, as (start, end) epochs."""
+        if self.day_off(d):
+            return []
+        out = []
+        for a, b in self.wins:
+            s, e = self.at(d, a), self.at(d, b if b > a else b + 1440)
+            if e > s:  # a window inside a summer-time jump can be empty
+                out.append((s, e))
+        return out
+
+    def blocks(self, d: date) -> list:
+        """Day d's work time: its windows, cut into work blocks when there is a cycle."""
+        if d not in self._blocks:
+            out = []
+            for a, b in self.windows(d):
+                if not self.cycle:
+                    out.append((a, b))
+                    continue
+                t, work, step = a, self.cycle[0] * 60, (self.cycle[0] + self.cycle[1]) * 60
+                while t < b:
+                    out.append((t, min(t + work, b)))
+                    t += step
+            self._blocks[d] = out
+        return self._blocks[d]
+
+    def found(self, t: float, spans) -> tuple:
+        d = self.day_of(t)
+        for day in (d - timedelta(days=1), d):
+            for a, b in spans(day):
+                if a <= t < b:
+                    return a, b, day
+        return None
+
+    def picks(self, d: date) -> list:
+        """Day d's random start times (epochs). The same all day: they come from the
+        schedule's seed, the VPS's name and the date."""
+        if not self.random:
+            return []
+        if d not in self._picks:
+            n, gap = self.random
+            blocks = self.blocks(d)
+            total = int(sum(b - a for a, b in blocks) // 60)  # minutes of work time that day
+            out = []
+            if total > 0:
+                g = min(gap, total // n)
+                free = total - (n - 1) * g
+                rng = random.Random(f"{self.s.get('seed', '')}|{self.node}|{d.isoformat()}")
+                for i, o in enumerate(sorted(rng.randrange(free) for _ in range(n))):
+                    left = (o + i * g) * 60
+                    for a, b in blocks:
+                        if left < b - a:
+                            out.append(a + left)
+                            break
+                        left -= b - a
+                    else:
+                        out.append(blocks[-1][1] - 60)
+            self._picks[d] = out
+        return self._picks[d]
+
+    # ------------------------------------------------------------ the rules
+    def closed(self, t: float, starts: list, last_end: float):
+        """None when a job may start at t, else why not: off, dayoff, rest, gap, random or cap."""
+        blk = self.found(t, self.blocks)
+        if blk is None:
+            if self.found(t, self.windows):
+                return "rest"
+            return "dayoff" if self.day_off(self.day_of(t)) else "off"
+        _, _, day = blk
+        first = self.blocks(day)[0][0]
+        if self.cap and len({j for e, j in starts if first <= e <= t}) >= self.cap:
+            return "cap"
+        if self.gap and last_end and t < last_end + self.gap:
+            return "gap"
+        if self.random:
+            ps = [p for p in self.picks(day) if p <= t]
+            if not ps or any(ps[-1] <= e <= t for e, _ in starts):
+                return "random"
+        return None
+
+    def next_start(self, now: float, starts: list, last_end: float):
+        """The first time from now on when a job may start (if nothing starts or ends
+        before then), or None when there is none in the next HORIZON_DAYS days."""
+        if self.closed(now, starts, last_end) is None:
+            return now
+        d0, cands = self.day_of(now), set()
+        if self.gap and last_end:
+            cands.add(last_end + self.gap)
+        for k in range(-1, HORIZON_DAYS + 1):
+            d = d0 + timedelta(days=k)
+            cands.update(a for a, _ in self.blocks(d))
+            cands.update(self.picks(d))
+        for c in sorted(x for x in cands if x > now):
+            if self.closed(c, starts, last_end) is None:
+                return c
+        return None
+
+    def state(self, now: float, starts: list, last_end: float) -> dict:
+        extra = self.s.get("open_until") or 0
+        if extra > now:
+            return {"open": True, "kind": "extra", "reason": "", "until": extra,
+                    "note": f"extra work time until {self.clock(extra, now)}"}
+        kind = self.closed(now, starts, last_end)
+        if kind is None:
+            end = self.found(now, self.blocks)[1]
+            around = self.s.get("hours") is None and not self.cycle  # the work time goes on past midnight
+            return {"open": True, "kind": "open", "reason": "", "until": end,
+                    "note": "working" if around else f"working until {self.clock(end, now)}"}
+        nxt = self.next_start(now, starts, last_end)
+        when = self.clock(nxt, now) if nxt else None
+        if kind == "random":
+            why = f"next random start at {when}" if when else "no random start time ahead"
+        else:
+            words = KIND_WORDS[kind] + (f" ({self.cap} {'video' if self.cap == 1 else 'videos'})"
+                                        if kind == "cap" else "")
+            why = f"{words} until {when}" if when else f"{words}, no work time in the next {HORIZON_DAYS} days"
+        return {"open": False, "kind": kind, "reason": why, "until": nxt, "note": why}
+
+    def workday(self, now: float, starts: list, last_end: float) -> dict:
+        """The work day now, or the next one: its work time, random starts and jobs started."""
+        blk = self.found(now, self.blocks)
+        if not blk:
+            nxt = self.next_start(now, starts, last_end)
+            blk = self.found(nxt, self.blocks) if nxt else None
+        day = blk[2] if blk else self.day_of(now)
+        blocks, ps = self.blocks(day), self.picks(day)
+        first = blocks[0][0] if blocks else float("inf")
+
+        def hm(t, end=False):
+            lt = datetime.fromtimestamp(t, self.zone)
+            return "24:00" if end and lt.hour == lt.minute == 0 else lt.strftime("%H:%M")
+
+        picks = []
+        for k, p in enumerate(ps):
+            later = ps[k + 1] if k + 1 < len(ps) else float("inf")
+            used = any(p <= e < later for e, _ in starts)
+            state = "used" if used else "ahead" if p > now else "now" if later > now else "missed"
+            picks.append({"at": hm(p), "epoch": int(p), "state": state})
+        return {"day": day.isoformat(), "weekday": DAY_NAMES[day.weekday()], "today": day == self.day_of(now),
+                "work": [f"{hm(a)}-{hm(b, True)}" for a, b in blocks], "picks": picks,
+                "started": len({j for e, j in starts if e >= first})}
+
+
+# ------------------------------------------------------------ words
+def span_words(m: int) -> str:
+    h, mm = divmod(int(m), 60)
+    if not h:
+        return f"{mm} min"
+    return f"{h}h{mm:02d}" if mm else f"{h}h"
+
+
+def and_list(items: list) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def days_words(days) -> str:
+    idx = [WEEKDAYS.index(d) for d in days]
+    if idx == [0, 1, 2, 3, 4]:
+        return "on weekdays"
+    if idx == [5, 6]:
+        return "on weekends"
+    if len(idx) > 2 and idx == list(range(idx[0], idx[-1] + 1)):
+        return f"from {DAY_NAMES[idx[0]]} to {DAY_NAMES[idx[-1]]}"
+    return "on " + and_list([DAY_NAMES[i] for i in idx])
+
+
+def date_words(iso: str) -> str:
+    d = date.fromisoformat(iso)
+    return f"{d.day} {d.strftime('%b')}"
+
+
+def zone_words(tz: str) -> str:
+    return "UTC" + tz if OFFSET.match(tz or "") else tz or "UTC"
+
+
+def summary(s: dict) -> str:
+    if is_always(s):
+        return "works 24/7"
+    head = "works " + (and_list([f"{a}-{b}" for a, b in s["hours"]]) if s.get("hours") else "around the clock")
+    if s.get("days"):
+        head += " " + days_words(s["days"])
+    parts = [head]
+    if s.get("cycle"):
+        parts.append(f"in blocks of {span_words(s['cycle'][0])} with {span_words(s['cycle'][1])} of rest between them")
+    if s.get("gap"):
+        parts.append(f"a {span_words(s['gap'])} pause after each video")
+    if s.get("random"):
+        n, g = s["random"]
+        parts.append(f"{n} random start {'time' if n == 1 else 'times'} a day" + (f", at least {span_words(g)} apart" if g else ""))
+    if s.get("cap"):
+        parts.append(f"at most {s['cap']} {'video' if s['cap'] == 1 else 'videos'} a day")
+    if s.get("off"):
+        rs = [date_words(a) if a == b else f"{date_words(a)} to {date_words(b)}" for a, b in s["off"]]
+        parts.append("days off: " + and_list(rs[:4] + ([f"{len(rs) - 4} more"] if len(rs) > 4 else [])))
+    return "; ".join(parts)
+
+
+# ------------------------------------------------------------ files
+def load(root: str):
+    """The saved schedule, or None when there is none (24/7)."""
+    p = os.path.join(root, "schedule.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return None
+    s = json.loads(raw)
+    if not isinstance(s, dict):
+        raise ValueError("schedule.json is not a JSON object")
+    return s
+
+
+def history(root: str, since: float) -> tuple:
+    """(job starts since then as (epoch, id), the epoch the last job ended or 0)."""
+    starts = []
+    try:
+        with open(os.path.join(root, ".starts"), encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if p and p[0].isdigit() and int(p[0]) >= since:
+                    starts.append((int(p[0]), p[1] if len(p) > 1 else "?"))
+    except OSError:
+        pass
+    last_end = 0
+    try:
+        with open(os.path.join(root, ".last-end"), encoding="utf-8") as f:
+            v = f.read().strip()
+            last_end = int(v) if v.isdigit() else 0
+    except OSError:
+        pass
+    return starts, last_end
+
+
+def node_name() -> str:
+    if os.environ.get("FLEET_NODE"):
+        return os.environ["FLEET_NODE"]
+    try:
+        return os.uname().nodename.split(".")[0]
+    except AttributeError:  # Windows, where only the tests run this
+        return ""
+
+
+def status(root: str, now: float = None, node: str = None):
+    """What `status` prints: None for 24/7."""
+    now = time.time() if now is None else now
+    try:
+        s = load(root)
+        if s is None:
+            return None
+        s = check(s, now)
+    except (ValueError, OSError) as e:
+        why = f"the schedule could not be read: {e}"
+        return {"error": str(e), "open": False, "kind": "error", "reason": why, "until": None, "note": why,
+                "summary": "unreadable", "tz": None, "config": None}
+    sch = Schedule(s, node if node is not None else node_name())
+    starts, last_end = history(root, now - 3 * 86400)
+    st = sch.state(now, starts, last_end)
+    out = {"error": None, "summary": summary(s), "tz": s["tz"], "config": s}
+    out.update(st)
+    out["until"] = int(st["until"]) if st.get("until") else None
+    out["until_local"] = sch.clock(st["until"], now) if st.get("until") else None
+    out["workday"] = sch.workday(now, starts, last_end)
+    return out
+
+
+def gate(root: str, now: float = None) -> str:
+    """The worker's one line: "<until>\\t<reason>"."""
+    now = time.time() if now is None else now
+    try:
+        st = status(root, now)
+    except Exception as e:  # never let an odd file start jobs the owner did not want
+        st = {"open": False, "until": None, "reason": f"the schedule could not be read: {e}"}
+    if st is None:
+        return f"{int(now) + GATE_MAX}\t"
+    until = st.get("until") or now + (60 if st.get("kind") == "error" or "until" not in st else GATE_MAX)
+    until = int(min(max(until, now + 1), now + GATE_MAX))
+    return f"{until}\t{'' if st['open'] else st['reason']}"
+
+
+def text(st) -> str:
+    if st is None:
+        return "works 24/7 (no schedule set)"
+    if st.get("error"):
+        return st["reason"]
+    w = st["workday"]
+    lines = [f"{st['summary']} (times in {zone_words(st['tz'])})", f"now: {st['note']}"]
+    if w["work"]:
+        line = f"{'today' if w['today'] else w['weekday']}: work time {', '.join(w['work'])}"
+        if w["picks"]:
+            line += "; random starts " + ", ".join(p["at"] + ("" if p["state"] == "ahead" else f" ({p['state']})")
+                                                   for p in w["picks"])
+        lines.append(line + f"; {w['started']} started")
+    return "\n".join(lines)
+
+
+def save(root: str, changes: dict, now: float = None):
+    now = time.time() if now is None else now
+    if not isinstance(changes, dict):
+        raise ValueError("the changes are a JSON object")
+    try:
+        old = load(root) or {}
+    except ValueError:
+        old = {}  # an unreadable file is replaced
+    base = {} if changes.get("reset") else dict(old)
+    for k in PARTS:
+        if k in changes and k != "tz":
+            if changes[k] is None:
+                base.pop(k, None)
+            else:
+                base[k] = changes[k]
+    if changes.get("tz"):
+        base["tz"] = changes["tz"]
+        base.pop("tz_guess", None)
+    elif changes.get("tz_default") and (not base.get("tz") or base.get("tz_guess")):
+        base["tz"], base["tz_guess"] = changes["tz_default"], True
+    elif not base.get("tz"):
+        base["tz"] = "UTC"
+    if "open_for" in changes:
+        m = whole(changes["open_for"], "open_for", 0, 7 * 1440)
+        base["open_until"] = int(now + m * 60) if m else None
+    base["set_at"] = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    s = check(base, now)
+    if "seed" not in s:  # keeps the random start times the same all day
+        s["seed"] = os.urandom(4).hex()
+    p = os.path.join(root, "schedule.json")
+    if is_always(s):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+        return None
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(s, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, p)
+    return s
+
+
+def main(argv: list) -> int:
+    if len(argv) < 2 or argv[0] not in ("gate", "status", "text", "set"):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    cmd, root = argv[0], argv[1]
+    if cmd == "gate":
+        print(gate(root))
+        return 0
+    if cmd == "set":
+        try:
+            save(root, json.loads(sys.stdin.read() or "{}"))
+        except ValueError as e:
+            print(f"fleet-schedule: {e}", file=sys.stderr)
+            return 1
+    st = status(root)
+    print(text(st) if cmd == "text" else json.dumps(st))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

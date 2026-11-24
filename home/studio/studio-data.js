@@ -68,6 +68,16 @@
   const claudeOf = (st) => ((st && st.providers) || []).find((p) => p.provider === "claude") || ((st && st.providers) || [])[0] || null;
   const limitOf = (st) => (st && st.limit && Number(st.limit.until) * 1000 > now() ? st.limit : null);
   const finishedSince = (n, cutoff) => jobsOf(n).filter((j) => (when(j.finished_at) || 0) >= cutoff);
+  // The VPS's schedule (`fleet schedule`): null when it works 24/7.
+  const scheduleOf = (st) => (st && st.schedule && typeof st.schedule === "object" ? st.schedule : null);
+  // Why the schedule starts no job now, in this device's time: "back at 08:00", "next random start at 15:05".
+  function offNote(sch) {
+    const at = sch.until ? clock(Number(sch.until)) : null;
+    if (sch.kind === "random") return at ? "next random start at " + at : "no random start time ahead";
+    if (!at) return sch.reason || "off duty";
+    const why = { dayoff: "day off", rest: "resting", gap: "a pause after the last video", cap: "done for the day" }[sch.kind];
+    return (why ? why + ", " : "") + "back at " + at;
+  }
 
   // What a stage is doing, in the words on its door.
   function stageState(n) {
@@ -79,6 +89,7 @@
     const lim = limitOf(st);
     const prov = claudeOf(st);
     const service = st.service || "unknown";
+    const sch = scheduleOf(st);
     if (service !== "active" && service !== "unknown") return { state: "trouble", sign: "Needs a look", note: "its worker is " + service };
     if (Number(st.heartbeat_age_s) > 180 || Number(st.heartbeat_age_s) < 0) return { state: "trouble", sign: "Needs a look", note: "its worker stopped looking at the queue" };
     if (running > 0) return { state: "rolling", sign: "Rolling", note: running > 1 ? "making " + running + " videos" : "making a video" };
@@ -86,7 +97,11 @@
     if (lim) return { state: "hold", sign: "On hold", note: "until " + clock(Number(lim.until)) };
     if (st.low_disk) return { state: "trouble", sign: "Needs a look", note: "low on disk, new jobs wait" };
     if (prov && !prov.ok) return { state: "trouble", sign: "Needs a look", note: "Claude is not ready" + (prov.error ? ": " + prov.error : "") };
-    return { state: "standby", sign: "Standing by", note: "ready for the next job" };
+    if (sch && sch.error) return { state: "trouble", sign: "Needs a look", note: "its schedule could not be read" };
+    if (sch && sch.open === false) return { state: "off", sign: "Off duty", note: offNote(sch) };
+    const more = !sch || !sch.until ? "" : sch.kind === "extra" ? ", extra time until " + clock(Number(sch.until))
+      : sch.note && sch.note !== "working" ? ", on duty until " + clock(Number(sch.until)) : "";
+    return { state: "standby", sign: "Standing by", note: "ready for the next job" + more };
   }
 
   // ---------------------------------------------------------------- the past
@@ -310,11 +325,11 @@
     const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token", credential_age_days: 23 }];
     const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
       disk_free_gb: 71.3, disk_free_pct: 74, min_free_gb: 5, load1: 0.4, cpus: 2, mem_available_mb: 6100, mem_total_mb: 7900,
-      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.6.0",
+      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.7.0",
       providers: claude, queue: {} }, o);
     const SF = "Space Facts", HI = "History", CO = "Cooking", NA = "Nature";
     const snap = {
-      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.6.0",
+      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.7.0",
       nodes: [
         { name: "vps1", channels: [SF], sessions: 1, reachable: true, status: status({ load1: 1.9 }),
           jobs: [
@@ -342,7 +357,9 @@
             past(CO, "Knife skills for beginners", 480, 300, { state: "failed", exit_code: 124, reason: "timed out after 180m" }),
             past(CO, "Crispy roast potatoes", 900, 845), past(CO, "Tomato sauce from scratch", 1150, 1090), past(CO, "Fluffy pancakes", 1400, 1340),
           ] },
-        { name: "vps4", channels: [NA], sessions: 1, reachable: true, status: status({ disk_free_gb: 74.9, disk_free_pct: 78, load1: 0.1, reboot_required: true }),
+        { name: "vps4", channels: [NA], sessions: 1, reachable: true, status: status({ disk_free_gb: 74.9, disk_free_pct: 78, load1: 0.1, reboot_required: true,
+            schedule: { open: false, kind: "gap", reason: "pause after a video", until: (t + 35 * min) / 1000, tz: "UTC",
+              summary: "works around the clock; a 1h pause after each video" } }),
           jobs: [
             past(NA, "How octopuses change colour", 120, 25, { pulled: false }), past(NA, "How whales sleep", 610, 560),
             past(NA, "The secret life of bees", 1000, 950), past(NA, "Why leaves change colour", 1260, 1205),
@@ -379,7 +396,12 @@
   let turn = 0;
   function move(snap) {  // one stage moves on: its take ends, its next script starts or one comes in
     const t = Date.now(), iso = (x) => new Date(x).toISOString();
-    const open = snap.nodes.filter((n) => n.reachable && !(n.status.limit && Number(n.status.limit.until) * 1000 > t));
+    for (const n of snap.nodes) {  // an example pause that is over ends
+      const s = n.status && n.status.schedule;
+      if (s && s.until && Number(s.until) * 1000 <= t) n.status.schedule = null;
+    }
+    const open = snap.nodes.filter((n) => n.reachable && !(n.status.limit && Number(n.status.limit.until) * 1000 > t)
+      && !(n.status.schedule && n.status.schedule.open === false));
     if (!open.length) return;
     const n = open[turn++ % open.length], ch = n.channels[0], list = TITLES[ch] || [ch + " #" + (turn + 1)];
     const fresh = () => exampleJob(ch, { state: "inbox", title: list[(made + turn) % list.length], submitted_at: iso(t - 60000) });
@@ -425,5 +447,5 @@
   }
 
   window.FleetStudio = { LIVE, POLL_MS, DAY_MS, now, setNow, when, ago, span, timecode, clock, localTimes, hueOf, stageNo, plural,
-    VERBS, activityText, jobsOf, claudeOf, limitOf, finishedSince, stageState, at, spans, strip, play, exampleLot, watch };
+    VERBS, activityText, jobsOf, claudeOf, limitOf, scheduleOf, offNote, finishedSince, stageState, at, spans, strip, play, exampleLot, watch };
 })();

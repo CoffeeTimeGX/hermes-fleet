@@ -100,6 +100,25 @@ Everything the bootstrap installs: ffmpeg, ImageMagick, Python with pip and venv
 fonts and build tools. A session can add more for itself as the `fleet` user, such as
 Python packages in a virtual environment, but not system packages.
 
+**Does Hermes pick my topics?**
+It suggests them. Every Sunday it sends you next week's topics, and only the ones you
+approve are made. See [Week plan](operations/week-plan.md).
+
+**How do I know a video came out right?**
+Each VPS checks every video it makes: the length, the picture, the sound, the thumbnail
+and the title. The pull message and the daily report say what is wrong. See
+[Video check](operations/video-check.md).
+
+**Can the fleet post my videos?**
+Yes, with `fleet publish`: to YouTube as a private video, to your TikTok inbox, or to
+Instagram as a Reel. Only Instagram makes it public at once, because its API has no
+drafts. See [Publishing](operations/publishing.md).
+
+**Can a VPS work only at certain hours?**
+Yes. Each VPS can have its own hours, pauses between videos, random start times, days
+off and a daily cap. Without a schedule it works 24/7. See
+[Work schedule](operations/schedule.md).
+
 ## Other tools
 
 **Can I use another AI tool than Claude Code?**

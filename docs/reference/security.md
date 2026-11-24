@@ -26,6 +26,7 @@ says what protects what, and where the limits are.
 | Hostinger API tokens (optional) | The director's `.env` | Everything in that Hostinger account |
 | Tailscale auth key | Your PC (`~/.config/fleet/secrets/tailscale.env`) | Adding machines to your tailnet as `tag:fleet` |
 | The fleet SSH key | Your PC (`~/.ssh/fleet_ed25519`) | The `fleet` and `root` users on every VPS |
+| Publishing apps and sign-ins (optional) | Your PC only (`~/.config/fleet/secrets/publish/`) | Uploading to your channels' YouTube, TikTok and Instagram accounts |
 
 None of them is in the repository, and none passes through a chat: you type them into
 these files yourself, and Hermes is told never to print them or ask for them. How to
@@ -111,6 +112,14 @@ plus each running session's latest step, and has nothing that changes the fleet.
 screening room serves the videos and pictures that finished jobs left in your results
 folder, and nothing else from your disk: no listings, no other file types, nothing
 outside a job's `output` folder.
+
+**Publishing** sends videos from your PC to YouTube, TikTok and Instagram with their
+official APIs, through apps of your own. The sign-ins never leave your PC. YouTube
+uploads are private and TikTok uploads wait in your inbox; only an Instagram post is
+public at once, and the command needs `--now` for it. Instagram fetches the video from
+a public link, so for those few minutes the fleet shares that one file with Tailscale
+Funnel, on a random secret path, and switches it off again. Nothing else on your PC is
+shared. See [Publishing](../operations/publishing.md).
 
 Hermes runs commands in your user account. Its guardrails are its instructions
 (`SOUL.md` and the skills), the approvals it asks for before risky steps, and a deny list

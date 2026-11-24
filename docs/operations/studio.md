@@ -65,6 +65,7 @@ looked at the VPSs.
 | Red | **Rolling** | A Claude session is making a video. |
 | Green | **Standing by** | Ready. The next job for its channel starts at once. |
 | Amber | **On hold** | Its Claude account reached a usage limit. The queue continues by itself after the reset, at the time shown. See [Usage limits](usage-limits.md). |
+| Blue ring | **Off duty** | Outside its [work schedule](schedule.md). The stage says when it starts again. Running jobs finish first. |
 | Off | **Dark** | The VPS is paused. `fleet resume` starts it again. |
 | Off | **No contact** | Your PC cannot reach the VPS. See [VPS unreachable](../runbooks/vps-unreachable.md). |
 | Yellow and black tape | **Needs a look** | Something needs a fix: the worker stopped, Claude is not ready, or the disk is low. The stage says what. Ask the director, or run `fleet health`. |
@@ -134,11 +135,12 @@ On each stage:
 | The air handler on the roof | How hard the VPS works. The busier it is, the more steam. | Load, memory and disk |
 | The stage manager, with a headset | The worker on the VPS that starts each job. | The worker, its heartbeat and the queue, `fleet status vps1` |
 | The crew on set | A running job, one person each. Their trade follows the session's latest step (see the next table). | The job, its take, its latest step, `fleet logs vps1 <job-id> -f` |
-| Claude, the star | Claude Code on the VPS, signed in with that VPS's own account. On set while a job rolls, in the chair when ready, in the trailer (sign on the door) during a usage limit or a pause. | Version, how it signed in, whether it is ready, the usage limit |
+| Claude, the star | Claude Code on the VPS, signed in with that VPS's own account. On set while a job rolls, in the chair when ready, in the trailer (sign on the door) during a usage limit, a pause or off duty. | Version, how it signed in, whether it is ready, the usage limit |
 | Production assistants in line outside | The jobs in the queue, one each. After five, a bubble shows how many more. | The job, its place in line, why it waits, `fleet jobs vps1 --state inbox` |
 | A cart driver | A job you asked to move to another VPS. The cart drives it over. | From where to where, `fleet jobs vps1 --state outgoing` |
 | The gaffer and the grip, asleep, and the reset clock | A usage limit. The clock shows when it resets. | The limit, since when, and when it resets |
 | The night janitor | A paused VPS. | Why it was paused, `fleet resume vps1` |
+| The night watchman, on a chair by the door, and the back-at sign | A VPS outside its work schedule. The sign shows when the stage opens again. | Why it is off duty, until when, `fleet schedule show vps1` |
 | The electrician, in a hard hat | Something that needs a fix: the worker, Claude not ready, low disk, a reboot for updates, or a stuck handover. | The problem, and `fleet health` or `fleet reboot vps1` |
 | The search party, with a flashlight | A VPS your PC cannot reach. | The error, `fleet ping vps1` |
 | Film cans in front of the stage | Finished videos on the VPS that are not on your PC yet. | How many, `fleet pull vps1` |

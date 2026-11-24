@@ -17,22 +17,33 @@
 #   jobs/moved/*.json    handed over after it had started here: the workspace
 #                        keeps what it made, for the home machine to pull
 #   work/<id>/           workspace: job.json, output/, logs/, result.json, status.json
+#                        (logs/check.json: what fleet-check found in the video)
 #   logs/worker.log      worker log (rotated weekly by logrotate)
 #   .paused              set by `pause`: start no new jobs until `resume`
 #   .limit               the account hit a usage limit: start no new jobs until
 #                        the time in it (an adapter exits 75 and writes
 #                        work/<id>/logs/limit.json; the job goes back in the queue)
+#   schedule.json        when this VPS may start jobs (`fleet schedule set` on the home
+#                        machine; app/worker/fleet-schedule reads it). It trumps
+#                        everything: no job starts outside it. None: 24/7
+#   .starts, .last-end   when jobs started and when the last one ended, for the schedule
 #
 # Commands:
 #   loop                 run forever (what systemd starts)
 #   status [--json]      node summary
 #   jobs [--json] [--state inbox|outgoing|running|done|failed|moved]
 #   logs <id> [-f] [-n LINES]
+#   check <id>           look at a finished job's video again (fleet-check) and print
+#                        the verdict; the worker checks every job that ends well
 #   cancel <id>          cancel a queued or running job
 #   finished [--json]    finished jobs the home machine has not pulled yet
 #   mark-pulled <id>     mark a finished job as pulled
 #   pause [reason]       start no new jobs (running jobs finish normally)
-#   resume               start queued jobs again (also ends a usage-limit hold early)
+#   resume               start queued jobs again (also ends a usage-limit hold early;
+#                        the schedule still decides when they start)
+#   schedule [show [--json]]  this VPS's schedule and what it means now
+#   schedule set         change the schedule: a JSON object of changes on stdin
+#                        (see app/worker/fleet-schedule)
 #   gc [--days N]        delete pulled workspaces older than N days (default 7)
 #   recover              requeue or fail jobs whose process is gone
 #   release <id> <node>  take a queued job out of the queue to hand it over to
@@ -43,7 +54,7 @@
 #   version
 set -euo pipefail
 
-WORKER_VERSION="1.6.0"
+WORKER_VERSION="1.7.0"
 
 for _env in /etc/fleet/worker.env /etc/fleet/worker.local.env; do
   if [[ -r "$_env" && -z "${FLEET_IGNORE_ENV_FILES:-}" ]]; then
@@ -74,6 +85,10 @@ PAUSE_FILE="$FLEET_ROOT/.paused"
 HEARTBEAT="$FLEET_ROOT/.heartbeat"
 HOLD_FILE="$FLEET_ROOT/.hold"         # why the loop is not starting jobs, if it is not
 LIMIT_FILE="$FLEET_ROOT/.limit"       # usage-limit hold: {provider, kind, message, since, until, until_iso, job}
+SCHEDULE_FILE="$FLEET_ROOT/schedule.json"
+SCHEDULE_CACHE="$FLEET_ROOT/.schedule-gate"  # "<until>\t<reason>": the last answer, good until <until>
+STARTS_FILE="$FLEET_ROOT/.starts"            # "<epoch> <id>" for each job start
+LAST_END_FILE="$FLEET_ROOT/.last-end"        # the epoch the last running job ended
 ID_PATTERN='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
 NAME_PATTERN='^[a-z0-9][a-z0-9-]{0,62}$'
 [[ "$MAX_PARALLEL" -ge 1 ]] || MAX_PARALLEL=1
@@ -155,9 +170,32 @@ finish_job() {
      | .log_tail=(if $lt == "" then null else $lt end)'
   if [[ -f "$JOBS/running/$id.json" ]]; then
     mv -f "$JOBS/running/$id.json" "$JOBS/$state/$id.json" 2>/dev/null || true
+    date +%s >"$LAST_END_FILE"   # a schedule's pause after each video counts from here
+    rm -f "$SCHEDULE_CACHE"
   fi
   rm -f "$wd/pid"
   log "job $id -> $state (exit $code${reason:+, $reason})"
+}
+
+# check_job <id>: look at the video a job made (app/worker/fleet-check) and keep the
+# verdict in logs/check.json and, shortened, in status.json. It never fails the job:
+# problems go in the reports, and the owner decides (fleet retry).
+check_job() {
+  local id="$1" wd="$WORK/$1" out="" why="the check could not run (see logs/check.log)"
+  mkdir -p "$wd/logs"
+  if ! command -v python3 >/dev/null 2>&1; then
+    why="python3 is not installed on $FLEET_NODE"
+  elif [[ -f "$APP_DIR/worker/fleet-check" ]]; then
+    out="$(timeout 900 nice -n 10 python3 "$APP_DIR/worker/fleet-check" "$wd" 2>>"$wd/logs/check.log" | tail -n 1 || true)"
+  fi
+  if ! jq -e 'type == "object" and has("ok")' <<<"$out" >/dev/null 2>&1; then
+    out="$(jq -nc --arg w "$why" --arg t "$(now)" '{ok:null, problems:[], skipped:$w, checked_at:$t}')"
+  fi
+  printf '%s\n' "$out" >"$wd/logs/check.json"
+  json_merge "$wd/status.json" --argjson c "$out" \
+    '.check = {ok:$c.ok, problems:(($c.problems // [])[:8] | map(tostring | .[0:200])),
+               skipped:($c.skipped // null), video:($c.video // null), checked_at:($c.checked_at // null)}'
+  log "job $id checked: $(jq -r 'if .ok == true then "video ok" elif .ok == false then "\(.problems | length) problem(s)" else "skipped (\(.skipped // "?"))" end' <<<"$out")"
 }
 
 # safe_rel_path <path>: a relative path that stays inside the workspace.
@@ -250,13 +288,39 @@ limit_reason() {
   rm -f "$LIMIT_FILE"
 }
 
+# schedule_reason: why the schedule lets no job start now (off duty until 08:00, ...);
+# prints nothing when it lets one start, or when there is no schedule (24/7). The answer
+# is kept in $SCHEDULE_CACHE until it can change; a job starting or ending clears it.
+# When the schedule cannot be read, no job starts: the owner asked for a schedule.
+schedule_reason() {
+  [[ -e "$SCHEDULE_FILE" ]] || return 0
+  local nowe until="" reason="" line re=$'^[0-9]+\t'
+  nowe="$(date +%s)"
+  if [[ -s "$SCHEDULE_CACHE" ]] && [[ "$SCHEDULE_CACHE" -nt "$SCHEDULE_FILE" ]]; then
+    IFS=$'\t' read -r until reason <"$SCHEDULE_CACHE" || true
+    if [[ "$until" =~ ^[0-9]+$ ]] && (( nowe < until )); then
+      [[ -z "$reason" ]] || printf '%s\n' "$reason"
+      return 0
+    fi
+  fi
+  line="$(timeout 60 python3 "$APP_DIR/worker/fleet-schedule" gate "$FLEET_ROOT" 2>>"$LOGDIR/schedule.log" | tail -n 1 || true)"
+  if [[ ! "$line" =~ $re ]]; then
+    line="$((nowe + 60))"$'\t'"the schedule could not be read (see logs/schedule.log)"
+  fi
+  printf '%s\n' "$line" >"$SCHEDULE_CACHE.tmp.$$" && mv -f "$SCHEDULE_CACHE.tmp.$$" "$SCHEDULE_CACHE"
+  reason="${line#*$'\t'}"
+  [[ -z "$reason" ]] || printf '%s\n' "$reason"
+}
+
 # hold_reason: why no new job may start right now; prints nothing when one may.
 hold_reason() {
-  local free
+  local free lim=""
   if [[ -f "$PAUSE_FILE" ]]; then echo "paused"; return 0; fi
   free="$(int_or "$(free_gb_int)" 999999)"
   if (( free < MIN_FREE_GB )); then echo "low disk (under ${MIN_FREE_GB} GB free)"; return 0; fi
-  if [[ -e "$LIMIT_FILE" ]]; then limit_reason; fi
+  if [[ -e "$LIMIT_FILE" ]]; then lim="$(limit_reason)"; fi
+  if [[ -n "$lim" ]]; then printf '%s\n' "$lim"; return 0; fi
+  schedule_reason
 }
 
 # Internal: runs in its own session (setsid) for one job.
@@ -316,7 +380,8 @@ cmd__run() {
   if [[ -f "$wd/.cancelled" ]]; then
     finish_job "$id" failed "$code" "cancelled"
   elif [[ "$code" -eq 0 ]]; then
-    finish_job "$id" "done" 0 ""
+    check_job "$id" || true   # before the job counts as done, so a pull brings the verdict home
+    if [[ -f "$wd/.cancelled" ]]; then finish_job "$id" failed 130 "cancelled"; else finish_job "$id" "done" 0 ""; fi
   elif [[ "$code" -eq 124 ]] || { [[ "$code" -eq 137 ]] && (( elapsed >= timeout_min * 60 )); }; then
     finish_job "$id" failed "$code" "timed out after ${timeout_min}m"
   elif [[ "$code" -eq 137 ]]; then
@@ -344,6 +409,11 @@ claim_next() {
       mkdir -p "$WORK/$id"
       mv -f "$f" "$JOBS/running/$id.json" || { flock -u 9; return 0; }
       touch "$JOBS/running/$id.json"   # mtime = claim time (see starting_up)
+      printf '%s %s\n' "$(date +%s)" "$id" >>"$STARTS_FILE"   # the schedule counts starts
+      if (( $(wc -l <"$STARTS_FILE") > 1000 )); then
+        tail -n 500 "$STARTS_FILE" >"$STARTS_FILE.tmp.$$" && mv -f "$STARTS_FILE.tmp.$$" "$STARTS_FILE"
+      fi
+      rm -f "$SCHEDULE_CACHE"
       rm -f "$WORK/$id/pid"            # a stale pid from an earlier attempt
       if [[ ! -f "$WORK/$id/status.json" ]]; then
         json_write "$WORK/$id/status.json" --arg id "$id" --arg n "$FLEET_NODE" --arg t "$(now)" \
@@ -390,7 +460,7 @@ cmd_recover() {
 cmd_loop() {
   ensure_dirs
   log "worker $WORKER_VERSION starting (max_parallel=$MAX_PARALLEL, app=$APP_DIR)"
-  rm -f "$HOLD_FILE"
+  rm -f "$HOLD_FILE" "$SCHEDULE_CACHE"
   cmd_recover
   local id ticks=0 blocked="" reason
   trap 'log "worker stopping"; exit 0' TERM INT
@@ -433,7 +503,7 @@ job_json_line() {
        submitted_at:(.submitted_at // null), started_at:$s.started_at, finished_at:$s.finished_at,
        duration_s:$s.duration_s, exit_code:$s.exit_code, log_tail:$s.log_tail,
        reason:(if $st == "outgoing" then "being handed over to \(.handover.to // "another VPS")" else $s.reason end),
-       attempts:$s.attempts, limit_waits:$s.limit_waits, pulled:$pulled}' "$f" 2>/dev/null \
+       attempts:$s.attempts, limit_waits:$s.limit_waits, check:($s.check // null), pulled:$pulled}' "$f" 2>/dev/null \
      || jq -nc --arg st "$state" --arg id "$id" '{id:$id, state:$st, invalid:true}'
 }
 
@@ -517,6 +587,12 @@ cmd_status() {
   if [[ -f "$PAUSE_FILE" ]]; then paused=true; preason="$(head -c 200 "$PAUSE_FILE" | tr -d '\n')"; fi
   [[ -f /var/run/reboot-required ]] && reboot=true
   [[ -s "$HOLD_FILE" ]] && hold="$(head -c 200 "$HOLD_FILE" | tr -d '\n')"
+  local schedule="null"
+  if [[ -e "$SCHEDULE_FILE" ]]; then
+    schedule="$(timeout 60 python3 "$APP_DIR/worker/fleet-schedule" status "$FLEET_ROOT" 2>>"$LOGDIR/schedule.log" | tail -n 1 || true)"
+    jq -e 'type == "object"' <<<"$schedule" >/dev/null 2>&1 \
+      || schedule='{"error":"fleet-schedule did not answer","open":false,"kind":"error","reason":"the schedule could not be read (see logs/schedule.log)"}'
+  fi
   local limit="null"
   if [[ -s "$LIMIT_FILE" ]]; then
     limit="$(jq -c --argjson now "$(date +%s)" 'if (.until // 0) > $now then . else null end' "$LIMIT_FILE" 2>/dev/null || true)"
@@ -530,10 +606,10 @@ cmd_status() {
     --arg load "$load" --argjson mem "${mem:-0}" --argjson memtot "${memtot:-0}" --argjson cpus "$cpus" \
     --argjson up "${up:-0}" --argjson hb "$hb_age" --argjson paused "$paused" --arg preason "$preason" \
     --argjson reboot "$reboot" --argjson providers "$(provider_report)" --arg t "$(now)" --arg hold "$hold" \
-    --argjson limit "$limit" --argjson stuck "$stuck" \
+    --argjson limit "$limit" --argjson stuck "$stuck" --argjson schedule "$schedule" \
     '{node:$node, worker_version:$v, service:$service, heartbeat_age_s:$hb, time:$t,
       max_parallel:$max, paused:$paused, paused_reason:(if $paused then $preason else null end),
-      on_hold:(if $hold == "" then null else $hold end), limit:$limit,
+      on_hold:(if $hold == "" then null else $hold end), limit:$limit, schedule:$schedule,
       queue:{inbox:$inbox, running:$running, done:$done, failed:$failed, unpulled:$unpulled},
       stuck_handovers:$stuck,
       disk_free_gb:$dfree, disk_free_pct:$dpct, min_free_gb:$minfree,
@@ -543,7 +619,7 @@ cmd_status() {
   if [[ $json -eq 1 ]]; then
     echo "$report"
   else
-    echo "$report" | jq -r '"\(.node)  service=\(.service)\(if .paused then " PAUSED" else "" end)\(if .limit then " LIMIT until \(.limit.until_iso)" else "" end)  inbox=\(.queue.inbox) running=\(.queue.running)/\(.max_parallel) done=\(.queue.done) failed=\(.queue.failed) unpulled=\(.queue.unpulled)  disk=\(.disk_free_gb)GB (\(.disk_free_pct)%) load=\(.load1) mem=\(.mem_available_mb)MB\(if .reboot_required then "  reboot-required" else "" end)",
+    echo "$report" | jq -r '"\(.node)  service=\(.service)\(if .paused then " PAUSED" else "" end)\(if .limit then " LIMIT until \(.limit.until_iso)" else "" end)\(if .schedule and (.schedule.open | not) then " SCHEDULE: \(.schedule.reason)" else "" end)  inbox=\(.queue.inbox) running=\(.queue.running)/\(.max_parallel) done=\(.queue.done) failed=\(.queue.failed) unpulled=\(.queue.unpulled)  disk=\(.disk_free_gb)GB (\(.disk_free_pct)%) load=\(.load1) mem=\(.mem_available_mb)MB\(if .reboot_required then "  reboot-required" else "" end)",
       (.providers[] | "  provider \(.provider): \(if .ok then "ok" else "NOT OK" end) \(.version // "") \(.error // "")")'
   fi
 }
@@ -562,6 +638,18 @@ cmd_logs() {
   local f="$WORK/$id/logs/provider.log"
   [[ -f "$f" ]] || die "no log for $id yet (queued jobs have none)"
   if [[ $follow -eq 1 ]]; then tail -n "$lines" -f "$f"; else tail -n "$lines" "$f"; fi
+}
+
+# check <id>: look at a finished job's video again, for example after fixing a file
+# by hand or after a newer fleet-check came with fleet sync.
+cmd_check() {
+  local id="${1:-}"
+  valid_id "$id" || die "usage: fleet-worker check <id>"
+  ensure_dirs
+  [[ -d "$WORK/$id" ]] || die "no workspace for $id (queued jobs have none; pulled ones may be cleaned up)"
+  [[ ! -f "$JOBS/running/$id.json" ]] || die "job $id is still running; it is checked when it ends"
+  check_job "$id"
+  cat "$WORK/$id/logs/check.json"
 }
 
 cmd_cancel() {
@@ -722,7 +810,28 @@ cmd_resume() {
   [[ -e "$LIMIT_FILE" ]] && extra=" (usage-limit hold ended early; if the limit is still on, the next job brings it back)"
   rm -f "$PAUSE_FILE" "$LIMIT_FILE"
   log "resumed$extra"
+  local sched
+  sched="$(schedule_reason)"
+  [[ -z "$sched" ]] || extra+=" (its schedule still decides when: $sched)"
   echo "$FLEET_NODE resumed: queued jobs will start again$extra"
+}
+
+# schedule [show [--json] | set]: see app/worker/fleet-schedule. `set` reads a JSON object of
+# changes on stdin, as `fleet schedule` on the home machine sends it.
+cmd_schedule() {
+  ensure_dirs
+  local sub="${1:-show}" helper="$APP_DIR/worker/fleet-schedule" out
+  command -v python3 >/dev/null 2>&1 || die "schedules need python3 (re-run fleet bootstrap $FLEET_NODE)"
+  case "$sub" in
+    show)
+      if [[ "${2:-}" == "--json" ]]; then python3 "$helper" status "$FLEET_ROOT"; else python3 "$helper" text "$FLEET_ROOT"; fi ;;
+    set)
+      out="$(python3 "$helper" set "$FLEET_ROOT")" || exit 1
+      rm -f "$SCHEDULE_CACHE"
+      log "schedule set: $(jq -r 'if . == null then "works 24/7" else .summary + " (" + .tz + ")" end' <<<"$out" 2>/dev/null || echo "?")"
+      printf '%s\n' "$out" ;;
+    *) die "usage: fleet-worker schedule [show [--json] | set]" ;;
+  esac
 }
 
 cmd_gc() {
@@ -757,11 +866,13 @@ main() {
     status) cmd_status "$@" ;;
     jobs) cmd_jobs "$@" ;;
     logs) cmd_logs "$@" ;;
+    check) cmd_check "$@" ;;
     cancel) cmd_cancel "$@" ;;
     finished) cmd_finished ;;
     mark-pulled) cmd_mark_pulled "$@" ;;
     pause) cmd_pause "$@" ;;
     resume) cmd_resume ;;
+    schedule) cmd_schedule "$@" ;;
     gc) cmd_gc "$@" ;;
     recover) cmd_recover ;;
     release) cmd_release "$@" ;;

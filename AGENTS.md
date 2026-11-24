@@ -9,7 +9,7 @@ headless Claude Code sessions to make videos, one channel per VPS. The PC side i
 ## Commands
 
 ```bash
-ruff check home/bin/fleet tests/test_fleet.py
+ruff check home/bin/fleet tests/test_fleet.py vps/worker/fleet-check vps/worker/fleet-schedule
 shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
 python3 -m unittest discover -s tests -v      # must pass on Python 3.9 and on Windows too
 bash tests/e2e-local.sh                       # local end to end, no network

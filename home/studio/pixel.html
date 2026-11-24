@@ -29,6 +29,7 @@
   --standby: #2e9a5e;
   --hold: #c78a10;
   --dark: #757a76;
+  --off: #4f6fb3;
   --trouble: #cc6317;
   --font-pixel: "Pixelify Sans", "Courier New", monospace;
   --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -38,7 +39,7 @@
     --page: #13120f; --panel: #1d1b17; --ink: #f0eadc; --ink-soft: #aaa192; --edge: #403a30;
     --film: #050504; --hole: #2b271f; --box: #15162a; --box-edge: #e9dab0; --box-ink: #f6f1e3;
     --box-soft: #b3afc6; --gold: #ebc061; --rolling: #ff5b4b; --standby: #4cc184; --hold: #f0b23e;
-    --dark: #8b918d; --trouble: #ff8c42;
+    --dark: #8b918d; --off: #8ea8e8; --trouble: #ff8c42;
     color-scheme: dark;
   }
 }
@@ -46,7 +47,7 @@
   --page: #13120f; --panel: #1d1b17; --ink: #f0eadc; --ink-soft: #aaa192; --edge: #403a30;
   --film: #050504; --hole: #2b271f; --box: #15162a; --box-edge: #e9dab0; --box-ink: #f6f1e3;
   --box-soft: #b3afc6; --gold: #ebc061; --rolling: #ff5b4b; --standby: #4cc184; --hold: #f0b23e;
-  --dark: #8b918d; --trouble: #ff8c42;
+  --dark: #8b918d; --off: #8ea8e8; --trouble: #ff8c42;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -320,7 +321,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   "use strict";
   const FS = window.FleetStudio;
   const { LIVE, DAY_MS, when, ago, span, timecode, clock, localTimes, stageNo, plural,
-    activityText, jobsOf, claudeOf, limitOf, finishedSince, stageState } = FS;
+    activityText, jobsOf, claudeOf, limitOf, scheduleOf, finishedSince, stageState } = FS;
   const reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   // The lot's own clock: now, or the moment a replay shows.
   const nowMs = () => (FS.now ? FS.now() : Date.now());
@@ -397,8 +398,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     glass: "#94c6da", glassDark: "#3b5a6a", metal: "#9ba4a9", metal2: "#737c82", ink: "#1f1c19", white: "#f7f4ec",
     red: "#e0402f", green: "#36c06f", amber: "#f3a51f", orange: "#ff8a2a", tapeA: "#e7b72b", tapeB: "#27261f",
   };
-  const LAMP = { rolling: PAL.red, standby: PAL.green, hold: PAL.amber, trouble: PAL.orange, pending: "#c9c4b8" };
-  const CSSC = { rolling: "var(--rolling)", standby: "var(--standby)", hold: "var(--hold)", trouble: "var(--trouble)",
+  const LAMP = { rolling: PAL.red, standby: PAL.green, hold: PAL.amber, off: "#7d96d8", trouble: PAL.orange, pending: "#c9c4b8" };
+  const CSSC = { rolling: "var(--rolling)", standby: "var(--standby)", hold: "var(--hold)", off: "var(--off)", trouble: "var(--trouble)",
     dark: "var(--dark)", offline: "var(--dark)", pending: "var(--ink-soft)" };
 
   // ---------------------------------------------------------------- drawing by the pixel
@@ -946,7 +947,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   const SETS = ["#20305f", "#6b3f2a", "#2f5b3c", "#5a2b4f", "#2c5e6e", "#7a5a1f", "#3b3b6b", "#6a2f2f"];
   function drawStage(g, st) {
     const s = st.ss.state, R = st.edge === "R";
-    const dim = s === "dark" ? 0.28 : s === "offline" ? 0.5 : 0;
+    const dim = s === "dark" ? 0.28 : s === "offline" ? 0.5 : s === "off" ? 0.16 : 0;
     const wall = dim ? mix(PAL.wall, "#57534e", dim) : PAL.wall, shd = shade(wall, -0.17);
     const doorWall = R ? wall : shd, endWall = R ? shd : wall;
     spoly(g, st, [[0, 0, 0], [SW, 0, 0], [SW, 0, WH], [0, 0, WH]], doorWall);
@@ -2039,15 +2040,17 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const n = nodes[i], ch = (n.channels || [])[0] || n.name;
       const ss = stageState(n);
       return Object.assign(st, { node: n, key: n.name, no: stageNo(n.name, i), ss, color: pick(TRAILER, hash(ch)),
-        set: pick(SETS, hash(ch + "/set")), dnd: ss.state === "hold" || ss.state === "dark" });
+        set: pick(SETS, hash(ch + "/set")), dnd: ss.state === "hold" || ss.state === "dark" || ss.state === "off" });
     });
     cast = []; castBy = new Map(); props = []; taken.clear();
     for (const fixed of ["Hermes", "Iris", "Sam", "Rio", "Claude"]) taken.add(fixed);
-    const T = { stages: stagesNow.length, rolling: 0, standby: 0, hold: 0, dark: 0, trouble: 0, offline: 0, pending: 0,
-      waiting: 0, done: 0, failed: 0, collect: 0, answering: 0, newest: null, newestAt: 0, newestOn: null, pulledToday: 0 };
+    const T = { stages: stagesNow.length, rolling: 0, standby: 0, hold: 0, off: 0, dark: 0, trouble: 0, offline: 0, pending: 0,
+      waiting: 0, done: 0, failed: 0, collect: 0, answering: 0, newest: null, newestAt: 0, newestOn: null, pulledToday: 0, backAt: null };
     for (const st of stagesNow) {
       const n = st.node, s = n.status || {}, q = s.queue || {};
       T[st.ss.state] = (T[st.ss.state] || 0) + 1;
+      const sch = st.ss.state === "off" ? scheduleOf(s) : null;
+      if (sch && sch.until && (T.backAt == null || Number(sch.until) < T.backAt)) T.backAt = Number(sch.until);
       if (n.reachable) T.answering += 1;
       T.waiting += jobsOf(n).filter((j) => j.state === "inbox" || j.state === "outgoing").length;  // as on the board
       T.collect += Number(q.unpulled) || 0;
@@ -2066,13 +2069,16 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 
   function lotWide(T, now) {
     const gen = when(snap && snap.generated_at), every = Number(snap && snap.every) || 20;
-    const counts = ["rolling", "standby", "hold", "dark", "trouble", "offline"].filter((k) => T[k])
-      .map((k) => T[k] + " " + { rolling: "rolling", standby: "standing by", hold: "on hold", dark: "dark", trouble: "need a look", offline: "no contact" }[k]);
+    const counts = ["rolling", "standby", "hold", "off", "dark", "trouble", "offline"].filter((k) => T[k])
+      .map((k) => T[k] + " " + { rolling: "rolling", standby: "standing by", hold: "on hold", off: "off duty", dark: "dark", trouble: "need a look", offline: "no contact" }[k]);
     let said;
     if (!contact) said = "I've lost the line to your PC. Start fleet studio again and I'll pick it back up.";
     else if (snap && snap.demo) said = "This is a rehearsal with made-up jobs. Run fleet studio on your PC and you'll see your own lot.";
     else if (!T.stages) said = "No stages yet. Add a VPS to the fleet and it gets a stage here.";
     else if (T.rolling) said = plural(T.rolling, "stage", "stages") + " rolling, " + plural(T.waiting, "script", "scripts") + " waiting. Keep it moving!";
+    else if (T.off && !T.standby) said = (T.off === T.stages ? "Everyone's off duty" : plural(T.off, "stage is", "stages are") + " off duty")
+      + (T.waiting ? ", and " + plural(T.waiting, "script waits", "scripts wait") + " for the schedule" : "")
+      + (T.backAt ? ". First one back at " + clock(T.backAt) + "." : ". The schedule says when they open.");
     else if (T.waiting) said = plural(T.waiting, "script waits", "scripts wait") + ", and nobody's rolling. Somebody check the stages.";
     else said = "Quiet lot. Every stage is ready for the next script.";
     add({ key: "director", name: "Hermes", role: "Director", where: "The director's bungalow · your PC", group: LOT, order: 0,
@@ -2187,6 +2193,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       standby: "Standing by. The next " + ((n.channels || [])[0] || "") + " script starts as soon as it comes in.",
       hold: "The usage limit's reached. The queue picks up by itself at " + (lim ? clock(Number(lim.until)) : "the reset") + ".",
       dark: "Stage is dark: " + (s.paused_reason || "paused") + ". Run fleet resume " + nm + " to open up again.",
+      off: "Off duty: " + ss.note + ". New scripts wait at the door until the schedule opens the stage.",
       trouble: cap(ss.note) + ". Somebody take a look.", pending: "Checking in. One moment." }[ss.state];
     if (up || n.pending) {
       add({ key: st.key + ":manager", role: "Stage manager", where, group: grp, order: 1, bubble: n.pending ? "…" : null,
@@ -2195,7 +2202,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         params: n.pending ? [["Worker", "checking"]] : [["Worker", (s.service || "?") + (s.worker_version ? ", version " + s.worker_version : "")],
           ["Heartbeat", s.heartbeat_age_s != null ? s.heartbeat_age_s + " s ago" : "?"], ["Sessions", running.length + " of " + (s.max_parallel || 1) + " in use"],
           ["Queue", (q.inbox || 0) + " waiting, " + (q.running || 0) + " running, " + (q.done || 0) + " done, " + (q.failed || 0) + " failed"],
-          ["Paused", s.paused ? "yes" + (s.paused_reason ? ": " + s.paused_reason : "") : "no"]].concat(Number(s.stuck_handovers) ? [["Stuck handovers", String(s.stuck_handovers)]] : []),
+          ["Paused", s.paused ? "yes" + (s.paused_reason ? ": " + s.paused_reason : "") : "no"],
+          ["Schedule", scheduleOf(s) ? scheduleOf(s).summary || "set" : "24/7"]].concat(Number(s.stuck_handovers) ? [["Stuck handovers", String(s.stuck_handovers)]] : []),
         cmd: "fleet status " + nm, pos: spot(st, 0.85, 1.05, { flip: inward(st) }) });
     }
     running.forEach((j, k) => {
@@ -2219,6 +2227,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       const where2 = ss.state === "rolling" ? "set" : st.dnd ? "trailer" : ok ? "chair" : "trouble";
       const said = where2 === "set" ? "On set for " + titled(running[0] || {}) + ". Ready for my close-up."
         : st.dnd && lim ? "Do not disturb until " + clock(Number(lim.until)) + ". " + sentence(lim.message || "My usage limit is used up")
+          : st.dnd && ss.state === "off" ? "Off duty: " + ss.note + ". The schedule says so, and I'll be back on set then."
           : st.dnd ? "Resting in my trailer while the stage is dark." : !ok ? "I can't work yet: " + (prov.error || "not ready") + "." : "Ready when you are.";
       add({ key: st.key + ":star", name: "Claude", role: "Star of stage " + st.no, where, group: grp, order: 1.5, bubble: where2 === "trouble" ? "?" : null,
         stands: "Claude Code on " + nm + ", signed in with this VPS's own account", quote: said,
@@ -2269,6 +2278,22 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       add({ key: st.key + ":clock", name: "Reset clock", role: "When the limit resets", where, group: grp, order: 32, object: "clock",
         stands: "the time the usage limit resets", quote: lim ? "The limit resets at " + clock(Number(lim.until)) + ", in " + inTime(Number(lim.until) * 1000) + "." : "Waiting for the reset.",
         params: lp, cmd: null, at: c, drawObj: (g) => { const p = P(c[0], c[1]); clockBoard(g, p[0], p[1], lim ? hhmm(Number(lim.until)) : "--:--"); return { x: p[0] - 11, y: p[1] - 14, w: 22, h: 14 }; } });
+    }
+    if (ss.state === "off") {
+      const sch = scheduleOf(s) || {}, back = sch.until ? hhmm(Number(sch.until)) : "--:--";
+      const sp = [["Schedule", sch.summary || "?"], ["Now", ss.note], ["Waiting", plural(inbox.length, "job", "jobs")]];
+      add({ key: st.key + ":watchman", role: "Night watchman", where, group: grp, order: 30,
+        stands: "the schedule of " + nm + ": it says when this stage may start a job",
+        quote: "We're off duty: " + ss.note + ". Scripts that come in wait at the door. The schedule trumps everything, even the director.",
+        look: look(st.key + ":watchman", { shirt: "#34495e", pants: "#2c3e50", hat: "cap", hatC: "#1f2a36" }),
+        params: sp, cmd: "fleet schedule show " + nm, pos: spot(st, 1.6, 1.7, { pose: "sit", flip: outward(st) }),
+        under: (g, t, p) => chair(g, p[0], p[1] + 1, "#5b5f63", outward(st)) });
+      const c = SG(st, 3.95, 0.95);
+      add({ key: st.key + ":back", name: "Back-at sign", role: "When the stage opens again", where, group: grp, order: 32, object: "clock",
+        stands: "the next time this stage's schedule lets a job start",
+        quote: sch.until ? "Back at " + clock(Number(sch.until)) + ", in " + inTime(Number(sch.until) * 1000) + "." : sentence(ss.note),
+        params: sp, cmd: "fleet schedule show " + nm, at: c,
+        drawObj: (g) => { const p = P(c[0], c[1]); clockBoard(g, p[0], p[1], back); return { x: p[0] - 11, y: p[1] - 14, w: 22, h: 14 }; } });
     }
     if (ss.state === "dark") {
       add({ key: st.key + ":janitor", role: "Night janitor", where, group: grp, order: 30,
@@ -3189,7 +3214,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   function tally() {
     const T = lot.T;
     if (!T) return;
-    const words = { rolling: "rolling", standby: "standing by", hold: "on hold", trouble: "need a look", dark: "dark", offline: "no contact" };
+    const words = { rolling: "rolling", standby: "standing by", hold: "on hold", off: "off duty", trouble: "need a look", dark: "dark", offline: "no contact" };
     const chips = Object.keys(words).filter((k) => T[k]).map((k) => '<li><i style="--c:' + CSSC[k] + '"></i><b>' + T[k] + "</b>" + words[k] + "</li>");
     chips.push("<li><b>" + T.waiting + "</b>waiting</li>", "<li><b>" + T.done + "</b>done today</li>", "<li><b>" + T.collect + "</b>to collect</li>");
     $("tally").innerHTML = chips.join("");

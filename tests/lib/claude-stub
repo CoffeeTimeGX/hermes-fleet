@@ -7,6 +7,9 @@
 #   LIST      the session writes the workspace file list to output/files.txt
 #   LIMIT<n>  the account hits its usage limit, which resets in n seconds
 #             (the way Claude Code 2.1.30x reports it); a --resume run succeeds
+#   VIDEO     the session makes a real 3-second vertical video with sound, a
+#             thumbnail and metadata.json with ffmpeg; VIDEOBAD makes a black,
+#             silent video and nothing else (for the video check)
 if [[ "${1:-}" == "--version" ]]; then echo "9.9.9 (Claude Code test stub)"; exit 0; fi
 prompt="" format="text" resume="" args=("$@")
 while [[ $# -gt 0 ]]; do
@@ -53,6 +56,16 @@ if [[ -z "$resume" && "$prompt" =~ LIMIT([0-9]+) ]]; then
 fi
 mkdir -p output
 echo "video for: $prompt" >output/video.txt
+if [[ "$prompt" == *VIDEOBAD* ]]; then
+  ffmpeg -v error -y -f lavfi -i "color=c=black:s=360x640:r=25:d=3" -f lavfi -i "anullsrc=r=44100:cl=mono" \
+    -t 3 -pix_fmt yuv420p output/video.mp4 </dev/null
+elif [[ "$prompt" == *VIDEO* ]]; then
+  ffmpeg -v error -y -f lavfi -i "testsrc2=s=360x640:r=25:d=3" -f lavfi -i "sine=f=440:d=3" \
+    -shortest -pix_fmt yuv420p output/video.mp4 </dev/null
+  ffmpeg -v error -y -f lavfi -i "testsrc2=s=1280x720:d=1" -frames:v 1 output/thumbnail.png </dev/null
+  jq -n '{title: "Five facts about Saturn", description: "A test video.", tags: ["space", "saturn"]}' \
+    >output/metadata.json
+fi
 if [[ "$prompt" == *LIST* ]]; then
   find . -path ./logs -prune -o -type f -print | sort >output/files.txt
 fi

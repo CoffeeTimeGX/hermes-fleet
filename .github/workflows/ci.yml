@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install ruff
-      - run: ruff check home/bin/fleet tests/test_fleet.py
+      - run: ruff check home/bin/fleet tests/test_fleet.py vps/worker/fleet-check vps/worker/fleet-schedule
       - run: shellcheck --version
       - run: >-
           shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh
@@ -76,6 +76,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - name: Install ffmpeg (for the video check)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bash tests/e2e-local.sh
 
   fake-vps:

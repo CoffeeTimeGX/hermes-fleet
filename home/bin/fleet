@@ -16,7 +16,17 @@ Everyday
   fleet retry NODE JOB_ID [--to T]         queue a copy of a finished or failed job
   fleet handover FROM TO [JOB_ID ...]      move queued jobs to another VPS (only when you ask)
   fleet pull [TARGETS] [--quiet]           download finished jobs into results_dir
+  fleet check NODE JOB_ID                  look at a finished job's video again
+  fleet report [--hours 24]                the daily report: what was made, what went wrong
+  fleet plan show|slots|import|approve|reject|edit|remove|run
+                                           the week plan: topics you approve, queued on time
+  fleet publish NODE JOB_ID --to youtube[,tiktok,instagram]
+                                           a YouTube private draft, the TikTok inbox, or (with
+                                           --now) an Instagram Reel; --login PLATFORM first
   fleet pause|resume TARGETS               stop or restart taking new jobs
+  fleet schedule [show|set|open|close] [TARGETS] [24/7] [--hours 08:00-23:00] [--days mon-fri]
+           [--off DAYS] [--cycle 3h/1h] [--gap 45m] [--random 4/day] [--cap 3] [--for 2h]
+                                           when each VPS may start jobs; it trumps everything
   fleet studio [--tailnet]                 watch every VPS at work in your browser
 
 Setup and maintenance
@@ -43,7 +53,9 @@ import argparse
 import base64
 import concurrent.futures as cf
 import configparser
+import contextlib
 import glob
+import hashlib
 import io
 import json
 import os
@@ -60,11 +72,11 @@ import tarfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -112,6 +124,7 @@ class Config:
     connect_timeout: int
     transport: str
     nodes: dict
+    timezone: str = ""  # [defaults] timezone: the zone `fleet schedule` times are in
 
 
 def _expand(v: str) -> Path:
@@ -155,6 +168,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Config:
         connect_timeout=int(d.get("connect_timeout", "10")),
         transport=os.environ.get("FLEET_TRANSPORT", d.get("transport", "ssh")),
         nodes=nodes,
+        timezone=d.get("timezone", "").strip(),
     )
 
 
@@ -386,6 +400,9 @@ def cmd_status(cfg: Config, a) -> int:
         service = st.get("service", "?") + (" PAUSED" if st.get("paused") else "")
         if active_limit(st):
             service += f" LIMIT until {short_time(st['limit'].get('until'))}"
+        sch = schedule_hold(st)
+        if sch:
+            service += f" OFF DUTY until {short_time(sch['until'])}" if sch.get("until") else " OFF DUTY"
         rows.append((name, service, q["inbox"], f"{q['running']}/{st.get('max_parallel', '?')}",
                      q["done"], q["failed"], q["unpulled"], f"{st.get('disk_free_gb')} GB ({st.get('disk_free_pct')}%)",
                      st.get("load1"), prov))
@@ -423,9 +440,12 @@ def provider_word(rep) -> str:
     return "ok" if rep.get("ok") else "BAD"
 
 
-def health_problems(cfg: Config, a) -> dict:
+HEALTH_DEFAULTS = argparse.Namespace(min_disk_pct=15, max_backlog=25)
+
+
+def health_problems(cfg: Config, a=HEALTH_DEFAULTS, statuses=None) -> dict:
     nodes = resolve_targets(cfg, None)
-    res = parallel(nodes, lambda n: fetch_status(cfg, n))
+    res = statuses if statuses is not None else parallel(nodes, lambda n: fetch_status(cfg, n))
     problems = {}
     for name, st in res.items():
         if isinstance(st, Exception):
@@ -469,6 +489,13 @@ def health_problems(cfg: Config, a) -> dict:
             problems[f"{name}:limit"] = (
                 f"{name}: {lim.get('provider', 'provider')} usage limit reached ({lim.get('message', '')}); "
                 f"its queue waits until {short_time(lim.get('until'))} and then continues by itself ({meanwhile})")
+        sch = st.get("schedule") if isinstance(st.get("schedule"), dict) else {}
+        if sch.get("error"):
+            problems[f"{name}:schedule"] = (f"{name}: its schedule could not be read ({sch['error']}), so no new job "
+                                            f"starts there; set it again (fleet schedule show {name})")
+        elif sch.get("open") is False and not sch.get("until") and number(st["queue"].get("inbox"), 0):
+            problems[f"{name}:schedule"] = (f"{name}: {st['queue']['inbox']} job(s) wait, but its schedule has no work "
+                                            f"time in the next 60 days ({sch.get('reason')}; fleet schedule show {name})")
         stuck = int(number(st.get("stuck_handovers"), 0))
         if stuck:
             problems[f"{name}:handover"] = (
@@ -553,6 +580,8 @@ def validate_job(job: dict, where: str = "job") -> dict:
     tools = job.get("allowed_tools")
     if tools is not None and not (isinstance(tools, str) or (isinstance(tools, list) and all(isinstance(t, str) for t in tools))):
         bad("\"allowed_tools\" must be a string or a list of strings")
+    if "checks" in job and job["checks"] is not False and not isinstance(job["checks"], dict):
+        bad("\"checks\" must be false or an object like {\"min_seconds\": 45, \"vertical\": true}")
     files = job.get("files", [])
     if not isinstance(files, list):
         bad("\"files\" must be a list")
@@ -647,7 +676,18 @@ def node_readiness(st, provider: str):
     lim = active_limit(st)
     if lim:
         return f"{LIMIT_WORDS} until {short_time(lim.get('until'))}"
+    sch = schedule_hold(st)
+    if sch:
+        return f"{SCHEDULE_WORDS} ({sch.get('reason') or 'off duty'})"
     return None
+
+
+def free_at(st) -> float:
+    """When a waiting node can start a job: after its usage limit and its schedule's hold."""
+    sch = schedule_hold(st)
+    if sch and not sch.get("until"):
+        return float("inf")
+    return max(number(active_limit(st).get("until"), 0), number(sch.get("until"), 0))
 
 
 def provider_broken(why, provider: str) -> bool:
@@ -709,12 +749,11 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
             waits = [n for n in reachable if not provider_broken(node_readiness(status.get(n.name), prov), prov)]
             pickable = ready or (reachable if explicit else waits if dedicated else [])
             if not pickable:
-                # Every shared account is at its usage limit: queue where the limit ends first.
+                # Every shared VPS waits for a usage limit or its schedule: queue where the wait ends first.
                 waiting = [n for n in reachable
-                           if (node_readiness(status.get(n.name), prov) or "").startswith(LIMIT_WORDS)]
+                           if (node_readiness(status.get(n.name), prov) or "").startswith((LIMIT_WORDS, SCHEDULE_WORDS))]
                 if waiting:
-                    first = min(waiting, key=lambda n: number(active_limit(status.get(n.name)).get("until"), 0))
-                    pickable = [first]
+                    pickable = [min(waiting, key=lambda n: free_at(status.get(n.name)))]
             if not pickable:
                 why = "; ".join(f"{n.name} {node_readiness(status.get(n.name), prov)}" for n in candidates)
                 whose = f"channel '{ch}' is made on {', '.join(n.name for n in candidates)}, and " if dedicated else ""
@@ -736,7 +775,8 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
                 print(f"warning: {n.name}: {why}; {j['id']} fails if that is not fixed before it starts",
                       file=sys.stderr)
             elif why:
-                until = "the limit resets" if why.startswith(LIMIT_WORDS) else "that is fixed"
+                until = ("the limit resets" if why.startswith(LIMIT_WORDS) else
+                         "its schedule lets it start" if why.startswith(SCHEDULE_WORDS) else "that is fixed")
                 print(f"warning: {n.name}: {why}; {j['id']} waits in its queue until {until}", file=sys.stderr)
             if explicit and not serves(n, ch):
                 print(f"note: {n.name} does not make videos for channel '{ch}' (its channels: "
@@ -755,27 +795,36 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
     return rc
 
 
-def cmd_jobs(cfg: Config, a) -> int:
-    nodes = resolve_targets(cfg, a.targets)
-    state = f" --state {shlex.quote(a.state)}" if a.state else ""
-    res = parallel(nodes, lambda n: remote(cfg, n, f"{worker(cfg, n)} jobs --json{state}", timeout=60))
-    all_jobs, rc = [], 0
+def fetch_jobs(cfg: Config, nodes: list, state: str = "") -> tuple:
+    """(every job on these nodes, each with its node's name; the nodes that did not answer)."""
+    opt = f" --state {shlex.quote(state)}" if state else ""
+    res = parallel(nodes, lambda n: remote(cfg, n, f"{worker(cfg, n)} jobs --json{opt}", timeout=60))
+    all_jobs, silent = [], []
     for name, r in res.items():
         if isinstance(r, Exception) or r.returncode != 0:
-            print(f"{name}: unreachable", file=sys.stderr)
-            rc = 1
+            silent.append(name)
             continue
         for j in last_json(r.stdout, []):
-            j["node"] = name
-            all_jobs.append(j)
+            if isinstance(j, dict) and "id" in j:
+                j["node"] = name
+                all_jobs.append(j)
+    return all_jobs, silent
+
+
+def cmd_jobs(cfg: Config, a) -> int:
+    all_jobs, silent = fetch_jobs(cfg, resolve_targets(cfg, a.targets), a.state or "")
+    for name in silent:
+        print(f"{name}: unreachable", file=sys.stderr)
+    rc = 1 if silent else 0
     if a.json:
         print(json.dumps(all_jobs, indent=2))
         return rc
     rows = [("NODE", "STATE", "ID", "CHANNEL", "STARTED", "FINISHED", "NOTE")]
     for j in all_jobs:
-        note = (j.get("reason") or "") + (" (pulled)" if j.get("pulled") else "")
+        note = " ".join(x for x in (j.get("reason") or "", check_line(j.get("check")),
+                                    "(pulled)" if j.get("pulled") else "") if x)
         rows.append((j["node"], j["state"], j["id"], j.get("channel") or "-", j.get("started_at") or "-",
-                     j.get("finished_at") or "-", note.strip()))
+                     j.get("finished_at") or "-", note))
     if len(rows) > 1:
         print_table(rows)
     else:
@@ -989,6 +1038,257 @@ def cmd_resume(cfg: Config, a) -> int:
     return cmd_pause(cfg, a, resume=True)
 
 
+# --------------------------------------------------------------------------- schedules
+
+# Each VPS keeps its own schedule (schedule.json, read by app/worker/fleet-schedule): it
+# decides alone, also while this PC is off, and it trumps everything else: no job starts
+# outside it, whoever queued it. Running jobs always finish.
+SCHEDULE_WORDS = "held by its schedule"  # how node_readiness says it
+ALWAYS_WORDS = ("24/7", "always")
+CLOCK_RE = re.compile(r"^(\d{1,2})(?::(\d{2}))?$")
+DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ZONE_RE = re.compile(r"^(UTC|[+-]\d{2}:\d{2}|[A-Za-z_]+(?:/[A-Za-z0-9_+-]+)+)$")
+
+
+def parse_minutes(v, what: str) -> int:
+    """45m, 2h, 1h30, 1.5h or 90 (minutes) as minutes; 0, off and none are 0."""
+    s = str(v).strip().lower().replace(" ", "")
+    if s in ("0", "off", "none", "no"):
+        return 0
+    m = re.match(r"^(?:(\d+(?:\.\d+)?)h)?(?:(\d+)(?:m|min)?)?$", s)
+    if not s or not m or not (m.group(1) or m.group(2)):
+        raise FleetError(f"{what}: {v!r} is not a length of time like 45m, 2h or 1h30")
+    return int(round(float(m.group(1) or 0) * 60)) + int(m.group(2) or 0)
+
+
+def parse_count(v, what: str) -> int:
+    """3, 3/day or "3 a day" as 3; 0, off and none are 0."""
+    s = str(v).strip().lower()
+    if s in ("0", "off", "none", "no"):
+        return 0
+    m = re.match(r"^(\d+)\s*(?:/\s*day|a\s*day|per\s*day)?$", s)
+    if not m:
+        raise FleetError(f"{what}: {v!r} is not a number like 4 or 4/day")
+    return int(m.group(1))
+
+
+def parse_clock(v: str, end: bool = False) -> str:
+    m = CLOCK_RE.match(v.strip())
+    h, mm = (int(m.group(1)), int(m.group(2) or 0)) if m else (99, 0)
+    if mm > 59 or h > 24 or (h == 24 and (mm or not end)):
+        raise FleetError(f"--hours: {v!r} is not a time like 08:00")
+    return f"{h:02d}:{mm:02d}"
+
+
+def parse_hours(v: str):
+    """08:00-12:00,14:00-23:00 (or 8-12, 14-23) as windows; all means all day (None)."""
+    s = v.strip().lower()
+    if s in ("all", "all day", "24h", "24/7", "any", "none", "off"):
+        return None
+    wins = []
+    for part in re.split(r"\s*[,;]\s*|\s+and\s+", s):
+        if not part:
+            continue
+        m = re.match(r"^([\d:]+)\s*(?:-|to)\s*([\d:]+)$", part)
+        if not m:
+            raise FleetError(f"--hours: {part!r} is not a work window like 08:00-23:00")
+        wins.append([parse_clock(m.group(1)), parse_clock(m.group(2), end=True)])
+    if not wins:
+        raise FleetError("--hours needs a window like 08:00-23:00")
+    return None if wins == [["00:00", "24:00"]] else wins
+
+
+def day_index(word: str) -> int:
+    w = word.strip().lower()[:3]
+    if w not in WEEKDAYS:
+        raise FleetError(f"--days: {word!r} is not a day (mon, tue, wed, thu, fri, sat, sun)")
+    return WEEKDAYS.index(w)
+
+
+def parse_days(v: str):
+    """mon-fri, weekdays, weekends, sat,sun or fri-mon as a list of days; all is None."""
+    s = v.strip().lower()
+    if s in ("all", "daily", "every day", "everyday", "any"):
+        return None
+    if s in ("weekdays", "weekend", "weekends"):
+        return list(WEEKDAYS[:5] if s == "weekdays" else WEEKDAYS[5:])
+    got = set()
+    for part in re.split(r"[,\s]+", s):
+        if not part:
+            continue
+        a, _, b = part.partition("-")
+        k, last = day_index(a), day_index(b or a)
+        got.add(k)
+        while k != last:
+            k = (k + 1) % 7
+            got.add(k)
+    return [d for i, d in enumerate(WEEKDAYS) if i in got]
+
+
+def parse_off(v: str):
+    """2026-12-24..2026-12-26,2027-01-01 (or today, tomorrow) as ranges; none clears them."""
+    s = v.strip().lower()
+    if s in ("", "none", "no", "off", "clear"):
+        return None
+
+    def one(w):
+        today = datetime.now().date()
+        if w in ("today", "tomorrow"):
+            return (today + timedelta(days=w == "tomorrow")).isoformat()
+        try:
+            if DAY_RE.match(w):
+                return datetime.strptime(w, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            pass
+        raise FleetError(f"--off: {w!r} is not a day like 2026-12-24 (or today, tomorrow)")
+
+    out = []
+    for part in re.split(r"[,\s]+", s):
+        if part:
+            a, _, b = part.partition("..")
+            out.append([one(a), one(b or a)])
+    return out
+
+
+def parse_cycle(v: str):
+    """3h/1h (work three hours, rest one) as [180, 60]; off is None."""
+    s = v.strip().lower()
+    if s in ("off", "none", "no", "0"):
+        return None
+    work, sep, rest = s.partition("/")
+    if not sep:
+        raise FleetError(f"--cycle: {v!r} is not work/rest like 3h/1h")
+    return [parse_minutes(work, "--cycle"), parse_minutes(rest, "--cycle")]
+
+
+def pc_zone() -> str:
+    """This PC's time zone: a name where the system says it (Linux, macOS, or $TZ), else
+    the offset from UTC that the clock has now (Windows), like +01:00."""
+    tz = os.environ.get("TZ", "").strip().lstrip(":")
+    if tz == "UTC" or (ZONE_RE.match(tz) and "/" in tz):
+        return tz
+    if not IS_WINDOWS:
+        real = os.path.realpath("/etc/localtime")
+        if "/zoneinfo/" in real:
+            name = re.sub(r"^(posix|right)/", "", real.split("/zoneinfo/", 1)[1])
+            if ZONE_RE.match(name):
+                return name
+    mins = int((datetime.now().astimezone().utcoffset() or timedelta(0)).total_seconds()) // 60
+    return f"{'+' if mins >= 0 else '-'}{abs(mins) // 60:02d}:{abs(mins) % 60:02d}"
+
+
+def zone_words(tz) -> str:
+    return "UTC" + tz if re.match(r"^[+-]\d{2}:\d{2}$", str(tz or "")) else str(tz or "UTC")
+
+
+def schedule_changes(cfg: Config, a, reset: bool) -> dict:
+    ch = {"reset": True} if reset else {}
+    if a.hours is not None:
+        ch["hours"] = parse_hours(a.hours)
+    if a.days is not None:
+        ch["days"] = parse_days(a.days)
+    if a.off is not None:
+        ch["off"] = parse_off(a.off)
+    if a.cycle is not None:
+        ch["cycle"] = parse_cycle(a.cycle)
+    if a.gap is not None:
+        ch["gap"] = parse_minutes(a.gap, "--gap") or None
+    if a.random is not None:
+        n = parse_count(a.random, "--random")
+        ch["random"] = [n, parse_minutes(a.min_gap if a.min_gap is not None else "30m", "--min-gap")] if n else None
+    elif a.min_gap is not None:
+        raise FleetError("--min-gap goes with --random, for example: --random 4/day --min-gap 1h")
+    if a.cap is not None:
+        ch["cap"] = parse_count(a.cap, "--cap") or None
+    tz = a.tz or cfg.timezone
+    if tz:
+        if not ZONE_RE.match(tz):
+            raise FleetError(f"time zone {tz!r}: use a name like Europe/Paris, UTC or an offset like +01:00")
+        ch["tz"] = tz
+    if not ch:
+        raise FleetError("say what to change: 24/7, --hours, --days, --off, --cycle, --gap, --random, --cap or --tz "
+                         "(fleet schedule --help)")
+    ch["tz_default"] = pc_zone()  # used when the VPS has no time zone for the schedule yet
+    return ch
+
+
+def fetch_schedule(cfg: Config, n: Node):
+    r = remote(cfg, n, f"{worker(cfg, n)} schedule show --json", timeout=60)
+    if r.returncode != 0:
+        raise FleetError(text(r.stderr)[-300:] or f"exit {r.returncode}")
+    return last_json(r.stdout)
+
+
+def send_schedule(cfg: Config, n: Node, changes: dict):
+    r = remote(cfg, n, f"{worker(cfg, n)} schedule set", stdin=json.dumps(changes).encode("utf-8"), timeout=60)
+    if r.returncode != 0:
+        raise FleetError(text(r.stderr).replace("fleet-schedule: ", "")[-300:] or f"exit {r.returncode}")
+    return last_json(r.stdout)
+
+
+def schedule_lines(name: str, n: Node, st) -> list:
+    chans = ", ".join(dedicated_channels(n)) or "any channel"
+    if st is None:
+        return [f"{name} ({chans}): works 24/7"]
+    if st.get("error"):
+        return [f"{name} ({chans}): {st.get('reason')}. Set it again, or: fleet schedule set {name} 24/7"]
+    out = [f"{name} ({chans}): {st.get('summary')}. Times in {zone_words(st.get('tz'))}."]
+    out.append(f"  now: {st.get('note') or st.get('reason') or ''}")
+    w = st.get("workday") or {}
+    if w.get("work"):
+        line = f"  {'today' if w.get('today') else w.get('weekday')}: work time {', '.join(w['work'])}"
+        if w.get("picks"):
+            line += "; random starts " + ", ".join(
+                p["at"] + ("" if p.get("state") == "ahead" else f" ({p.get('state')})") for p in w["picks"])
+        out.append(line + f"; {w.get('started', 0)} started")
+    if (st.get("config") or {}).get("tz_guess") and re.match(r"^[+-]\d{2}:\d{2}$", str(st.get("tz") or "")):
+        out.append(f"  (UTC{st['tz']} is your PC's offset when it was set. To follow summer time, add "
+                   f"timezone = Area/City under [defaults] in fleet.ini and set the schedule again.)")
+    return out
+
+
+def cmd_schedule(cfg: Config, a) -> int:
+    words = [w.strip() for w in a.args if w.strip()]
+    reset = any(w.lower() in ALWAYS_WORDS for w in words)
+    names = [x for w in words if w.lower() not in ALWAYS_WORDS for x in w.split(",") if x]
+    if reset and a.action != "set":
+        raise FleetError("24/7 goes with set: fleet schedule set vps1 24/7")
+    if not names and a.action != "show":
+        raise FleetError(f"name the VPSs (or all), for example: fleet schedule {a.action} vps1")
+    nodes = resolve_targets(cfg, None if not names or "all" in names else ",".join(names))
+    if a.action == "show":
+        res = parallel(nodes, lambda n: fetch_schedule(cfg, n))
+    else:
+        if a.action == "set":
+            changes = schedule_changes(cfg, a, reset)
+        elif a.action == "open":
+            mins = parse_minutes(a.for_ or "1h", "--for")
+            if not 0 < mins <= 7 * 1440:
+                raise FleetError("--for: from a minute to 7 days, like 2h")
+            changes = {"open_for": mins}
+        else:
+            changes = {"open_for": 0}
+        res = parallel(nodes, lambda n: send_schedule(cfg, n, changes))
+    if a.json:
+        print(json.dumps([{"node": k, "schedule": None if isinstance(v, Exception) else v,
+                           "error": str(v) if isinstance(v, Exception) else None} for k, v in res.items()],
+                         indent=2))
+    rc = 0
+    for name, st in res.items():
+        if isinstance(st, Exception):
+            print(f"{name}: FAILED {st}", file=sys.stderr)
+            rc = 1
+        elif not a.json:
+            print("\n".join(schedule_lines(name, cfg.nodes[name], st)))
+    return rc
+
+
+def schedule_hold(st) -> dict:
+    """The node's schedule while it keeps the node from starting jobs, else {}."""
+    sch = st.get("schedule") if isinstance(st, dict) else None
+    return sch if isinstance(sch, dict) and sch.get("open") is False else {}
+
+
 _index_lock = threading.Lock()
 PULL_PARTS = ("output", "logs", "result.json", "status.json", "job.json")
 
@@ -1066,8 +1366,14 @@ def cmd_pull(cfg: Config, a) -> int:
             summary = " ".join(j.get("summary", "").split())[:300]
             if status == "FAILED" and not summary and j.get("log_tail"):
                 summary = "log: " + " | ".join(j["log_tail"].splitlines())[:300]
+            chk = j.get("check") if isinstance(j.get("check"), dict) else {}
+            if chk.get("ok") is False:
+                verdict = "CHECK: " + "; ".join(str(x) for x in chk.get("problems") or [])[:400]
+            else:
+                verdict = check_line(chk)
             lines.append(f"[{status}] {name}/{j['id']}  channel: {j.get('channel')}{reason}{err}\n"
-                         f"    {j['path']}" + (f"\n    {summary}" if summary else ""))
+                         f"    {j['path']}" + (f"\n    {summary}" if summary else "")
+                         + (f"\n    {verdict}" if verdict else ""))
     if lines:
         print(f"Pulled {len(lines)} finished job(s) into {cfg.results_dir}:")
         print("\n".join(lines))
@@ -1076,6 +1382,1388 @@ def cmd_pull(cfg: Config, a) -> int:
     if errors and not a.quiet:  # scheduled pulls stay quiet: `fleet health` reports unreachable nodes
         print("\n".join(errors), file=sys.stderr)
     return 1 if errors and not a.quiet else 0
+
+
+# --------------------------------------------------------------------------- video checks and the report
+
+def check_line(chk) -> str:
+    """What fleet-check said about a job's video, in a few words ("" when it did not run)."""
+    if not isinstance(chk, dict):
+        return ""
+    probs = [str(p) for p in chk.get("problems") or []]
+    if chk.get("ok") is True:
+        return "video ok"
+    if chk.get("ok") is False:
+        more = f" (+{len(probs) - 1} more)" if len(probs) > 1 else ""
+        return f"CHECK: {probs[0] if probs else 'problems found'}{more}"
+    return f"not checked: {chk['skipped']}" if chk.get("skipped") else ""
+
+
+def describe_check(v: dict) -> list:
+    """fleet-check's verdict as lines for a person."""
+    facts = v.get("facts") if isinstance(v.get("facts"), dict) else {}
+    probs = [str(p) for p in v.get("problems") or []]
+    if v.get("ok") is True:
+        lines = ["the video looks right"]
+    elif v.get("ok") is False:
+        lines = [f"{len(probs)} problem(s):"] + [f"  - {p}" for p in probs]
+    else:
+        lines = [f"not checked: {v.get('skipped') or 'no verdict'}"]
+    bits = []
+    if isinstance(facts.get("seconds"), (int, float)):
+        bits.append(f"{facts['seconds']:.0f} s")
+    if facts.get("width") and facts.get("height"):
+        bits.append(f"{facts['width']}x{facts['height']}")
+    for key, unit in (("fps", " fps"), ("megabytes", " MB")):
+        if isinstance(facts.get(key), (int, float)):
+            bits.append(f"{facts[key]:g}{unit}")
+    codecs = "+".join(str(facts[k]) for k in ("video_codec", "audio_codec") if facts.get(k))
+    if codecs:
+        bits.append(codecs)
+    if isinstance(facts.get("loudest_db"), (int, float)):
+        bits.append(f"loudest moment {facts['loudest_db']:.0f} dB")
+    if v.get("video"):
+        lines.append(f"  {v['video']}" + (f": {', '.join(bits)}" if bits else ""))
+    for key in ("thumbnail", "title"):
+        if facts.get(key):
+            lines.append(f"  {key}: {facts[key]}")
+    return lines
+
+
+def cmd_check(cfg: Config, a) -> int:
+    n = one_node(cfg, a.node)
+    if not ID_RE.match(a.job_id):
+        raise FleetError("invalid job id")
+    r = remote(cfg, n, f"{worker(cfg, n)} check {a.job_id}", timeout=1200)
+    if r.returncode != 0:
+        raise FleetError(f"{n.name}: {text(r.stderr)[-300:] or f'exit {r.returncode}'}")
+    v = last_json(r.stdout, {})
+    if not isinstance(v, dict) or "ok" not in v:
+        raise FleetError(f"{n.name}: the check printed no verdict (run `fleet sync`)")
+    local = cfg.results_dir / n.name / a.job_id
+    if local.is_dir():  # already pulled: keep the new verdict with the results too
+        (local / "logs").mkdir(parents=True, exist_ok=True)
+        write_file(local / "logs" / "check.json", json.dumps(v) + "\n")
+    if a.json:
+        print(json.dumps(v, indent=2))
+    else:
+        lines = describe_check(v)
+        print(f"{n.name}/{a.job_id}: {lines[0]}")
+        print("\n".join(lines[1:]))
+    return 2 if v.get("ok") is False else 0
+
+
+def parse_stamp(s):
+    """A worker time stamp such as 2026-11-24T09:00:00Z as epoch seconds, or None."""
+    try:
+        return datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def job_label(j: dict) -> str:
+    t = j.get("title")
+    return f"\"{t}\" ({j['id']})" if t else j["id"]
+
+
+def report_data(cfg: Config, hours: float) -> dict:
+    """What the daily report says, as data."""
+    nodes = resolve_targets(cfg, None)
+    since = time.time() - hours * 3600
+    statuses = parallel(nodes, lambda n: fetch_status(cfg, n))
+    jobs, silent = fetch_jobs(cfg, nodes)
+    recent = [j for j in jobs if (parse_stamp(j.get("finished_at")) or 0) >= since]
+    per_node = []
+    for n in nodes:
+        st = statuses.get(n.name)
+        mine = [j for j in jobs if j["node"] == n.name]
+        done = [j for j in recent if j["node"] == n.name and j["state"] == "done"]
+        own = dedicated_channels(n)
+        per_node.append({
+            "node": n.name,
+            "channels": own or (["any channel"] if "all" in {channel_key(c) for c in channel_names(n)} else []),
+            "reachable": isinstance(st, dict) and bool(st.get("reachable")) and n.name not in silent,
+            "made": len(done),
+            "made_ok": sum(1 for j in done if (j.get("check") or {}).get("ok") is True),
+            "failed": sum(1 for j in recent if j["node"] == n.name and j["state"] == "failed"),
+            "running": sum(1 for j in mine if j["state"] == "running"),
+            "queued": sum(1 for j in mine if j["state"] in ("inbox", "outgoing")),
+            "limit_until": active_limit(st).get("until") if isinstance(st, dict) else None,
+            "off_duty": schedule_hold(st).get("reason") or None,
+        })
+    with_problems = [j for j in recent if j["state"] == "done" and (j.get("check") or {}).get("ok") is False]
+    failed = [j for j in recent if j["state"] == "failed"]
+    needs = list(health_problems(cfg, HEALTH_DEFAULTS, statuses).values())
+    plan = plan_summary(cfg, since)
+    if plan.get("error"):
+        needs.append(f"Week plan: {plan['error']}")
+    if plan.get("drafts"):
+        late = f" ({len(plan['late_drafts'])} of them are late)" if plan.get("late_drafts") else ""
+        needs.append(f"Week plan: {len(plan['drafts'])} topic(s) wait for your yes{late}. Answer \"approve all\" "
+                     f"or \"approve {compact_ids(plan['drafts'])}\"; see them with: fleet plan show")
+    for i in plan.get("not_queued", [])[:5]:
+        needs.append(f"Week plan: {plan_line(i)} could not be queued: {i.get('error')}")
+    needs += publish_needs(cfg)
+    return {"hours": hours, "nodes": per_node, "problems": with_problems, "failed": failed, "needs": needs,
+            "plan": {k: len(v) for k, v in plan.items() if isinstance(v, list)},
+            "published": publish_summary(cfg, since)}
+
+
+def report_text(d: dict) -> str:
+    lines = [f"Fleet report for {datetime.now().strftime('%a %d %b')}, the last {d['hours']:g} hours"]
+    for n in d["nodes"]:
+        chans = ", ".join(n["channels"]) or "no channel"
+        if not n["reachable"]:
+            lines.append(f"{n['node']} ({chans}): did not answer")
+            continue
+        parts = [f"{n['made']} video(s) made"]
+        parts += [f"{n['failed']} failed"] if n["failed"] else []
+        parts += [f"{n['running']} running"] if n["running"] else []
+        parts += [f"{n['queued']} queued"] if n["queued"] else []
+        if n.get("limit_until"):
+            parts.append(f"usage limit until {short_time(n['limit_until'])}")
+        if n.get("off_duty"):
+            parts.append(n["off_duty"])
+        lines.append(f"{n['node']} ({chans}): {', '.join(parts)}")
+    if d["problems"]:
+        lines.append("Videos with problems:")
+        for j in d["problems"][:8]:
+            probs = "; ".join(str(p) for p in (j.get("check") or {}).get("problems") or [])
+            lines.append(f"- {j['node']} {job_label(j)}: {probs[:240]}. Again: fleet retry {j['node']} {j['id']}")
+        if len(d["problems"]) > 8:
+            lines.append(f"- and {len(d['problems']) - 8} more (fleet jobs)")
+    if d["failed"]:
+        lines.append("Failed:")
+        for j in d["failed"][:8]:
+            lines.append(f"- {j['node']} {job_label(j)}: {j.get('reason') or 'failed'}. "
+                         f"Again: fleet retry {j['node']} {j['id']}")
+        if len(d["failed"]) > 8:
+            lines.append(f"- and {len(d['failed']) - 8} more (fleet jobs --state failed)")
+    plan = d.get("plan") or {}
+    if plan.get("queued") or plan.get("approved_ahead"):
+        lines.append(f"Week plan: {plan.get('queued', 0)} video(s) queued, {plan.get('approved_ahead', 0)} approved "
+                     f"and waiting for their day")
+    sent = d.get("published") or {}
+    if sent:
+        words = {"youtube": "YouTube draft(s)", "tiktok": "TikTok inbox upload(s)", "instagram": "Instagram Reel(s)"}
+        lines.append("Published: " + ", ".join(f"{n} {words.get(k, k)}" for k, n in sorted(sent.items())))
+    if d["needs"]:
+        lines.append("Needs you:")
+        lines += [f"- {x}" for x in d["needs"][:12]]
+    elif not d["problems"] and not d["failed"]:
+        lines.append("Nothing needs you.")
+    return "\n".join(lines)
+
+
+def cmd_report(cfg: Config, a) -> int:
+    d = report_data(cfg, a.hours)
+    print(json.dumps(d, indent=2, default=str) if a.json else report_text(d))
+    return 0
+
+
+# --------------------------------------------------------------------------- the week plan
+
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+PLAN_KEEP_DAYS = 60  # queued and rejected items older than this leave plan.json
+PLAN_FIELDS = re.compile(r"\{(title|brief|day|channel)\}")
+DEFAULT_PLAN_JOB = {
+    "prompt": (
+        "Make one video for the channel \"{channel}\" on the topic in ./topic.md: \"{title}\". "
+        "Write the script first (./output/script.md), then produce the video with the tools on this machine "
+        "(ffmpeg, ImageMagick, Python). Deliverables, all in ./output/: video.mp4, thumbnail.png (1280x720), "
+        "script.md, and metadata.json with title, description and tags. Nobody can answer questions during "
+        "the run: make reasonable choices and list them in your final summary."),
+    "timeout_minutes": 180,
+    "max_turns": 300,
+    "max_retries": 1,
+}
+
+
+def plan_file(cfg: Config) -> Path:
+    return cfg.path.parent / "plan.json"
+
+
+def channels_dir(cfg: Config) -> Path:
+    return cfg.path.parent / "channels"
+
+
+def channel_file(cfg: Config, channel: str):
+    """The channel's own job file (channels/<channel>.json next to fleet.ini), or None."""
+    p = channels_dir(cfg) / f"{channel_key(channel)}.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8-sig"))
+        if isinstance(d, dict) and "prompt_file" in d and "prompt" not in d:
+            d["prompt"] = (p.parent / d.pop("prompt_file")).read_text(encoding="utf-8-sig")
+    except (OSError, ValueError) as e:
+        raise FleetError(f"{p}: {e}") from None
+    if not isinstance(d, dict):
+        raise FleetError(f"{p} should hold one JSON object, like a job file")
+    return d
+
+
+def plan_channels(cfg: Config) -> list:
+    """The channels the week plan covers: the ones a VPS makes (`channels` in fleet.ini),
+    and the ones with a file in channels/."""
+    names = {}
+    for n in cfg.nodes.values():
+        if n.enabled:
+            for c in dedicated_channels(n):
+                names.setdefault(channel_key(c), c)
+    if channels_dir(cfg).is_dir():
+        for p in sorted(channels_dir(cfg).glob("*.json")):
+            try:
+                c = json.loads(p.read_text(encoding="utf-8-sig")).get("channel")
+            except (OSError, ValueError, AttributeError):
+                c = None
+            names.setdefault(channel_key(c if isinstance(c, str) and c.strip() else p.stem),
+                             c if isinstance(c, str) and c.strip() else p.stem)
+    return sorted(names.values(), key=str.casefold)
+
+
+def channel_schedule(cfg: Config, channel: str) -> tuple:
+    """(weekdays as 0 for Monday to 6 for Sunday, the time as HH:MM, ideas for topics) from
+    the "plan" part of the channel's file: every day at 09:00 when it has none."""
+    base = channel_file(cfg, channel) or {}
+    plan = base.get("plan") if isinstance(base.get("plan"), dict) else {}
+    days = plan.get("days", "daily")
+    if isinstance(days, str):
+        days = {"daily": WEEKDAYS, "weekdays": WEEKDAYS[:5], "weekends": WEEKDAYS[5:]}.get(
+            days.strip().lower(), days.split(","))
+    wanted = {str(x).strip().lower()[:3] for x in days} if isinstance(days, (list, tuple)) else set()
+    t = str(plan.get("time", "09:00"))
+    if not TIME_RE.match(t):
+        raise FleetError(f"{channels_dir(cfg) / (channel_key(channel) + '.json')}: plan time must be HH:MM, not {t!r}")
+    ideas = plan.get("ideas", "")
+    return [k for k, d in enumerate(WEEKDAYS) if d in wanted], t, ideas if isinstance(ideas, str) else ""
+
+
+def week_range(which: str) -> tuple:
+    """The days of this week (from today to Sunday) or of next week (Monday to Sunday)."""
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    if which == "next":
+        return monday + timedelta(days=7), monday + timedelta(days=13)
+    return today, monday + timedelta(days=6)
+
+
+def load_plan(cfg: Config) -> dict:
+    p = plan_file(cfg)
+    if not p.exists():
+        return {"version": 1, "next_id": 1, "items": []}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise FleetError(f"{p} cannot be read ({e}); fix it or move it away") from None
+    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+        raise FleetError(f"{p} is not a week plan")
+    d["items"] = [i for i in d["items"] if isinstance(i, dict) and isinstance(i.get("id"), int)]
+    d["next_id"] = max([int(number(d.get("next_id"), 1))] + [i["id"] + 1 for i in d["items"]])
+    return d
+
+
+def save_plan(cfg: Config, plan: dict) -> None:
+    keep = (datetime.now().date() - timedelta(days=PLAN_KEEP_DAYS)).isoformat()
+    plan["items"] = [i for i in plan["items"] if i.get("status") in ("draft", "approved") or i.get("day", "") >= keep]
+    p = plan_file(cfg)
+    tmp = p.with_name(p.name + ".tmp")
+    write_file(tmp, json.dumps(plan, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)
+
+
+@contextlib.contextmanager
+def plan_locked(cfg: Config):
+    """Hold the week plan's lock: the hourly run and an answer from Telegram can come at once."""
+    lock = plan_file(cfg).with_name("plan.lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + 120
+    while True:
+        try:
+            os.close(os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 900:  # left behind by a crash
+                    lock.unlink()
+                    continue
+            except OSError:
+                pass
+            if time.time() > deadline:
+                raise FleetError(f"the week plan is busy ({lock} exists); try again in a minute") from None
+            time.sleep(0.25)
+    try:
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def plan_due(i: dict) -> datetime:
+    try:
+        return datetime.strptime(f"{i.get('day')} {i.get('time') or '09:00'}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return datetime.max
+
+
+def plan_line(i: dict) -> str:
+    when = plan_due(i)
+    day = when.strftime("%a %d %b %H:%M") if when != datetime.max else str(i.get("day"))
+    return f"#{i['id']} {day} {i.get('channel')}: \"{i.get('title')}\""
+
+
+def compact_ids(items: list) -> str:
+    """[3, 4, 5, 7] -> "3-5,7" """
+    ids, out = sorted({i["id"] for i in items}), []
+    for k in ids:
+        if out and k == out[-1][1] + 1:
+            out[-1][1] = k
+        else:
+            out.append([k, k])
+    return ",".join(f"{a}-{b}" if b > a else f"{a}" for a, b in out)
+
+
+def plan_ids(specs: list, plan: dict) -> list:
+    """Plan numbers from "12", "12,14", "#12", "12-15" or "all" (every draft)."""
+    out = []
+    for spec in specs:
+        for part in re.split(r"[\s,]+", str(spec)):
+            part = part.strip().lstrip("#")
+            if not part:
+                continue
+            if part.lower() == "all":
+                out += [i["id"] for i in plan["items"] if i.get("status") == "draft"]
+            elif re.match(r"^\d+-\d+$", part):
+                lo, hi = sorted(map(int, part.split("-")))
+                if hi - lo > 1000:
+                    raise FleetError(f"{part}: too many at once")
+                out += range(lo, hi + 1)
+            elif part.isdigit():
+                out.append(int(part))
+            else:
+                raise FleetError(f"{part!r} is not a plan number (use 12, 12,14, 12-15 or all)")
+    return list(dict.fromkeys(out))
+
+
+def plan_item(cfg: Config, raw, where: str) -> dict:
+    """A checked plan item {channel, day, time, title, brief} from what Hermes or the owner gave."""
+    def bad(msg):
+        raise FleetError(f"{where}: {msg}")
+    if not isinstance(raw, dict):
+        bad("each item must be an object with channel, day, title and brief")
+    ch = raw.get("channel")
+    if not isinstance(ch, str) or not ch.strip() or len(ch) > 200:
+        bad("needs a \"channel\"")
+    known = {channel_key(c): c for c in plan_channels(cfg)}
+    if channel_key(ch) not in known and not channel_home([n for n in cfg.nodes.values() if n.enabled], ch)[0]:
+        bad(f"no VPS makes videos for channel {ch!r} (the channels: {', '.join(known.values()) or 'none yet'})")
+    ch = known.get(channel_key(ch), ch.strip())
+    try:
+        day = datetime.strptime(str(raw.get("day")), "%Y-%m-%d").date()
+    except ValueError:
+        bad(f"\"day\" must be a date like 2026-12-01, not {raw.get('day')!r}")
+    if day < datetime.now().date():
+        bad(f"{day.isoformat()} is in the past")
+    t = str(raw.get("time") or channel_schedule(cfg, ch)[1])
+    if not TIME_RE.match(t):
+        bad(f"\"time\" must be HH:MM like 09:00, not {t!r}")
+    title, brief = raw.get("title"), raw.get("brief") or ""
+    if not isinstance(title, str) or not title.strip() or len(title) > 200:
+        bad("needs a \"title\" of at most 200 characters")
+    if not isinstance(brief, str) or len(brief) > 4000:
+        bad("\"brief\" must be text of at most 4000 characters")
+    return {"channel": ch, "day": day.isoformat(), "time": t, "title": title.strip(), "brief": brief.strip()}
+
+
+def plan_job(cfg: Config, i: dict) -> dict:
+    """The job for a plan item: the channel's own job file (channels/<channel>.json), or the
+    default, with {title}, {brief}, {day} and {channel} filled in and the topic in topic.md."""
+    job = json.loads(json.dumps(channel_file(cfg, i["channel"]) or {}))  # a deep copy
+    for key in ("plan", "publish", "id", "node", "submitted_at"):
+        job.pop(key, None)
+    if not (isinstance(job.get("prompt"), str) and job["prompt"].strip()):
+        job["prompt"] = DEFAULT_PLAN_JOB["prompt"]  # a channel file may hold only its days and time
+    for key, value in DEFAULT_PLAN_JOB.items():
+        job.setdefault(key, value)
+    values = {"title": i["title"], "brief": i.get("brief") or "", "day": i["day"], "channel": i["channel"]}
+    fill = lambda t: PLAN_FIELDS.sub(lambda m: values[m.group(1)], t)  # noqa: E731 - one pass, no repeats
+    prompt = job.get("prompt") if isinstance(job.get("prompt"), str) else ""
+    if "{title}" not in prompt:
+        prompt = (prompt.rstrip() + "\n\n" if prompt.strip() else "") + "The topic of this video is in ./topic.md: \"{title}\"."
+    job["prompt"] = fill(prompt)
+    files = [f for f in job.get("files") or [] if isinstance(f, dict)]
+    for f in files:
+        if f.get("encoding", "utf-8") == "utf-8" and isinstance(f.get("content"), str):
+            f["content"] = fill(f["content"])
+    if not any(f.get("path") == "topic.md" for f in files):
+        files.append({"path": "topic.md", "content": fill("# {title}\n\nChannel: {channel}\nDay: {day}\n\n{brief}\n")})
+    job.update(files=files, channel=i["channel"], title=i["title"], plan_id=i["id"],
+               id=i.get("job_id") or make_job_id(i["channel"]))
+    return validate_job(job, f"plan item #{i['id']} ({channels_dir(cfg) / (channel_key(i['channel']) + '.json')})")
+
+
+def plan_show(cfg: Config, a) -> int:
+    items = load_plan(cfg)["items"]
+    if a.week in ("this", "next"):
+        lo, hi = (d.isoformat() for d in week_range(a.week))
+        items = [i for i in items if lo <= i.get("day", "") <= hi]
+    elif a.week != "all":
+        today = datetime.now().date().isoformat()
+        items = [i for i in items if i.get("day", "") >= today or i.get("status") in ("draft", "approved")]
+    if a.status:
+        items = [i for i in items if i.get("status") == a.status]
+    if a.channel:
+        items = [i for i in items if channel_key(i.get("channel", "")) == channel_key(a.channel)]
+    items.sort(key=lambda i: (plan_due(i), str(i.get("channel")).casefold(), i["id"]))
+    if a.json:
+        print(json.dumps(items, indent=2, ensure_ascii=False))
+        return 0
+    if not items:
+        print("nothing planned" + (f" for {a.week} week" if a.week in ("this", "next") else ""))
+        return 0
+    day = None
+    for i in items:
+        when = plan_due(i)
+        if when.date() != day:
+            day = when.date()
+            print(when.strftime("%A %d %B") if when != datetime.max else str(i.get("day")))
+        note = {"queued": f" (queued on {i.get('node')} as {i.get('job_id')})"}.get(i.get("status"), "")
+        if i.get("error") and i.get("status") == "approved":
+            note = f" (not queued yet: {i['error'][:120]})"
+        print(f"  #{i['id']} {i.get('time')} {i.get('channel')}: \"{i.get('title')}\" [{i.get('status')}]{note}")
+    drafts = [i for i in items if i.get("status") == "draft"]
+    if drafts:
+        print(f"\n{len(drafts)} topic(s) wait for the owner's yes: fleet plan approve {compact_ids(drafts)} (or all)")
+    return 0
+
+
+def plan_slots(cfg: Config, a) -> int:
+    which = a.week if a.week in ("this", "next") else "next"
+    lo, hi = week_range(which)
+    taken = {(channel_key(i.get("channel", "")), i.get("day")) for i in load_plan(cfg)["items"]
+             if i.get("status") != "rejected"}
+    now, slots = datetime.now(), []
+    for ch in plan_channels(cfg):
+        if a.channel and channel_key(ch) != channel_key(a.channel):
+            continue
+        days, t, ideas = channel_schedule(cfg, ch)
+        d = lo
+        while d <= hi:
+            when = datetime.strptime(f"{d.isoformat()} {t}", "%Y-%m-%d %H:%M")
+            if d.weekday() in days and (channel_key(ch), d.isoformat()) not in taken and when > now:
+                slots.append({"channel": ch, "day": d.isoformat(), "weekday": d.strftime("%a"), "time": t,
+                              "ideas": ideas})
+            d += timedelta(days=1)
+    if a.json:
+        print(json.dumps(slots, indent=2, ensure_ascii=False))
+        return 0
+    if not slots:
+        print(f"no open slots {which} week" + ("" if plan_channels(cfg) else
+              f": no channels yet (set `channels` for each VPS in {cfg.path})"))
+        return 0
+    for s in slots:
+        print(f"{s['weekday']} {s['day']} {s['time']}  {s['channel']}" + (f"  (ideas: {s['ideas'][:100]})" if s["ideas"] else ""))
+    print("\nFill them with: fleet plan import FILE.json (a JSON list of {\"channel\", \"day\", \"title\", \"brief\"})")
+    return 0
+
+
+def plan_add_items(cfg: Config, new: list) -> int:
+    added, skipped = [], []
+    with plan_locked(cfg):
+        plan = load_plan(cfg)
+        for it in new:
+            dup = next((i for i in plan["items"] if i.get("status") != "rejected" and i.get("day") == it["day"]
+                        and i.get("time") == it["time"] and channel_key(i.get("channel", "")) == channel_key(it["channel"])),
+                       None)
+            if dup:
+                skipped.append((it, dup))
+                continue
+            it.update(id=plan["next_id"], status="draft", created_at=now_iso())
+            plan["next_id"] += 1
+            plan["items"].append(it)
+            added.append(it)
+        save_plan(cfg, plan)
+    for it in added:
+        print(f"added {plan_line(it)} [draft]")
+    for it, dup in skipped:
+        print(f"skipped {it['channel']} {it['day']} {it['time']}: already planned as #{dup['id']} \"{dup.get('title')}\"")
+    if added:
+        print(f"\n{len(added)} topic(s) wait for the owner's yes: fleet plan approve {compact_ids(added)}")
+    return 0
+
+
+def plan_import(cfg: Config, a) -> int:
+    if len(a.args) != 1:
+        raise FleetError("usage: fleet plan import FILE.json   (or - to read standard input)")
+    src = a.args[0]
+    try:
+        raw = sys.stdin.read() if src == "-" else Path(os.path.expanduser(src)).read_text(encoding="utf-8-sig")
+        data = json.loads(raw)
+    except (OSError, ValueError) as e:
+        raise FleetError(f"{src}: {e}") from None
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        data = data["items"]
+    if not isinstance(data, list) or not data:
+        raise FleetError(f"{src}: should hold a JSON list of {{\"channel\", \"day\", \"title\", \"brief\"}}")
+    return plan_add_items(cfg, [plan_item(cfg, x, f"{src} item {k + 1}") for k, x in enumerate(data)])
+
+
+def plan_add(cfg: Config, a) -> int:
+    raw = {"channel": a.channel, "day": a.day, "time": a.time, "title": a.title, "brief": a.brief}
+    return plan_add_items(cfg, [plan_item(cfg, raw, "fleet plan add")])
+
+
+def plan_set_status(cfg: Config, a, new: str) -> int:
+    done, notes = [], []
+    with plan_locked(cfg):
+        plan = load_plan(cfg)
+        ids = plan_ids(a.args, plan)
+        if not ids:
+            raise FleetError(f"name the plan numbers: fleet plan {a.action} 12 13, 12-15" +
+                             (" or all" if new == "approved" else ""))
+        by_id = {i["id"]: i for i in plan["items"]}
+        for k in ids:
+            i = by_id.get(k)
+            if i is None:
+                notes.append(f"#{k}: no such plan item")
+            elif i.get("status") == "queued":
+                notes.append(f"#{k} is already queued on {i.get('node')} as {i.get('job_id')}")
+            elif i.get("status") == new:
+                notes.append(f"#{k} is already {new}")
+            else:
+                i["status"], i[f"{new}_at"] = new, now_iso()
+                i.pop("error", None)
+                done.append(i)
+        save_plan(cfg, plan)
+    for i in done:
+        print(f"{new} {plan_line(i)}")
+    if notes:
+        print("\n".join(notes))
+    if new == "approved" and done:
+        print("Each one is queued on its channel's VPS at its time (the hourly fleet-plan job does it).")
+    return 0 if done or not notes else 1
+
+
+def plan_edit(cfg: Config, a) -> int:
+    if len(a.args) != 1 or not str(a.args[0]).lstrip("#").isdigit():
+        raise FleetError("usage: fleet plan edit NUMBER [--title T] [--brief B] [--day YYYY-MM-DD] [--time HH:MM] [--channel C]")
+    k = int(str(a.args[0]).lstrip("#"))
+    with plan_locked(cfg):
+        plan = load_plan(cfg)
+        i = next((x for x in plan["items"] if x["id"] == k), None)
+        if i is None:
+            raise FleetError(f"#{k}: no such plan item")
+        if i.get("status") == "queued":
+            raise FleetError(f"#{k} is already queued on {i.get('node')} as {i.get('job_id')}: change that job instead")
+        changed = dict(i, **{key: getattr(a, key) for key in ("channel", "day", "time", "title", "brief")
+                             if getattr(a, key) is not None})
+        i.update(plan_item(cfg, changed, f"#{k}"), edited_at=now_iso())
+        save_plan(cfg, plan)
+    print(f"changed {plan_line(i)} [{i.get('status')}]")
+    return 0
+
+
+def plan_remove(cfg: Config, a) -> int:
+    with plan_locked(cfg):
+        plan = load_plan(cfg)
+        ids = set(plan_ids(a.args, plan))
+        gone = [i for i in plan["items"] if i["id"] in ids and i.get("status") != "queued"]
+        kept = [i for i in plan["items"] if i["id"] in ids and i.get("status") == "queued"]
+        plan["items"] = [i for i in plan["items"] if i not in gone]
+        save_plan(cfg, plan)
+    for i in gone:
+        print(f"removed {plan_line(i)}")
+    for i in kept:
+        print(f"kept #{i['id']}: it is already queued on {i.get('node')} as {i.get('job_id')}")
+    return 0 if gone or not ids else 1
+
+
+def plan_run(cfg: Config, a) -> int:
+    """Queue the approved items whose time has come, on their channel's VPS."""
+    lines, now = [], datetime.now()
+    with plan_locked(cfg):
+        plan = load_plan(cfg)
+        due = [i for i in plan["items"] if i.get("status") == "approved" and plan_due(i) <= now]
+        for i in due:  # the job id is kept before the job is sent: a run that stops half way cannot queue it twice
+            i.setdefault("job_id", make_job_id(i["channel"]))
+        if due and not a.dry_run:
+            save_plan(cfg, plan)
+        ready = []
+        for i in due:
+            try:
+                ready.append((i, plan_job(cfg, i)))
+            except FleetError as e:
+                i["error"], i["tries"] = str(e)[:300], i.get("tries", 0) + 1
+                lines.append(f"NOT QUEUED {plan_line(i)}: {e}")
+        if a.dry_run:
+            for _, job in ready:
+                print(json.dumps(job, indent=2, ensure_ascii=False))
+            return 0
+        if ready:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                dispatch_jobs(cfg, [job for _, job in ready], "auto", False, True)
+            queued = {q["id"]: q for q in last_json(out.getvalue().encode("utf-8"), [])}
+            said = [x.strip() for x in err.getvalue().splitlines() if x.strip()]
+            for i, job in ready:
+                about = "; ".join(x for x in said if job["id"] in x)
+                q = queued.get(job["id"])
+                again = re.search(rf"job id {re.escape(job['id'])} already exists on ([a-z0-9-]+)", about)
+                if not q and again:  # an earlier run sent it, then stopped before it could say so
+                    q, about = {"id": job["id"], "node": again.group(1)}, ""
+                if q:
+                    i.update(status="queued", queued_at=now_iso(), job_id=q["id"], node=q["node"])
+                    i.pop("error", None)
+                    lines.append(f"queued {plan_line(i)} on {q['node']} as {q['id']}" + (f" ({about})" if about else ""))
+                    continue
+                i["error"], i["tries"] = (about or "; ".join(said) or "it was not queued")[:300], i.get("tries", 0) + 1
+                if not a.quiet or i["tries"] == 1 or i["tries"] % 6 == 0:  # not every hour while a VPS is down
+                    lines.append(f"NOT QUEUED {plan_line(i)}: {i['error']}. It is tried again every hour.")
+        save_plan(cfg, plan)
+    if lines:
+        print("Week plan:\n" + "\n".join(lines) if a.quiet else "\n".join(lines))
+    elif not a.quiet:
+        print("nothing is due yet")
+    return 0
+
+
+def plan_summary(cfg: Config, since: float) -> dict:
+    """The week plan's part of the daily report."""
+    try:
+        items = load_plan(cfg)["items"]
+    except FleetError as e:
+        return {"error": str(e)}
+    now = datetime.now()
+    drafts = [i for i in items if i.get("status") == "draft"]
+    return {
+        "drafts": drafts,
+        "late_drafts": [i for i in drafts if plan_due(i) <= now],
+        "approved_ahead": [i for i in items if i.get("status") == "approved" and plan_due(i) > now],
+        "not_queued": [i for i in items if i.get("status") == "approved" and i.get("error")],
+        "queued": [i for i in items if i.get("status") == "queued" and (parse_stamp(i.get("queued_at")) or 0) >= since],
+    }
+
+
+def cmd_plan(cfg: Config, a) -> int:
+    if a.action == "add":
+        missing = [f"--{k}" for k in ("channel", "day", "title") if not getattr(a, k)]
+        if missing:
+            raise FleetError(f"fleet plan add needs {', '.join(missing)}")
+    actions = {"show": plan_show, "slots": plan_slots, "add": plan_add, "import": plan_import, "edit": plan_edit,
+               "remove": plan_remove, "run": plan_run,
+               "approve": lambda c, x: plan_set_status(c, x, "approved"),
+               "reject": lambda c, x: plan_set_status(c, x, "rejected")}
+    return actions[a.action](cfg, a)
+
+
+# --------------------------------------------------------------------------- publishing
+
+PUBLISH_PLATFORMS = ("youtube", "tiktok", "instagram")
+PUBLISH_API = {  # FLEET_PUBLISH_FAKE_API points them all at one local server, for the tests
+    "google_auth": "https://accounts.google.com/o/oauth2/v2/auth",
+    "google_token": "https://oauth2.googleapis.com/token",
+    "youtube_upload": "https://www.googleapis.com/upload/youtube/v3",
+    "tiktok_auth": "https://www.tiktok.com/v2/auth/authorize/",
+    "tiktok_api": "https://open.tiktokapis.com/v2",
+    "instagram_api": "https://graph.instagram.com/v25.0",
+    "instagram_root": "https://graph.instagram.com",
+}
+YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+TIKTOK_SCOPES = "user.info.basic,video.upload"
+TIKTOK_PORT = 8741          # the TikTok app's redirect URI: http://127.0.0.1:8741/callback/
+YOUTUBE_CHUNK = 8 * 2**20   # resumable upload pieces: a multiple of 256 KiB
+TIKTOK_CHUNK = 10_000_000   # TikTok wants pieces of 5 to 64 MB; a smaller video goes whole
+INSTAGRAM_WAIT = 300        # Meta: check a container once a minute, for no more than 5 minutes
+VIDEO_MIME = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+THUMB_STEMS = ("thumbnail", "thumb", "cover", "poster")
+
+
+def api(key: str) -> str:
+    fake = os.environ.get("FLEET_PUBLISH_FAKE_API", "")
+    return f"{fake.rstrip('/')}/{key}" if fake else PUBLISH_API[key]
+
+
+def poll_seconds(default: float) -> float:
+    return number(os.environ.get("FLEET_PUBLISH_POLL_SECONDS"), default)
+
+
+def random_token(n: int = 32) -> str:
+    return base64.urlsafe_b64encode(os.urandom(n)).rstrip(b"=").decode("ascii")
+
+
+def api_message(body: bytes) -> str:
+    """The reason in a platform's error answer, short."""
+    try:
+        d = json.loads(body or b"{}")
+    except ValueError:
+        return text(body)[:200] or "no details"
+    err = d.get("error") if isinstance(d, dict) else None
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("error_user_msg") or err.get("code") or err)[:300]
+    if isinstance(d, dict) and (d.get("error_description") or err):
+        return str(d.get("error_description") or err)[:300]
+    return text(body)[:200]
+
+
+def http_call(method: str, url: str, *, headers=None, data=None, form=None, js=None, ok=(200, 201),
+              timeout: int = 120) -> tuple:
+    """(status, headers with lower-case names, body). Any other status is a FleetError."""
+    import http.client
+    import urllib.error
+    import urllib.request
+    hdrs = dict(headers or {})
+    if form is not None:
+        data = urlencode(form).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif js is not None:
+        data = json.dumps(js).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/json; charset=UTF-8")
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    where = url.split("?")[0]
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            status, rh, body = r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        status, rh, body = e.code, e.headers, e.read()
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+        raise FleetError(f"{method} {where}: {getattr(e, 'reason', e)}") from None
+    if status not in ok:
+        raise FleetError(f"{method} {where}: HTTP {status}: {api_message(body)}")
+    return status, {k.lower(): v for k, v in (rh or {}).items()}, body
+
+
+def read_json(path: Path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return default
+
+
+def publish_dir(cfg: Config) -> Path:
+    return cfg.secrets_dir / "publish"
+
+
+def account_file(cfg: Config, platform: str, channel: str) -> Path:
+    return publish_dir(cfg) / f"{platform}-{channel_key(channel)}.json"
+
+
+def save_private(cfg: Config, path: Path, data: dict) -> None:
+    fresh = not publish_dir(cfg).is_dir()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    write_file(tmp, json.dumps(data, indent=2) + "\n")
+    if not IS_WINDOWS:
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    if fresh or not IS_WINDOWS:
+        restrict_dir(path.parent)
+
+
+def app_keys(cfg: Config, platform: str) -> dict:
+    """The owner's own app on the platform: {client_id/client_key, client_secret}."""
+    d = publish_dir(cfg)
+    if platform == "youtube":
+        p = d / "youtube-client.json"
+        raw = read_json(p, {})
+        c = (raw.get("installed") or raw.get("web") or raw) if isinstance(raw, dict) else {}
+        if not (isinstance(c, dict) and c.get("client_id") and c.get("client_secret")):
+            if not d.is_dir():  # ready for the file, and private like the rest of the secrets
+                d.mkdir(parents=True, exist_ok=True)
+                restrict_dir(d)
+            raise FleetError(f"no Google app yet: save its OAuth client file (a Desktop app) as {p}. "
+                             "docs/operations/publishing.md shows the steps")
+        return c
+    p = d / "tiktok-app.json"
+    if not p.exists():
+        save_private(cfg, p, {"client_key": "", "client_secret": ""})
+    c = read_json(p, {})
+    if not (isinstance(c, dict) and c.get("client_key") and c.get("client_secret")):
+        raise FleetError(f"fill in your TikTok app's client key and secret in {p}. "
+                         "docs/operations/publishing.md shows the steps")
+    return c
+
+
+def pkce() -> tuple:
+    """(verifier, base64url SHA-256 challenge as RFC 7636 has it)"""
+    verifier = random_token(48)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return verifier, base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def browser_sign_in(make_url, state: str, port: int = 0, path: str = "/", timeout: int = 600) -> tuple:
+    """Open the platform's sign-in page and wait until it sends the browser back to this
+    computer (http://127.0.0.1:PORT/PATH). Returns (code, the redirect address)."""
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    got = {}
+
+    class Back(BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path.rstrip("/") != path.rstrip("/") or not ("code" in q or "error" in q):
+                self.send_response(404)
+                self.end_headers()
+                return
+            got.update(q)
+            good = "code" in q and q.get("state") == state
+            msg = ("Signed in. You can close this tab and go back to the terminal." if good else
+                   "The sign-in did not work. Go back to the terminal to see why.")
+            body = f"<!doctype html><meta charset=utf-8><title>fleet</title><p>{msg}</p>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    try:
+        srv = HTTPServer(("127.0.0.1", port), Back)
+    except OSError as e:
+        raise FleetError(f"cannot wait for the sign-in on port {port} ({e}); close what uses it or pass --port") from None
+    redirect = f"http://127.0.0.1:{srv.server_address[1]}{path}"
+    url = make_url(redirect)
+    print(f"Opening the sign-in page in your browser. If it does not open, copy this link into it:\n  {url}")
+    webbrowser.open(url)
+    srv.timeout = 1
+    deadline = time.time() + timeout
+    try:
+        while not got and time.time() < deadline:
+            srv.handle_request()
+    finally:
+        srv.server_close()
+    if not got:
+        raise FleetError("the sign-in page did not answer within 10 minutes; run the command again")
+    if got.get("error"):
+        raise FleetError(f"the sign-in was refused: {got.get('error_description') or got['error']}")
+    if got.get("state") != state:
+        raise FleetError("the answer did not come from this sign-in; run the command again")
+    return got["code"], redirect
+
+
+def yes_no(answer, question: str) -> bool:
+    if answer is None:
+        if not sys.stdin.isatty():
+            raise FleetError(f"{question} Answer with --made-for-kids yes or --made-for-kids no")
+        answer = input(f"{question} (yes/no): ")
+    a = str(answer).strip().lower()
+    if a in ("y", "yes", "true", "1"):
+        return True
+    if a in ("n", "no", "false", "0"):
+        return False
+    raise FleetError(f"{question} Answer yes or no, not {answer!r}")
+
+
+def login_youtube(cfg: Config, a, channel: str) -> dict:
+    app = app_keys(cfg, "youtube")
+    kids = yes_no(a.made_for_kids, f"Are the videos of {channel} made for kids (YouTube asks, by law)?")
+    verifier, challenge = pkce()
+    state = random_token(16)
+    code, redirect = browser_sign_in(lambda r: api("google_auth") + "?" + urlencode({
+        "client_id": app["client_id"], "redirect_uri": r, "response_type": "code", "scope": YOUTUBE_SCOPE,
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
+        "access_type": "offline", "prompt": "consent"}), state, a.port or 0)
+    _, _, body = http_call("POST", api("google_token"), form={
+        "code": code, "client_id": app["client_id"], "client_secret": app["client_secret"], "redirect_uri": redirect,
+        "grant_type": "authorization_code", "code_verifier": verifier})
+    tok = json.loads(body)
+    if not tok.get("refresh_token"):
+        raise FleetError("Google gave no lasting sign-in (refresh token); remove the app's access at "
+                         "myaccount.google.com/permissions and sign in again")
+    return {"refresh_token": tok["refresh_token"], "access_token": tok.get("access_token"),
+            "expires_at": time.time() + number(tok.get("expires_in"), 0), "made_for_kids": kids,
+            "synthetic_media": not a.no_ai_label}
+
+
+def login_tiktok(cfg: Config, a, channel: str) -> dict:
+    app = app_keys(cfg, "tiktok")
+    verifier = random_token(48)
+    challenge = hashlib.sha256(verifier.encode("ascii")).hexdigest()  # TikTok's desktop kit wants hex
+    state = random_token(16)
+    code, redirect = browser_sign_in(lambda r: api("tiktok_auth") + "?" + urlencode({
+        "client_key": app["client_key"], "scope": TIKTOK_SCOPES, "response_type": "code", "redirect_uri": r,
+        "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}),
+        state, a.port or TIKTOK_PORT, "/callback/")
+    _, _, body = http_call("POST", api("tiktok_api") + "/oauth/token/", form={
+        "client_key": app["client_key"], "client_secret": app["client_secret"], "code": code,
+        "grant_type": "authorization_code", "redirect_uri": redirect, "code_verifier": verifier})
+    tok = json.loads(body)
+    if not tok.get("access_token"):
+        raise FleetError(f"TikTok did not sign you in: {api_message(body)}")
+    if "video.upload" not in str(tok.get("scope", "")):
+        print("note: TikTok did not grant video.upload; uploads work once TikTok approves your app for it",
+              file=sys.stderr)
+    return tiktok_tokens(tok, {"open_id": tok.get("open_id")})
+
+
+def tiktok_tokens(tok: dict, acct: dict) -> dict:
+    now = time.time()
+    acct.update(access_token=tok["access_token"], expires_at=now + number(tok.get("expires_in"), 0),
+                refresh_token=tok.get("refresh_token") or acct.get("refresh_token"), scope=tok.get("scope"))
+    if tok.get("refresh_expires_in"):
+        acct["refresh_expires_at"] = now + number(tok["refresh_expires_in"], 0)
+    return acct
+
+
+def login_instagram(cfg: Config, a, channel: str) -> dict:
+    import getpass
+    print("Paste the access token from your Meta app (Instagram > API setup with Instagram login > Generate\n"
+          "token). It is not shown while you paste it.")
+    token = getpass.getpass("Instagram access token: ").strip()
+    if not token:
+        raise FleetError("no token given")
+    try:
+        _, _, body = http_call("GET", api("instagram_api") + "/me?" + urlencode(
+            {"fields": "user_id,username", "access_token": token}))
+        me = json.loads(body)
+    except FleetError as e:
+        if not a.ig_user_id:
+            raise FleetError(f"Instagram did not accept the token: {e}") from None
+        me = {}
+    user_id = a.ig_user_id or me.get("user_id") or me.get("id")
+    if not user_id:
+        raise FleetError("Instagram did not say which account the token is for; pass --ig-user-id")
+    return {"access_token": token, "user_id": str(user_id), "username": me.get("username"),
+            "refreshed_at": time.time()}
+
+
+def google_access(cfg: Config, path: Path, acct: dict) -> str:
+    if acct.get("access_token") and number(acct.get("expires_at"), 0) > time.time() + 300:
+        return acct["access_token"]
+    app = app_keys(cfg, "youtube")
+    try:
+        _, _, body = http_call("POST", api("google_token"), form={
+            "client_id": app["client_id"], "client_secret": app["client_secret"],
+            "refresh_token": acct.get("refresh_token", ""), "grant_type": "refresh_token"})
+    except FleetError as e:
+        raise FleetError(f"{e}. Sign in again: fleet publish --login youtube --channel \"{acct.get('channel')}\" "
+                         "(a Google app left in Testing signs you out after 7 days)") from None
+    tok = json.loads(body)
+    acct.update(access_token=tok["access_token"], expires_at=time.time() + number(tok.get("expires_in"), 3600))
+    save_private(cfg, path, acct)
+    return acct["access_token"]
+
+
+def tiktok_access(cfg: Config, path: Path, acct: dict) -> str:
+    if acct.get("access_token") and number(acct.get("expires_at"), 0) > time.time() + 300:
+        return acct["access_token"]
+    app = app_keys(cfg, "tiktok")
+    _, _, body = http_call("POST", api("tiktok_api") + "/oauth/token/", form={
+        "client_key": app["client_key"], "client_secret": app["client_secret"], "grant_type": "refresh_token",
+        "refresh_token": acct.get("refresh_token", "")})
+    tok = json.loads(body)
+    if not tok.get("access_token"):
+        raise FleetError(f"TikTok signed you out ({api_message(body)}). Sign in again: "
+                         f"fleet publish --login tiktok --channel \"{acct.get('channel')}\"")
+    save_private(cfg, path, tiktok_tokens(tok, acct))
+    return acct["access_token"]
+
+
+def instagram_access(cfg: Config, path: Path, acct: dict) -> str:
+    """The token, made new when it is over a day old (a token not renewed in 60 days ends)."""
+    age = time.time() - number(acct.get("refreshed_at"), 0)
+    if age > 86400:
+        try:
+            _, _, body = http_call("GET", api("instagram_root") + "/refresh_access_token?" + urlencode(
+                {"grant_type": "ig_refresh_token", "access_token": acct.get("access_token", "")}))
+            acct.update(access_token=json.loads(body)["access_token"], refreshed_at=time.time())
+            save_private(cfg, path, acct)
+        except (FleetError, KeyError, ValueError) as e:
+            if age > 59 * 86400:
+                raise FleetError(f"the Instagram token has ended ({e}). Make a new one and run: fleet publish "
+                                 f"--login instagram --channel \"{acct.get('channel')}\"") from None
+            print(f"note: could not renew the Instagram token ({e}); it still works for now", file=sys.stderr)
+    return acct["access_token"]
+
+
+def pulled_video(cfg: Config, node: str, jid: str) -> dict:
+    """What the job made, from its copy on this computer."""
+    if not NAME_RE.match(node) or not ID_RE.match(jid):
+        raise FleetError("name the VPS and the job id, as fleet jobs prints them")
+    d = cfg.results_dir / node / jid
+    if not (d / "output").is_dir():
+        raise FleetError(f"{node}/{jid} is not on this computer yet: run fleet pull {node} first")
+    job = read_json(d / "job.json", {})
+    check = read_json(d / "logs" / "check.json")
+    meta = read_json(d / "output" / "metadata.json")
+    video = None
+    named = check.get("video") if isinstance(check, dict) else None
+    if isinstance(named, str) and (d / named).is_file() and not Path(named).is_absolute() and ".." not in Path(named).parts:
+        video = d / named
+    if video is None:
+        found = [rel for rel, _ in media_files(d / "output") if rel.suffix.lower() in VIDEO_MIME]
+        if found:
+            rel = max(found, key=lambda r: (r.parent == Path(".") and r.stem.lower() == "video",
+                                            any(w in r.stem.lower() for w in ("final", "video")),
+                                            (d / "output" / r).stat().st_size))
+            video = d / "output" / rel
+    if video is None or video.stat().st_size == 0:
+        raise FleetError(f"{node}/{jid} has no video in {d / 'output'}")
+    thumb = next((d / "output" / f"{s}{e}" for s in THUMB_STEMS for e in (".png", ".jpg", ".jpeg")
+                  if (d / "output" / f"{s}{e}").is_file()), None)
+    if not isinstance(meta, dict) or not isinstance(meta.get("title"), str) or not meta["title"].strip():
+        raise FleetError(f"{node}/{jid}: output/metadata.json has no title (the job should write title, "
+                         "description and tags there)")
+    return {"node": node, "id": jid, "dir": d, "video": video, "thumbnail": thumb, "meta": meta,
+            "check": check if isinstance(check, dict) else None,
+            "channel": job.get("channel") if isinstance(job, dict) else None}
+
+
+def caption(meta: dict, limit: int = 2200) -> str:
+    """The words under a TikTok or Instagram post: the metadata's caption, else its title,
+    description and tags as hashtags."""
+    if isinstance(meta.get("caption"), str) and meta["caption"].strip():
+        return meta["caption"].strip()[:limit]
+    tags = [re.sub(r"[^\w]", "", str(t)) for t in meta.get("tags") or [] if isinstance(t, str)]
+    tags = " ".join(f"#{t}" for t in tags[:8] if t)
+    parts = [meta.get("title", "").strip(), str(meta.get("description") or "").strip(), tags]
+    return "\n\n".join(p for p in parts if p)[:limit]
+
+
+def resumable_put(url: str, video: Path, size: int, mime: str, token: str) -> dict:
+    """Send the video to a YouTube upload session, piece by piece; after a broken connection,
+    ask the session how much it has and go on from there."""
+    offset, tries = 0, 0
+    with video.open("rb") as fh:
+        while True:
+            fh.seek(offset)
+            part = fh.read(YOUTUBE_CHUNK)
+            hdrs = {"Authorization": f"Bearer {token}", "Content-Type": mime,
+                    "Content-Range": f"bytes {offset}-{offset + len(part) - 1}/{size}"}
+            try:
+                st, rh, body = http_call("PUT", url, headers=hdrs, data=part, ok=(200, 201, 308), timeout=900)
+            except FleetError:
+                tries += 1
+                if tries > 5:
+                    raise
+                time.sleep(min(60, 2 ** tries) * poll_seconds(1))
+                st, rh, body = http_call("PUT", url, headers={"Authorization": f"Bearer {token}",
+                                                              "Content-Range": f"bytes */{size}"},
+                                         data=b"", ok=(200, 201, 308))
+            if st in (200, 201):
+                return json.loads(body)
+            m = re.search(r"-(\d+)$", rh.get("range", ""))
+            offset = int(m.group(1)) + 1 if m else 0
+
+
+def publish_youtube(cfg: Config, path: Path, acct: dict, v: dict, a, at) -> dict:
+    meta, video = v["meta"], v["video"]
+    kids = meta.get("made_for_kids", acct.get("made_for_kids"))
+    if not isinstance(kids, bool):
+        raise FleetError(f"say whether {acct.get('channel')} is made for kids: sign in again with "
+                         "fleet publish --login youtube --made-for-kids yes|no")
+    token = google_access(cfg, path, acct)
+    snippet = {"title": meta["title"].strip()[:100], "description": str(meta.get("description") or "")[:5000]}
+    if isinstance(meta.get("tags"), list):
+        snippet["tags"] = [str(t) for t in meta["tags"]]
+    if meta.get("category_id"):
+        snippet["categoryId"] = str(meta["category_id"])
+    status = {"privacyStatus": "private", "selfDeclaredMadeForKids": kids,
+              "containsSyntheticMedia": bool(meta.get("synthetic_media", acct.get("synthetic_media", True)))}
+    if at:
+        status["publishAt"] = at
+    size, mime = video.stat().st_size, VIDEO_MIME.get(video.suffix.lower(), "video/mp4")
+    _, rh, _ = http_call("POST", api("youtube_upload") + "/videos?uploadType=resumable&part=snippet,status",
+                         headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Length": str(size),
+                                  "X-Upload-Content-Type": mime}, js={"snippet": snippet, "status": status})
+    if not rh.get("location"):
+        raise FleetError("YouTube opened no upload session")
+    vid = resumable_put(rh["location"], video, size, mime, token).get("id")
+    if not vid:
+        raise FleetError("YouTube took the upload but gave no video id")
+    out = {"video_id": vid, "privacy": "private", "studio_url": f"https://studio.youtube.com/video/{vid}/edit"}
+    if at:
+        out["publish_at"] = at
+    if v.get("thumbnail"):
+        thumb = v["thumbnail"]
+        try:
+            http_call("POST", api("youtube_upload") + f"/thumbnails/set?videoId={quote(vid)}",
+                      headers={"Authorization": f"Bearer {token}",
+                               "Content-Type": "image/png" if thumb.suffix.lower() == ".png" else "image/jpeg"},
+                      data=thumb.read_bytes())
+            out["thumbnail"] = "set"
+        except FleetError as e:
+            out["thumbnail"] = f"not set ({e}); custom thumbnails need a verified YouTube channel"
+    return out
+
+
+def tiktok_data(body: bytes) -> dict:
+    d = json.loads(body or b"{}")
+    err = d.get("error") or {}
+    if isinstance(err, dict) and err.get("code") not in (None, "ok"):
+        raise FleetError(f"TikTok: {err.get('message') or err.get('code')}")
+    return d.get("data") or {}
+
+
+def publish_tiktok(cfg: Config, path: Path, acct: dict, v: dict, a, at) -> dict:
+    token = tiktok_access(cfg, path, acct)
+    video = v["video"]
+    size = video.stat().st_size
+    if not size:
+        raise FleetError(f"{video} is empty")
+    # TikTok's chunks: 5 to 64 MB, the last one up to 128 MB; a smaller file goes in one piece.
+    chunk = TIKTOK_CHUNK if size > TIKTOK_CHUNK else size
+    count = size // chunk
+    auth = {"Authorization": f"Bearer {token}"}
+    _, _, body = http_call("POST", api("tiktok_api") + "/post/publish/inbox/video/init/", headers=auth, js={
+        "source_info": {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk,
+                        "total_chunk_count": count}})
+    data = tiktok_data(body)
+    if not data.get("publish_id") or not data.get("upload_url"):
+        raise FleetError("TikTok opened no upload")
+    mime = VIDEO_MIME.get(video.suffix.lower(), "video/mp4")
+    with video.open("rb") as fh:
+        for k in range(count):
+            first = k * chunk
+            last = size - 1 if k == count - 1 else first + chunk - 1  # the last piece takes the rest
+            fh.seek(first)
+            http_call("PUT", data["upload_url"], data=fh.read(last - first + 1), ok=(200, 201, 206), timeout=900,
+                      headers={"Content-Type": mime, "Content-Range": f"bytes {first}-{last}/{size}"})
+    out = {"publish_id": data["publish_id"], "caption": caption(v["meta"])}
+    deadline = time.time() + 300
+    while True:
+        _, _, body = http_call("POST", api("tiktok_api") + "/post/publish/status/fetch/", headers=auth,
+                               js={"publish_id": data["publish_id"]})
+        st = tiktok_data(body)
+        out["status"] = st.get("status") or "PROCESSING_UPLOAD"
+        if out["status"] == "FAILED":
+            raise FleetError(f"TikTok could not take the video: {st.get('fail_reason') or 'no reason given'}")
+        if out["status"] in ("SEND_TO_USER_INBOX", "PUBLISH_COMPLETE") or time.time() > deadline:
+            return out
+        time.sleep(poll_seconds(5))
+
+
+@contextlib.contextmanager
+def shared_publicly(video: Path):
+    """A public https link to the video for the few minutes Instagram needs to fetch it,
+    with Tailscale Funnel; it is switched off again at the end."""
+    ts = tailscale_binary()
+    if not ts:
+        raise FleetError("Instagram fetches the video from a public link: install Tailscale and turn on Funnel "
+                         "(docs/operations/publishing.md), or give --video-url")
+    _, name = tailscale_self()
+    if not name:
+        raise FleetError("this computer has no Tailscale name: turn on MagicDNS for your tailnet")
+    flags = ["--https=443", f"--set-path=/fleet-{random_token(18)}.mp4"]
+    print("Sharing the video on a secret public link (Tailscale Funnel) while Instagram fetches it...")
+    try:
+        r = subprocess.run([ts, "funnel", "--bg", *flags, str(video.resolve())], stdin=subprocess.DEVNULL,
+                           timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise FleetError(f"Tailscale Funnel did not start ({e})") from None
+    if r.returncode != 0:
+        raise FleetError("Tailscale Funnel did not start (see above); docs/operations/publishing.md shows how to "
+                         "turn it on, or give --video-url")
+    try:
+        yield f"https://{name}{flags[1].split('=', 1)[1]}"
+    finally:
+        subprocess.run([ts, "funnel", *flags, "off"], stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+
+
+def publish_instagram(cfg: Config, path: Path, acct: dict, v: dict, a, at) -> dict:
+    token = instagram_access(cfg, path, acct)
+    base, user = api("instagram_api"), quote(str(acct.get("user_id", "")))
+
+    def post(url):
+        _, _, body = http_call("POST", f"{base}/{user}/media", form={
+            "media_type": "REELS", "video_url": url, "caption": caption(v["meta"]), "access_token": token})
+        container = json.loads(body).get("id")
+        if not container:
+            raise FleetError("Instagram made no container for the video")
+        deadline = time.time() + INSTAGRAM_WAIT
+        while True:
+            time.sleep(poll_seconds(60))
+            _, _, body = http_call("GET", f"{base}/{quote(str(container))}?" + urlencode(
+                {"fields": "status_code", "access_token": token}))
+            code = json.loads(body).get("status_code")
+            if code == "FINISHED":
+                break
+            if code in ("ERROR", "EXPIRED") or time.time() > deadline:
+                raise FleetError(f"Instagram could not take the video ({code or 'no answer'} after "
+                                 f"{INSTAGRAM_WAIT // 60} minutes); nothing was posted")
+        _, _, body = http_call("POST", f"{base}/{user}/media_publish",
+                               form={"creation_id": container, "access_token": token})
+        return {"media_id": json.loads(body).get("id"), "container_id": container}
+
+    if a.video_url:
+        if not a.video_url.startswith("https://"):
+            raise FleetError("--video-url must be a public https:// link")
+        return post(a.video_url)
+    with shared_publicly(v["video"]) as url:
+        return post(url)
+
+
+PUBLISHERS = {"youtube": publish_youtube, "tiktok": publish_tiktok, "instagram": publish_instagram}
+
+
+def publish_at(value):
+    """--at "2026-12-01 18:00" (this computer's time) as the UTC time YouTube wants."""
+    if not value:
+        return None
+    try:
+        local = datetime.strptime(value.strip().replace("T", " "), "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise FleetError(f"--at wants a time like \"2026-12-01 18:00\" (your computer's time), not {value!r}") from None
+    if local <= datetime.now() + timedelta(minutes=15):
+        raise FleetError("--at must be at least 15 minutes from now")
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def publish_words(platform: str, r: dict) -> str:
+    if r.get("error"):
+        return f"{platform}: NOT DONE: {r['error']}"
+    if platform == "youtube":
+        when = (f"it goes public by itself on {short_time(parse_stamp(r['publish_at']))}" if r.get("publish_at")
+                else "it stays private until you publish it in YouTube Studio")
+        return f"youtube: uploaded as a private draft, {when}: {r['studio_url']} (thumbnail {r.get('thumbnail', 'none')})"
+    if platform == "tiktok":
+        state = ("is in your TikTok inbox: open TikTok, tap the notification, check it and post it"
+                 if r.get("status") in ("SEND_TO_USER_INBOX", "PUBLISH_COMPLETE") else
+                 f"is still being processed by TikTok ({r.get('status')}); it reaches your TikTok inbox soon")
+        return f"tiktok: the video {state}. Caption to paste:\n{r.get('caption', '')}"
+    return f"instagram: posted as a Reel (media {r.get('media_id')})"
+
+
+def publish_accounts(cfg: Config) -> int:
+    d = publish_dir(cfg)
+    rows = [("PLATFORM", "CHANNEL", "ACCOUNT", "SIGNED IN", "NOTE")]
+    for p in sorted(d.glob("*-*.json")) if d.is_dir() else []:
+        acct = read_json(p, {})
+        if not isinstance(acct, dict) or acct.get("platform") not in PUBLISH_PLATFORMS:
+            continue
+        note = ""
+        if acct["platform"] == "youtube":
+            note = (f"made for kids: {'yes' if acct.get('made_for_kids') else 'no'}, AI label: "
+                    f"{'yes' if acct.get('synthetic_media', True) else 'no'}")
+        elif acct["platform"] == "tiktok" and acct.get("refresh_expires_at"):
+            note = f"sign in again before {datetime.fromtimestamp(acct['refresh_expires_at']).strftime('%d %b %Y')}"
+        elif acct["platform"] == "instagram":
+            note = f"token renewed {int((time.time() - number(acct.get('refreshed_at'), 0)) / 86400)} day(s) ago"
+        rows.append((acct["platform"], acct.get("channel", "?"), acct.get("username") or acct.get("open_id") or "-",
+                     str(acct.get("connected_at", "?"))[:10], note))
+    if len(rows) == 1:
+        print(f"no accounts yet: fleet publish --login youtube|tiktok|instagram --channel \"<channel>\" "
+              f"(they are kept in {d})")
+        return 0
+    print_table(rows)
+    return 0
+
+
+def publish_needs(cfg: Config) -> list:
+    """Sign-ins that end soon, for the daily report."""
+    d, out = publish_dir(cfg), []
+    for p in sorted(d.glob("*-*.json")) if d.is_dir() else []:
+        acct = read_json(p, {})
+        if not isinstance(acct, dict):
+            continue
+        who = f"{acct.get('platform')} for {acct.get('channel')}"
+        if acct.get("platform") == "instagram" and time.time() - number(acct.get("refreshed_at"), time.time()) > 45 * 86400:
+            out.append(f"Publishing: the {who} token ends within 15 days unless a post renews it; "
+                       f"make a new one with fleet publish --login instagram --channel \"{acct.get('channel')}\"")
+        if acct.get("platform") == "tiktok" and number(acct.get("refresh_expires_at"), 1e12) - time.time() < 30 * 86400:
+            out.append(f"Publishing: the {who} sign-in ends within 30 days; "
+                       f"fleet publish --login tiktok --channel \"{acct.get('channel')}\"")
+    return out
+
+
+def publish_login(cfg: Config, a) -> int:
+    platform = a.login.strip().lower()
+    if platform not in PUBLISH_PLATFORMS:
+        raise FleetError(f"--login takes one of {', '.join(PUBLISH_PLATFORMS)}")
+    if not a.channel:
+        raise FleetError("add --channel \"<channel>\": each channel has its own accounts")
+    known = {channel_key(c): c for c in plan_channels(cfg)}
+    channel = known.get(channel_key(a.channel), a.channel.strip())
+    acct = {"youtube": login_youtube, "tiktok": login_tiktok, "instagram": login_instagram}[platform](cfg, a, channel)
+    acct.update(platform=platform, channel=channel, connected_at=now_iso())
+    path = account_file(cfg, platform, channel)
+    save_private(cfg, path, acct)
+    print(f"Signed in: {platform} for {channel} (kept in {path})")
+    return 0
+
+
+def cmd_publish(cfg: Config, a) -> int:
+    if a.accounts:
+        return publish_accounts(cfg)
+    if a.login:
+        return publish_login(cfg, a)
+    if not (a.node and a.job_id and a.to):
+        raise FleetError("usage: fleet publish NODE JOB_ID --to youtube,tiktok,instagram [--at \"YYYY-MM-DD HH:MM\"]")
+    wanted = list(dict.fromkeys(p.strip().lower() for p in a.to.split(",") if p.strip()))
+    odd = [p for p in wanted if p not in PUBLISH_PLATFORMS]
+    if odd or not wanted:
+        raise FleetError(f"--to takes youtube, tiktok and instagram, not {', '.join(odd) or 'nothing'}")
+    if "instagram" in wanted and not a.now:
+        raise FleetError("Instagram has no drafts: the Reel is public at once. Add --now when that is what you want")
+    at = publish_at(a.at)
+    if at and wanted != ["youtube"]:
+        print("note: --at is for YouTube; the others are sent now", file=sys.stderr)
+    v = pulled_video(cfg, a.node, a.job_id)
+    channel = a.channel or v["channel"]
+    if not channel:
+        raise FleetError("the job names no channel: add --channel \"<channel>\"")
+    chk = v["check"]
+    if chk and chk.get("ok") is False and not a.anyway:
+        raise FleetError("the video check found problems: " + "; ".join(map(str, chk.get("problems") or [])) +
+                         f". Make it again (fleet retry {a.node} {a.job_id}), or add --anyway")
+    accounts = {}
+    for p in wanted:
+        path = account_file(cfg, p, channel)
+        acct = read_json(path)
+        if not isinstance(acct, dict):
+            raise FleetError(f"no {p} account for {channel} yet: fleet publish --login {p} --channel \"{channel}\"")
+        accounts[p] = (path, acct)
+    if a.dry_run:
+        print(f"would send {v['video']} ({v['video'].stat().st_size / 1e6:.1f} MB) for {channel}:")
+        print(f"  title: {v['meta']['title']}")
+        for p in wanted:
+            print(f"  {p}: " + {"youtube": f"a private draft{' that goes public on ' + a.at if at else ''}",
+                               "tiktok": "an upload to the TikTok inbox, posted by you in the app",
+                               "instagram": "a public Reel, at once"}[p])
+        if not chk:
+            print("  note: this video has no check verdict (fleet check)")
+        return 0
+    done, rc = {}, 0
+    for p in wanted:
+        path, acct = accounts[p]
+        try:
+            done[p] = PUBLISHERS[p](cfg, path, acct, v, a, at)
+        except FleetError as e:
+            done[p], rc = {"error": str(e)}, 1
+        if not a.json:
+            print(publish_words(p, done[p]))
+    record = read_json(v["dir"] / "publish.json", {})
+    record = record if isinstance(record, dict) else {}
+    with (cfg.results_dir / "publish.jsonl").open("a", encoding="utf-8") as log:
+        for p, r in done.items():
+            entry = dict(r, at=now_iso(), channel=channel)
+            if not r.get("error"):
+                record[p] = entry
+            log.write(json.dumps(dict(entry, platform=p, node=a.node, id=a.job_id, title=v["meta"]["title"])) + "\n")
+    write_file(v["dir"] / "publish.json", json.dumps(record, indent=2) + "\n")
+    if a.json:
+        print(json.dumps(done, indent=2))
+    return rc
+
+
+def publish_summary(cfg: Config, since: float) -> dict:
+    """How many videos went to each platform since then, from results_dir/publish.jsonl."""
+    log, counts = cfg.results_dir / "publish.jsonl", {}
+    if log.exists():
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines()[-3000:]:
+            e = None
+            try:
+                e = json.loads(line)
+            except ValueError:
+                pass
+            if isinstance(e, dict) and not e.get("error") and (parse_stamp(e.get("at")) or 0) >= since:
+                counts[str(e.get("platform"))] = counts.get(str(e.get("platform")), 0) + 1
+    return counts
 
 
 # --------------------------------------------------------------------------- maintenance
@@ -1383,6 +3071,32 @@ except SystemExit as exc:
 '''
 
 
+CRON_SCRIPTS = {  # the no-agent scripts in the director profile's scripts/ folder, and what each runs
+    "fleet_health.py": ["health", "--changes-only"],
+    "fleet_pull.py": ["pull", "--quiet"],
+    "fleet_report.py": ["report"],
+    "fleet_plan.py": ["plan", "run", "--quiet"],
+}
+WEEK_PLAN_PROMPT = (
+    "Plan next week's videos for the owner to approve. Follow \"Plan a week ahead\" in the fleet-ops skill: run "
+    "`fleet plan slots --week next --json`, give each open slot a new topic that suits its channel (a title and a "
+    "brief of two or three sentences; `fleet plan show --week all --json` lists the topics already planned, so none "
+    "repeats), write them as a JSON list to ~/fleet-plan-next.json and run `fleet plan import ~/fleet-plan-next.json`. "
+    "Then send the owner the plan as `fleet plan show --week next` prints it, and say how to answer: \"approve all\", "
+    "\"approve 3-5\", \"reject 4\", or a change such as \"4: make it about Jupiter\". Do not approve anything "
+    "yourself. If there is no open slot, say so in one line.")
+REPLACED_CRON_JOBS = {"fleet-daily-report": "fleet-report"}  # older fleet versions made these
+
+
+def write_cron_scripts(profile_home: Path, cfg_path: Path) -> list:
+    scripts = profile_home / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    cli = str(REPO_ROOT / "home" / "bin" / "fleet")
+    for name, args in CRON_SCRIPTS.items():
+        write_file(scripts / name, CRON_SCRIPT.format(config=str(cfg_path), args=args, cli=cli))
+    return [scripts / name for name in CRON_SCRIPTS]
+
+
 def hermes_cmd(exe: str, *args: str, profile: str = HERMES_PROFILE, timeout: int = 120) -> subprocess.CompletedProcess:
     """Run a Hermes command for the director profile (profile="" for Hermes' default profile)."""
     env = dict(os.environ, HERMES_NONINTERACTIVE="1")
@@ -1573,12 +3287,8 @@ def cmd_init(cfg_path: Path, a) -> int:
                 shutil.copy2(soul, hh / f"SOUL.md.bak-{stamp}")
             shutil.copy2(soul_src, soul)
             print(f"  + {soul}")
-            scripts = hh / "scripts"
-            scripts.mkdir(parents=True, exist_ok=True)
-            cli = str(REPO_ROOT / "home" / "bin" / "fleet")
-            for name, args in (("fleet_health.py", ["health", "--changes-only"]), ("fleet_pull.py", ["pull", "--quiet"])):
-                write_file(scripts / name, CRON_SCRIPT.format(config=str(cfg_path), args=args, cli=cli))
-                print(f"  + {scripts / name}")
+            for script in write_cron_scripts(hh, cfg_path):
+                print(f"  + {script}")
             for line in apply_hermes_settings(exe, REPO_ROOT.as_posix()):
                 print(line)
             model = hermes_model(exe)
@@ -1599,20 +3309,24 @@ def cmd_hermes_cron(cfg: Config, a) -> int:
     exe = find_hermes()
     if not exe:
         raise FleetError("hermes not found")
-    if not director_home(exe):
+    hh = director_home(exe)
+    if not hh:
         raise FleetError(f"the Hermes profile '{HERMES_PROFILE}' does not exist yet: run `fleet init` first")
+    write_cron_scripts(hh, cfg.path)  # a fleet init from an older version wrote fewer of them
     listing = text(hermes_cmd(exe, "cron", "list").stdout)
     jobs = [
         ("fleet-health", ["every 10m", "--no-agent", "--script", "fleet_health.py"]),
         ("fleet-pull", ["every 30m", "--no-agent", "--script", "fleet_pull.py"]),
-        ("fleet-daily-report", [
-            "every day at 9am",
-            "Daily fleet report. Run `fleet status` and `fleet jobs --json`. Report, per VPS: healthy or not, "
-            "jobs finished and failed in the last 24 hours (use finished_at), anything still queued or running, "
-            "and any action the owner needs to take. Under 12 lines, plain text.",
-            "--skill", "fleet-ops", "--workdir", REPO_ROOT.as_posix()]),
+        ("fleet-report", ["0 9 * * *", "--no-agent", "--script", "fleet_report.py"]),
+        ("fleet-plan", ["every 1h", "--no-agent", "--script", "fleet_plan.py"]),
+        ("fleet-week-plan", ["0 10 * * 0", WEEK_PLAN_PROMPT, "--skill", "fleet-ops", "--workdir", REPO_ROOT.as_posix()]),
     ]
     rc = 0
+    for old, new in REPLACED_CRON_JOBS.items():
+        if re.search(rf"\b{re.escape(old)}\b", listing):
+            r = hermes_cmd(exe, "cron", "remove", old)
+            print(f"- {old} (replaced by {new})" if r.returncode == 0 else
+                  f"!! {old} is replaced by {new}; remove it by hand: hermes -p {HERMES_PROFILE} cron remove {old}")
     for name, args in jobs:
         if re.search(rf"\b{re.escape(name)}\b", listing):
             print(f"= {name} already exists")
@@ -1621,7 +3335,7 @@ def cmd_hermes_cron(cfg: Config, a) -> int:
         print(f"{'+' if r.returncode == 0 else '!!'} {name}" + ("" if r.returncode == 0 else f": {text(r.stderr)[-300:]}"))
         rc = rc or r.returncode
     print(f"These jobs belong to the '{HERMES_PROFILE}' profile (hermes -p {HERMES_PROFILE} cron list). They run inside\n"
-          "the Hermes gateway: keep it running (hermes gateway status).")
+          "the Hermes gateway: keep it running (hermes gateway status). Their times are in the profile's timezone.")
     return rc
 
 
@@ -2144,9 +3858,65 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reason", default="")
     s = sp.add_parser("resume", help="start queued jobs again")
     s.add_argument("targets")
+    s = sp.add_parser("schedule", help="when each VPS may start jobs: 24/7, your hours, pauses, random start times")
+    s.add_argument("action", nargs="?", default="show", choices=["show", "set", "open", "close"],
+                   help="show (the default); set; open: work now for a while, whatever the schedule says; "
+                        "close: end that early")
+    s.add_argument("args", nargs="*", metavar="TARGETS", help="VPS names or all; with set, 24/7 starts again from 24/7")
+    s.add_argument("--hours", help="work windows in local time: 08:00-12:00,14:00-23:00 (22:00-07:00 crosses midnight)")
+    s.add_argument("--days", help="the days with work windows: mon-fri, weekends, mon,wed,fri or all")
+    s.add_argument("--off", help="days off: 2026-12-24..2026-12-26,2027-01-01 (replaces the list; none clears it)")
+    s.add_argument("--cycle", help="inside the windows, work then rest: 3h/1h (off to remove)")
+    s.add_argument("--gap", help="a pause after each video: 45m (0 to remove)")
+    s.add_argument("--random", help="random start times: 4/day, one job each (off to remove)")
+    s.add_argument("--min-gap", help="with --random: the least time between two random starts (default 30m)")
+    s.add_argument("--cap", help="at most this many videos a day: 3 (0 to remove)")
+    s.add_argument("--tz", help="the time zone of these times: Europe/Paris, UTC or +01:00 "
+                                "(default: timezone in fleet.ini, else this PC's)")
+    s.add_argument("--for", dest="for_", help="open: how long, like 2h (default 1h)")
+    s.add_argument("--json", action="store_true")
     s = sp.add_parser("pull", help="download finished jobs")
     s.add_argument("targets", nargs="?")
     s.add_argument("--quiet", action="store_true")
+    s = sp.add_parser("check", help="look at a finished job's video again")
+    s.add_argument("node")
+    s.add_argument("job_id")
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("plan", help="the week plan: topics the owner approves, queued on their day")
+    s.add_argument("action", choices=["show", "slots", "add", "import", "approve", "reject", "edit", "remove", "run"])
+    s.add_argument("args", nargs="*", metavar="NUMBER|FILE", help="plan numbers (12, 12-15, all) or the file to import")
+    s.add_argument("--week", choices=["this", "next", "all"], help="show or slots: which week (all: every item)")
+    s.add_argument("--status", choices=["draft", "approved", "queued", "rejected"])
+    s.add_argument("--channel")
+    s.add_argument("--day", help="YYYY-MM-DD")
+    s.add_argument("--time", help="HH:MM, your computer's time")
+    s.add_argument("--title")
+    s.add_argument("--brief")
+    s.add_argument("--quiet", action="store_true", help="run: print nothing when nothing is due")
+    s.add_argument("--dry-run", action="store_true", help="run: print the jobs, queue nothing")
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("publish", help="send a finished video to YouTube (a private draft), TikTok (the inbox) "
+                                      "or Instagram")
+    s.add_argument("node", nargs="?")
+    s.add_argument("job_id", nargs="?")
+    s.add_argument("--to", help="youtube, tiktok or instagram, or several: youtube,tiktok")
+    s.add_argument("--at", help="YouTube: go public by itself at this time (\"YYYY-MM-DD HH:MM\", your computer's time)")
+    s.add_argument("--now", action="store_true", help="needed for Instagram, which makes the Reel public at once")
+    s.add_argument("--video-url", help="Instagram: a public https link to the same video (else Tailscale Funnel shares it)")
+    s.add_argument("--channel", help="whose accounts to use (default: the job's channel)")
+    s.add_argument("--anyway", action="store_true", help="publish even when the video check found problems")
+    s.add_argument("--dry-run", action="store_true", help="say what would be sent, send nothing")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--login", metavar="PLATFORM", help="sign a channel in to youtube, tiktok or instagram")
+    s.add_argument("--made-for-kids", choices=["yes", "no"], help="with --login youtube")
+    s.add_argument("--no-ai-label", action="store_true",
+                   help="with --login youtube: do not mark the videos as altered or synthetic content")
+    s.add_argument("--ig-user-id", help="with --login instagram, if Instagram does not say which account it is")
+    s.add_argument("--port", type=int, default=0, help="with --login: the port the sign-in comes back to")
+    s.add_argument("--accounts", action="store_true", help="list the signed-in accounts")
+    s = sp.add_parser("report", help="the daily report: what was made, what went wrong, what needs you")
+    s.add_argument("--hours", type=float, default=24.0, help="how far back to look (default: %(default)s)")
+    s.add_argument("--json", action="store_true")
     s = sp.add_parser("studio", help="watch every VPS at work in your browser (it only watches)")
     s.add_argument("--port", type=int, default=STUDIO_PORT, help="default: %(default)s")
     s.add_argument("--tailnet", action="store_true",
@@ -2199,7 +3969,8 @@ COMMANDS = {
     "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
     "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "handover": cmd_handover,
     "pause": cmd_pause,
-    "resume": cmd_resume, "pull": cmd_pull, "studio": cmd_studio, "exec": cmd_exec,
+    "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "publish": cmd_publish, "studio": cmd_studio,
+    "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
     "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,
     "forget-host": cmd_forget_host, "hermes-cron": cmd_hermes_cron,
@@ -2227,6 +3998,9 @@ def parse_cli(argv: list) -> argparse.Namespace:
     if i is not None and argv[i] == "exec" and "--" in argv[i:]:
         cut = argv.index("--", i)
         argv, command = argv[:cut], argv[cut + 1:]
+    if (i is not None and argv[i] == "schedule" and len(argv) > i + 1 and not argv[i + 1].startswith("-")
+            and argv[i + 1] not in ("show", "set", "open", "close")):
+        argv = argv[:i + 1] + ["show"] + argv[i + 1:]  # `fleet schedule vps1` shows vps1's schedule
     a = build_parser().parse_args(argv)
     if a.cmd == "exec":
         a.command = command

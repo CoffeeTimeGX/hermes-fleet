@@ -29,6 +29,7 @@
   --standby: #2a8656;
   --hold: #a8720a;
   --paused: #6c7572;
+  --off: #4f6fb3;
   --trouble: #bd5318;
   --tape-a: #e6b62a;
   --tape-b: #26261f;
@@ -42,7 +43,7 @@
     --lot: #141a1b; --lot-joint: #1a2123; --road: #0b0f10; --road-paint: #cba43d; --road-ink: #c8d1ce;
     --roof: #1f2729; --roof-rib: #252e30; --floor: #182022; --edge: #364144; --cast: rgba(0, 0, 0, 0.5);
     --ink: #e3e9e7; --ink-soft: #98a4a0; --slate: #0c100f; --slate-ink: #eef1ef; --slate-soft: #8b9692;
-    --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683;
+    --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683; --off: #8ea8e8;
     --trouble: #ff8c42; --tape-a: #d9aa27; --tape-b: #121310;
     color-scheme: dark;
   }
@@ -51,7 +52,7 @@
   --lot: #141a1b; --lot-joint: #1a2123; --road: #0b0f10; --road-paint: #cba43d; --road-ink: #c8d1ce;
   --roof: #1f2729; --roof-rib: #252e30; --floor: #182022; --edge: #364144; --cast: rgba(0, 0, 0, 0.5);
   --ink: #e3e9e7; --ink-soft: #98a4a0; --slate: #0c100f; --slate-ink: #eef1ef; --slate-soft: #8b9692;
-  --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683;
+  --accent: #7ab8db; --rolling: #ff5a4e; --standby: #4cc184; --hold: #efb23e; --paused: #7b8683; --off: #8ea8e8;
   --trouble: #ff8c42; --tape-a: #d9aa27; --tape-b: #121310;
   color-scheme: dark;
 }
@@ -206,6 +207,7 @@ h1, h2, p, dl, dd, ol { margin: 0; }
 .stage[data-state="standby"] { --lamp: var(--standby); }
 .stage[data-state="hold"] { --lamp: var(--hold); }
 .stage[data-state="dark"] { --lamp: var(--paused); }
+.stage[data-state="off"] { --lamp: var(--off); }
 .stage[data-state="trouble"] { --lamp: var(--trouble); }
 .stage[data-state="offline"], .stage[data-state="pending"] { --lamp: var(--paused); border-style: dashed; box-shadow: 12px 14px 0 transparent; }
 
@@ -383,7 +385,8 @@ h1, h2, p, dl, dd, ol { margin: 0; }
 .stage[data-state="rolling"] .door .lamp { animation: burn 1.8s ease-in-out infinite; }
 .stage[data-state="offline"] .door .lamp,
 .stage[data-state="pending"] .door .lamp,
-.stage[data-state="dark"] .door .lamp { background: transparent; border: 2px solid var(--lamp); }
+.stage[data-state="dark"] .door .lamp,
+.stage[data-state="off"] .door .lamp { background: transparent; border: 2px solid var(--lamp); }
 @keyframes burn { 50% { opacity: 0.45; } }
 .sign {
   font-family: var(--font-sign);
@@ -584,6 +587,7 @@ body.replaying .lot { filter: sepia(0.22); }
     <span style="--lamp: var(--rolling)"><i class="lamp"></i>Rolling: making a video</span>
     <span style="--lamp: var(--standby)"><i class="lamp"></i>Standing by: ready for work</span>
     <span style="--lamp: var(--hold)"><i class="lamp"></i>On hold: waiting for its Claude usage limit</span>
+    <span style="--lamp: var(--off)"><i class="lamp ring"></i>Off duty: outside its schedule</span>
     <span style="--lamp: var(--paused)"><i class="lamp ring"></i>Dark: paused, or no contact</span>
     <span><i class="lamp tape"></i>Needs a look</span>
   </section>
@@ -596,7 +600,7 @@ body.replaying .lot { filter: sepia(0.22); }
   "use strict";
   const FS = window.FleetStudio;
   const { LIVE, DAY_MS, now, when, ago, span, timecode, clock, localTimes, hueOf, stageNo, plural, activityText,
-    claudeOf, limitOf, stageState } = FS;
+    claudeOf, limitOf, scheduleOf, offNote, stageState } = FS;
   let snap = null;      // the lot as shown: now, or the moment a replay shows
   let liveSnap = null;  // the lot now
   let contact = true;
@@ -640,6 +644,8 @@ body.replaying .lot { filter: sepia(0.22); }
     const lim = limitOf(st);
     if (s.state === "rolling" && st.paused) flags.push(["Paused: no new jobs start", false]);
     if (s.state === "rolling" && lim) flags.push(["Usage limit until " + clock(Number(lim.until)), false]);
+    const sch = scheduleOf(st);
+    if (s.state === "rolling" && sch && sch.open === false && !sch.error) flags.push(["Then off duty: " + offNote(sch), false]);
     if (Number(st.stuck_handovers) > 0) flags.push([plural(Number(st.stuck_handovers), "handover", "handovers") + " stopped halfway", true]);
     if (st.reboot_required) flags.push(["Needs a reboot for security updates", false]);
     if (s.state === "rolling" && st.low_disk) flags.push(["Low on disk", true]);
@@ -721,6 +727,11 @@ body.replaying .lot { filter: sepia(0.22); }
     if (s.state === "pending") { head = "Checking this stage"; body = "The first look at each VPS takes a few seconds."; }
     else if (s.state === "offline") { head = "No contact"; body = n.error || "Your PC cannot reach this VPS. Its queue keeps running if the VPS itself is up."; }
     else if (s.state === "standby") { head = "Standing by"; body = "Ready. The next job for its channel starts here at once."; }
+    else if (s.state === "off") {
+      head = "Off duty";
+      body = s.note.charAt(0).toUpperCase() + s.note.slice(1) + ". Its schedule decides when jobs start, and new ones wait in its queue till then. "
+        + "Its hours: " + ((st.schedule || {}).summary || "see fleet schedule show " + n.name) + ".";
+    }
     else if (s.state === "dark") { head = "Dark"; body = (st.paused_reason ? "Paused: " + st.paused_reason + ". " : "Paused. ") + "New jobs wait in its queue until it is resumed."; }
     else if (s.state === "hold") {
       const lim = st.limit || {};
@@ -731,7 +742,7 @@ body.replaying .lot { filter: sepia(0.22); }
   }
 
   function renderBoard(nodes) {
-    const counts = { rolling: 0, standby: 0, hold: 0, dark: 0, trouble: 0, offline: 0, pending: 0 };
+    const counts = { rolling: 0, standby: 0, hold: 0, off: 0, dark: 0, trouble: 0, offline: 0, pending: 0 };
     let waiting = 0, collect = 0, doneToday = 0;
     const cutoff = now() - DAY_MS;
     for (const n of nodes) {
@@ -743,7 +754,7 @@ body.replaying .lot { filter: sepia(0.22); }
     }
     const items = [
       ["rolling", "rolling", "var(--rolling)", ""], ["standby", "standing by", "var(--standby)", ""],
-      ["hold", "on hold", "var(--hold)", ""], ["dark", "dark", "var(--paused)", "ring"],
+      ["hold", "on hold", "var(--hold)", ""], ["off", "off duty", "var(--off)", "ring"], ["dark", "dark", "var(--paused)", "ring"],
       ["trouble", "need a look", "var(--trouble)", ""], ["offline", "no contact", "var(--paused)", "ring"],
       ["pending", "checking", "var(--paused)", "ring"],
     ];

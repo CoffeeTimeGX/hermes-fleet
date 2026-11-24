@@ -78,7 +78,7 @@ fi
 "${APT[@]}" install --no-install-recommends \
   ca-certificates curl wget git jq rsync tmux htop unzip zip tar procps util-linux coreutils sudo openssh-server \
   bsdextrautils logrotate ufw fail2ban python3-systemd unattended-upgrades needrestart \
-  python3 python3-venv python3-pip build-essential \
+  python3 python3-venv python3-pip build-essential tzdata \
   ffmpeg imagemagick fonts-dejavu fonts-liberation fonts-noto-color-emoji
 
 step "Journal size cap (keeps logs from filling the disk)"

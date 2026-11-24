@@ -24,6 +24,9 @@ results_dir = ~/fleet-results
 secrets_dir = ~/.config/fleet/secrets
 ssh_key = ~/.ssh/fleet_ed25519
 connect_timeout = 10
+; The time zone of the hours you give `fleet schedule`, such as Europe/Paris. Empty:
+; your PC's. Set it on Windows, where the fleet only knows your PC's offset from UTC.
+timezone =
 
 [vps1]
 host = vps1

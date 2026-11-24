@@ -93,8 +93,12 @@ nav:
   - Running the fleet:
       - Everyday use: operations/everyday.md
       - The studio: operations/studio.md
+      - Work schedule: operations/schedule.md
+      - Week plan: operations/week-plan.md
       - Job format: operations/job-format.md
       - Results: operations/results.md
+      - Video check: operations/video-check.md
+      - Publishing: operations/publishing.md
       - Usage limits: operations/usage-limits.md
       - Scheduled checks: operations/scheduled-checks.md
       - Updates: operations/updates.md

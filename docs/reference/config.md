@@ -7,7 +7,9 @@ once and never overwrites them.
 | File on your PC | What it holds |
 | --- | --- |
 | `~/.config/fleet/fleet.ini` | The inventory: your VPSs and the fleet's settings. |
-| `~/.config/fleet/secrets/` | Credentials for the VPSs: Claude, Tailscale. |
+| `~/.config/fleet/secrets/` | Credentials for the VPSs (Claude, Tailscale), and the sign-ins for publishing. |
+| `~/.config/fleet/channels/` | Optional: one file per channel, with its job settings and its days in the week plan. See [Week plan](../operations/week-plan.md). |
+| `~/.config/fleet/plan.json` | The week plan: the topics, approved or not. |
 | `~/.ssh/fleet_ed25519` and `.pub` | The fleet SSH key. |
 | `~/.ssh/config.d/fleet` | SSH settings, so `ssh vps1` works. |
 | The director's folder in Hermes | The director's settings, its `.env` with its own secrets, `SOUL.md`, scripts. |
@@ -27,6 +29,7 @@ results_dir = ~/fleet-results
 secrets_dir = ~/.config/fleet/secrets
 ssh_key = ~/.ssh/fleet_ed25519
 connect_timeout = 10
+timezone =
 
 [vps1]
 host = vps1
@@ -46,6 +49,7 @@ enabled = true
 | `secrets_dir` | `~/.config/fleet/secrets` | Where the credentials for the VPSs are. |
 | `ssh_key` | `~/.ssh/fleet_ed25519` | The private key `fleet` logs in with. |
 | `connect_timeout` | `10` | Seconds to wait for a VPS to answer. |
+| `timezone` | your PC's | The time zone of the hours you give `fleet schedule`, like `Europe/Paris`. Set it on Windows, where the fleet can only read your PC's offset from UTC, which does not follow summer time. See [Work schedule](../operations/schedule.md#time-zone). |
 | `user` | `fleet` | The user `fleet` logs in as. Leave it. |
 | `remote_root` | `/home/fleet/fleet` | The fleet's folder on each VPS. The bootstrap creates this one; leave it. |
 
@@ -84,6 +88,10 @@ The secrets folder holds one folder per VPS, plus the files all VPSs share:
   vps2/claude.env
   ...
   tailscale.env              the Tailscale auth key for the bootstrap
+  publish/                   the sign-ins for fleet publish (they stay on your PC)
+    youtube-client.json      your Google app
+    tiktok-app.json          your TikTok app's key and secret
+    youtube-space-facts.json one file per platform and channel, written by --login
 ```
 
 `fleet secrets push claude vps1` reads `secrets/vps1/claude.env`. When a VPS has no file
@@ -108,7 +116,8 @@ and `export ` before a name are allowed. Empty values are not pushed.
 
 **Who can read them:** on Linux and macOS, `fleet` refuses a secrets file that other
 users can read; fix it with `chmod 600 <file>`. On Windows, `fleet init` limits the
-secrets folder to your user (and the system).
+secrets folder to your user (and the system). The `publish/` folder is set up the same
+way. See [Publishing](../operations/publishing.md).
 
 ## On each VPS
 
@@ -118,6 +127,7 @@ secrets folder to your user (and the system).
 | `/etc/fleet/worker.local.env` | Your own worker settings, which win. See [Worker settings](worker.md#settings). |
 | `/home/fleet/.config/fleet/providers/claude.env` | The Claude credential, from `fleet secrets push`. Readable only by `fleet`. |
 | `/home/fleet/.claude/settings.json` | Claude Code's settings for the sessions. |
+| `/home/fleet/fleet/schedule.json` | The VPS's work schedule, from `fleet schedule set`. None means 24/7. See [Work schedule](../operations/schedule.md). |
 
 `fleet provider install claude` sets three things in Claude Code's `settings.json` and
 leaves any other setting you add there alone:
@@ -150,7 +160,7 @@ which sets `model.provider` and `model.default`.
 | `approvals.deny` | adds four patterns | Hermes may never run `fleet exec all ... rm -rf`, nor read the secrets folder or a Hermes `.env`, the director's own included. |
 
 It also copies `home/hermes/SOUL.md` into the director's folder (keeping a backup of a
-different one) and writes the two scheduled-check scripts into its `scripts/` folder.
+different one) and writes the four scheduled-check scripts into its `scripts/` folder.
 
 **The director's `.env`** holds its own secrets. Set each one with
 `hermes -p director config set NAME value`:

@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""fleet-check: look at the video a finished job left in output/ and say what is wrong.
+
+Usage:  fleet-check <workspace>
+
+The worker runs it after each job that ends well, before the job counts as done, and
+keeps what it prints in logs/check.json and (shortened) in status.json. It prints one
+JSON object:
+
+  {"ok": true | false | null, "problems": ["..."], "video": "output/video.mp4",
+   "facts": {"seconds": 52.4, "width": 1080, "height": 1920, ...}, "checked_at": "..."}
+
+ok is null when the check did not run: it is turned off for the job, or ffprobe is
+missing ("skipped" says why). A job tunes it with "checks" in its job file:
+
+  "checks": false
+  "checks": {"min_seconds": 45, "max_seconds": 60, "width": 1080, "height": 1920,
+             "vertical": true, "max_megabytes": 300, "audio": true, "thumbnail": true,
+             "metadata": true, "video": "output/final.mp4"}
+
+audio, thumbnail and metadata are on unless set to false; the others are off unless set.
+It needs ffprobe and ffmpeg (the bootstrap installs them) and only the Python standard
+library.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+VERSION = 1
+VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".mkv")
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
+SILENT_DB = -50.0          # the loudest moment below this: the sound is silent
+BLACK_SHARE = 0.8          # this share of the key frames black: the picture is black
+THUMB_MIN_WIDTH = 640      # YouTube's smallest custom thumbnail (1280x720 is best)
+TITLE_MAX, DESC_MAX, TAGS_MAX = 100, 5000, 500   # YouTube's limits on the details
+
+
+def run(cmd, timeout):
+    """(exit code, stdout, stderr); 124 on a timeout, 127 when the tool is missing."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+    except OSError as e:
+        return 127, "", str(e)
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def last_line(text, default):
+    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
+    return lines[-1][:200] if lines else default
+
+
+def inside(base, p):
+    try:
+        p.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def find_video(ws, wanted):
+    """The job's video: the one it names, else output/video.*, else the biggest video in
+    output/ (three folders deep at most), preferring names with "final" or "video"."""
+    out = ws / "output"
+    if isinstance(wanted, str) and wanted:
+        p = ws / wanted
+        return p if p.is_file() and not p.is_symlink() and inside(ws, p) else None
+    best = None
+    for root, dirs, files in os.walk(out):
+        if len(Path(root).relative_to(out).parts) >= 3:
+            dirs[:] = []
+        for f in files:
+            p = Path(root) / f
+            if not f.lower().endswith(VIDEO_EXT) or p.is_symlink():
+                continue
+            named = any(w in p.stem.lower() for w in ("final", "video"))
+            key = (p.parent == out and p.stem.lower() == "video", named, p.stat().st_size)
+            if best is None or key > best[0]:
+                best = (key, p)
+    return best[1] if best else None
+
+
+def find_thumbnail(out):
+    for stem in ("thumbnail", "thumb", "cover", "poster"):
+        for ext in IMAGE_EXT:
+            p = out / (stem + ext)
+            if p.is_file() and not p.is_symlink():
+                return p
+    return None
+
+
+MISSING = "missing"
+
+
+def probe(path):
+    """ffprobe's streams and format, or (None, why); why is MISSING without ffprobe."""
+    rc, out, err = run(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)], 120)
+    if rc == 127:
+        return None, MISSING
+    if rc != 0:
+        why = last_line(err, f"ffprobe exit {rc}")
+        return None, why[len(str(path)) + 2:] if why.startswith(f"{path}: ") else why
+    try:
+        return json.loads(out), None
+    except ValueError:
+        return None, "ffprobe printed no JSON"
+
+
+def number(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def rate(v):
+    """'30000/1001' -> 29.97"""
+    try:
+        a, b = str(v).split("/")
+        return round(float(a) / float(b), 2) if float(b) else None
+    except ValueError:
+        return number(v)
+
+
+def picture(info):
+    """The facts of the first real video stream (not a cover picture) and the first audio stream."""
+    streams = info.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"
+                  and not (s.get("disposition") or {}).get("attached_pic")), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    fmt = info.get("format") or {}
+    facts = {"seconds": number(fmt.get("duration")) or number((video or {}).get("duration")),
+             "megabytes": round(number(fmt.get("size")) / 1e6, 1) if number(fmt.get("size")) else None}
+    if video:
+        w, h = video.get("width"), video.get("height")
+        turn = 0
+        for sd in video.get("side_data_list") or []:
+            if "rotation" in sd:
+                turn = int(number(sd.get("rotation")) or 0)
+        turn = turn or int(number((video.get("tags") or {}).get("rotate")) or 0)
+        if abs(turn) % 180 == 90:  # a phone video stored on its side plays upright
+            w, h = h, w
+        facts.update(width=w, height=h, fps=rate(video.get("avg_frame_rate")), video_codec=video.get("codec_name"))
+    if audio:
+        facts.update(audio_codec=audio.get("codec_name"))
+    return video, audio, facts
+
+
+def loudest_db(path):
+    """The loudest moment of the sound, in dB (-91 for digital silence)."""
+    rc, _, err = run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-sn", "-dn",
+                      "-af", "volumedetect", "-f", "null", "-"], 300)
+    found = re.findall(r"max_volume:\s*(-?[0-9.]+|-inf) dB", err)
+    if not found:
+        return None
+    return -91.0 if found[-1] == "-inf" else float(found[-1])
+
+
+def black_keyframes(path):
+    """(black, all) among the key frames: only key frames are decoded, so this is quick
+    even for a long video."""
+    rc, _, err = run(["ffmpeg", "-hide_banner", "-skip_frame", "nokey", "-i", str(path), "-an", "-sn", "-dn",
+                      "-vf", "scale=96:-2,blackframe=amount=98:threshold=24", "-f", "null", "-"], 300)
+    seen = [int(x) for x in re.findall(r"frame=\s*(\d+)", err)]
+    black = len(re.findall(r"pblack:\d+", err))
+    return (black, max(seen)) if seen and max(seen) > 0 else (None, None)
+
+
+def image_size(path):
+    rc, out, _ = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                      "-of", "json", str(path)], 60)
+    try:
+        s = (json.loads(out).get("streams") or [{}])[0]
+        return int(s["width"]), int(s["height"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def tags_length(tags):
+    """How YouTube counts the tags: a comma between them, quotes around one with a space."""
+    return sum(len(t) + (2 if " " in t else 0) for t in tags) + max(0, len(tags) - 1)
+
+
+def metadata_problems(out):
+    p = out / "metadata.json"
+    if not p.is_file():
+        return None, ["metadata.json is missing from output/ (the title, description and tags for posting)"]
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        return None, [f"metadata.json is not valid JSON ({str(e)[:80]})"]
+    if not isinstance(m, dict):
+        return None, ["metadata.json should hold an object with a title, a description and tags"]
+    probs = []
+    title, desc, tags = m.get("title"), m.get("description"), m.get("tags")
+    if not isinstance(title, str) or not title.strip():
+        probs.append("metadata.json has no title")
+    else:
+        if len(title) > TITLE_MAX:
+            probs.append(f"the title is {len(title)} characters; YouTube allows {TITLE_MAX}")
+        if "<" in title or ">" in title:
+            probs.append("the title has a < or >, which YouTube refuses")
+    if desc is not None and not isinstance(desc, str):
+        probs.append("the description in metadata.json is not text")
+    elif isinstance(desc, str):
+        if len(desc) > DESC_MAX:
+            probs.append(f"the description is {len(desc)} characters; YouTube allows {DESC_MAX}")
+        if "<" in desc or ">" in desc:
+            probs.append("the description has a < or >, which YouTube refuses")
+    if tags is not None:
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            probs.append("the tags in metadata.json should be a list of words")
+        elif tags_length(tags) > TAGS_MAX:
+            probs.append(f"the tags add up to {tags_length(tags)} characters; YouTube allows {TAGS_MAX}")
+    return m, probs
+
+
+def judge(ws, checks):
+    """Look at the workspace and return the verdict (without checked_at)."""
+    out = ws / "output"
+    want = lambda k: checks.get(k, True) is not False  # noqa: E731 - on unless turned off
+    whole = lambda k: int(number(checks.get(k)) or 0) or None  # noqa: E731 - a setting in whole units
+    named = checks.get("video") if isinstance(checks.get("video"), str) else None
+    video = find_video(ws, named)
+    verdict = {"ok": None, "problems": [], "video": None, "facts": {}}
+    probs = verdict["problems"]
+    if video is None:
+        where = f" ({named} is not there)" if named else ""
+        probs.append(f"no video in output/{where}: no {', '.join(VIDEO_EXT)} file")
+    else:
+        verdict["video"] = video.relative_to(ws).as_posix()
+        info, why = probe(video)
+        if info is None and why == MISSING:
+            return dict(verdict, skipped="ffprobe is not installed on this VPS")
+        if info is None:
+            probs.append(f"ffprobe cannot read {verdict['video']}: {why}")
+        else:
+            vs, aus, facts = picture(info)
+            verdict["facts"] = facts
+            secs = facts.get("seconds")
+            if vs is None:
+                probs.append(f"{verdict['video']} has no picture, only sound")
+            elif not secs or secs < 0.5:
+                probs.append(f"{verdict['video']} is empty (0 seconds)")
+            else:
+                lo, hi = number(checks.get("min_seconds")), number(checks.get("max_seconds"))
+                if (lo and secs < lo) or (hi and secs > hi):
+                    span = (f"{lo:g} to {hi:g}" if lo and hi else f"at least {lo:g}" if lo else f"at most {hi:g}")
+                    probs.append(f"it is {secs:.0f} seconds long; this job wants {span}")
+                mb, top = facts.get("megabytes"), number(checks.get("max_megabytes"))
+                if top and mb and mb > top:
+                    probs.append(f"the file is {mb:g} MB; this job wants at most {top:g} MB")
+                w, h = facts.get("width"), facts.get("height")
+                ww, wh = whole("width"), whole("height")
+                if (ww and w != ww) or (wh and h != wh):
+                    probs.append(f"it is {w}x{h}; this job wants {ww or w}x{wh or h}")
+                elif checks.get("vertical") is True and w and h and w >= h:
+                    probs.append(f"it is {w}x{h}, not vertical")
+                elif checks.get("vertical") is False and w and h and h > w:
+                    probs.append(f"it is {w}x{h}, not landscape")
+                black, frames = black_keyframes(video)
+                if frames:
+                    facts["black_keyframes"] = f"{black}/{frames}"
+                    if black / frames >= BLACK_SHARE:
+                        probs.append(f"the picture is black ({black} of {frames} key frames)")
+            if want("audio"):
+                if aus is None:
+                    probs.append("no sound: the video has no audio track")
+                else:
+                    db = loudest_db(video)
+                    facts["loudest_db"] = db
+                    if db is not None and db < SILENT_DB:
+                        probs.append(f"the sound is silent (its loudest moment is {db:.0f} dB)")
+    if want("thumbnail"):
+        thumb = find_thumbnail(out)
+        if thumb is None:
+            probs.append("no thumbnail in output/ (thumbnail.png or thumbnail.jpg)")
+        else:
+            size = image_size(thumb)
+            verdict["facts"]["thumbnail"] = thumb.relative_to(ws).as_posix() + (f" {size[0]}x{size[1]}" if size else "")
+            if size and size[0] < THUMB_MIN_WIDTH:
+                probs.append(f"the thumbnail is {size[0]}x{size[1]}; YouTube wants at least "
+                             f"{THUMB_MIN_WIDTH} wide (1280x720 is best)")
+    if want("metadata"):
+        meta, mprobs = metadata_problems(out)
+        probs.extend(mprobs)
+        if meta and isinstance(meta.get("title"), str):
+            verdict["facts"]["title"] = meta["title"][:120]
+    verdict["ok"] = not probs
+    return verdict
+
+
+def check(ws):
+    ws = Path(ws)
+    try:
+        job = json.loads((ws / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        job = {}
+    checks = job.get("checks", {}) if isinstance(job, dict) else {}
+    stamp = {"checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "version": VERSION}
+    if checks is False:
+        return dict({"ok": None, "problems": [], "skipped": "this job turns the check off"}, **stamp)
+    if not isinstance(checks, dict):
+        checks = {}
+    return dict(judge(ws, checks), **stamp)
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if len(argv) == 2 else 2
+    if not (Path(argv[1]) / "output").is_dir():
+        print(json.dumps({"ok": False, "problems": ["the job left no output/ folder"], "video": None, "facts": {},
+                          "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "version": VERSION}))
+        return 0
+    print(json.dumps(check(argv[1])))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

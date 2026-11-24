@@ -79,7 +79,7 @@ It ends with a summary like this:
 ```
 node:          vps1
 tailscale:     100.101.102.103 (Running)
-worker:        active (version 1.6.0)
+worker:        active (version 1.7.0)
 parallel jobs: 1
 public ssh:    open, keys only and rate limited, until fleet lockdown
 reboot needed: no

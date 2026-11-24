@@ -41,9 +41,10 @@ would be queued, or says exactly which field is wrong.
 | `permission_mode` | `bypassPermissions`, `dontAsk` or `acceptEdits`. See [Permissions](#permissions). | `bypassPermissions` |
 | `allowed_tools` | Tools the session may use without asking, as a list (`["Read", "Bash(ffmpeg *)"]`) or as one comma-separated text. See [Permissions](#permissions). | none |
 | `provider` | Which tool runs the job. Only VPSs that list this provider in your inventory receive it. | `claude` |
+| `checks` | What the [video check](video-check.md) wants of the video, such as `{"min_seconds": 45, "max_seconds": 60, "vertical": true}`, or `false` to skip the check. | the standard checks |
 
 `fleet dispatch` adds `node` (the VPS) and `submitted_at` (UTC), and `fleet retry` adds
-`retry_of`. `fleet handover` adds `handed_over_from` (the VPS the job came from) and
+`retry_of`. A job from the [week plan](week-plan.md) carries its `plan_id`. `fleet handover` adds `handed_over_from` (the VPS the job came from) and
 `handed_over_at` (UTC). Fields the fleet does not know are kept in the job's `job.json`
 and otherwise ignored, so Hermes can store its own notes in a job, such as a planned
 upload date.
@@ -82,6 +83,10 @@ Each session runs alone, with nobody to answer its questions. Good prompts say:
 - what to do when something is unclear (*"make a reasonable choice and list it in your
   summary"*),
 - what to put in the final summary.
+
+To publish the video later, ask for `output/metadata.json` with its `title`,
+`description` and `tags`, and for `output/thumbnail.png` (1280x720). See
+[Publishing](publishing.md#what-a-video-needs).
 
 The fleet adds a note to the session's system prompt in every job. It tells the session
 that it runs unattended on a fleet VPS, the channel and job id, that every deliverable
