@@ -1,7 +1,7 @@
 ---
 name: fleet-ops
-description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos, check them, plan the week for the owner to approve, publish when asked, set work schedules, and triage failures.
-version: 1.6.0
+description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos, check them, plan the week for the owner to approve, publish when asked, set work schedules, keep the owner's ideas list, and triage failures.
+version: 1.7.0
 metadata:
   hermes:
     tags: [fleet, vps, ssh, video, claude]
@@ -16,7 +16,8 @@ Any request about the VPS fleet or the videos it makes: "how is the fleet", "mak
 video for <channel>", "queue tomorrow's uploads", "what failed", "collect the finished
 videos", "is vps3 alive", "pause vps2", "move vps2's queue to vps4", "I want to watch
 the fleet", "is that video all right", "what happened yesterday", "plan next week",
-"approve 3-5", "put it on YouTube", "vps1 should only work 8 to 11 pm".
+"approve 3-5", "put it on YouTube", "vps1 should only work 8 to 11 pm", "idea: a weekly
+summary", "what ideas do we have".
 
 ## The fleet
 - 5 Hostinger VPSs, `vps1` to `vps5`, one Hostinger account each. The inventory is
@@ -142,6 +143,19 @@ The Sunday job asks for this. The owner approves every topic; you never do.
 - Show the owner the lines it prints. Never change a schedule, or open one, on your own:
   not to finish sooner, not to clear a queue.
 
+## Ideas for the fleet, when the owner has one
+- The ideas list holds notes and features to build into the fleet later, best first. The
+  studio reads it out in the ideas office on the pixel lot. It is not the week plan: a
+  video topic goes in with `fleet plan add`.
+- "Idea: ...", "note this idea", "add it to the ideas": `fleet ideas add "<short title>"
+  --note "<the idea in a sentence or two, in the owner's words>"`. `--at 1` puts it first.
+- "What ideas do we have": `fleet ideas`, and send the list as it prints.
+- Changes, after `fleet ideas` shows the numbers: `fleet ideas move 4 --to 1`,
+  `fleet ideas edit 2 --note "..."`, `fleet ideas edit 2 --status next` (also `building`,
+  `built` or back to `idea`), `fleet ideas remove 3`.
+- An idea is a note, not an order. Do not start work on one (no jobs, no settings, no
+  accounts) unless the owner asks for that work.
+
 ## Job format
 ```json
 {
@@ -205,3 +219,4 @@ Only `prompt` is required. Ids are generated when missing. Every field is descri
 - After a pull, its folder exists under `~/fleet-results/` and `fleet jobs` shows it as pulled.
 - After `fleet plan import`, `fleet plan show --week next` lists the new drafts.
 - After `fleet schedule set`, `fleet schedule <vps>` shows the new schedule.
+- After `fleet ideas add`, `fleet ideas` lists the new idea.

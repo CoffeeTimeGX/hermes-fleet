@@ -332,12 +332,13 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   // then a lane. Stages stand along the two back edges of a square lot, one every SLOT tiles
   // from B on, so the doors of all of them face you.
   const SW = 5, SD = 4, AD = 3, SLOT = 7, B = 9, WH = 34, RH = 8;
-  let G = 20, OX = 0, OY = 46, W = 0, H = 0, towerBase = B;
+  let G = 20, OX = 0, OY = 46, W = 0, H = 0, ideasBase = B, towerY = B + 8;
 
   function plan(n) {
     const R = Math.ceil(n / 2), Lc = Math.floor(n / 2);
     G = Math.max(28, B + Math.max(R, Lc + 1) * SLOT + 5);  // at least 28: room on the lawn for the screen
-    towerBase = B + Lc * SLOT;
+    ideasBase = B + Lc * SLOT;  // the ideas office, just before stage 1
+    towerY = ideasBase + 8;     // then the water tower: G is always at least ideasBase + 12
     const out = [];  // read from left to right: the left edge from the outside in, then the right edge
     for (let j = Lc - 1; j >= 0; j--) out.push({ edge: "L", base: B + j * SLOT });
     for (let j = 0; j < R; j++) out.push({ edge: "R", base: B + j * SLOT });
@@ -910,7 +911,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   }
 
   function drawTower(g) {  // the water tower, where the lookout keeps watch
-    const cx = 2.3, cy = towerBase + 2.6, r = 1.45, zb = 54, zt = 78;
+    const cx = 2.3, cy = towerY, r = 1.45, zb = 54, zt = 78;
     const legC = "#6f4b3a", braceC = "#8a6450";
     const legs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([dx, dy]) => [cx + dx * 1.0, cy + dy * 1.0]);
     const leg = (l) => { const a = P(l[0], l[1], 0), b = P(l[0], l[1], zb); seg(g, a, b, legC); seg(g, [a[0] + 1, a[1]], [b[0] + 1, b[1]], shade(legC, -0.25)); };
@@ -941,6 +942,54 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
     lights.tower = [apex[0], apex[1] - 1];
     staticHits.push(Object.assign(bbox([[C[0] - rx - 5, apex[1]], [C[0] + rx + 5, C[1]]]), { key: "lookout", pri: 6 }));
+  }
+
+  // The ideas office, just before stage 1: notes and features to build later. A light bulb on the
+  // roof, a note pinned by the side for each idea, the list itself on an easel (see ideasCast).
+  const TEAL = "#2f7f7a";
+  function drawIdeas(g) {
+    const x0 = 0.6, x1 = 3.9, y0 = ideasBase + 0.5, y1 = ideasBase + 4.3, h = 28;
+    const wall = "#f0d993", wallR = shade(wall, -0.17), roof = "#c9bb98";
+    box(g, x0, y0, x1, y1, 0, h, roof, wall, wallR);
+    flat(g, x0 + 0.2, y0 + 0.2, x1 - 0.2, y1 - 0.2, shade(roof, -0.1), h);                   // inside the parapet
+    poly(g, [P(x0, y1, 0), P(x1, y1, 0), P(x1, y1, 3), P(x0, y1, 3)], shade(wall, -0.22));      // the plinth
+    poly(g, [P(x1, y0, 0), P(x1, y1, 0), P(x1, y1, 3), P(x1, y0, 3)], shade(wallR, -0.22));
+    seg(g, P(x0, y1, 12), P(x1, y1, 12), shade(wall, -0.12)); seg(g, P(x1, y0, 12), P(x1, y1, 12), shade(wallR, -0.12));
+    seg(g, P(x0, y1, h), P(x1, y1, h), shade(wall, 0.3)); seg(g, P(x1, y0, h), P(x1, y1, h), shade(wall, 0.15));
+    const win = (q) => { poly(g, q, PAL.glassDark); lights.windows.push(q); };
+    const front = (ya, yb, za, zb) => { win([P(x1, ya, za), P(x1, yb, za), P(x1, yb, zb), P(x1, ya, zb)]); seg(g, P(x1, ya, za - 1), P(x1, yb, za - 1), "#f7f1e1"); };
+    const side = (xa, xb, za, zb) => { win([P(xa, y1, za), P(xb, y1, za), P(xb, y1, zb), P(xa, y1, zb)]); seg(g, P(xa, y1, za - 1), P(xb, y1, za - 1), "#f7f1e1"); };
+    front(y0 + 0.3, y0 + 1.15, 4, 10); front(y0 + 2.65, y0 + 3.5, 4, 10);                       // the ground floor
+    for (const a of [0.3, 1.55, 2.8]) front(y0 + a, y0 + a + 0.7, 14, 20);                      // the writers' room
+    side(x0 + 0.45, x0 + 1.2, 14, 20); side(x0 + 1.95, x0 + 2.7, 14, 20);
+    poly(g, [P(x1, y0 + 1.5, 0), P(x1, y0 + 2.3, 0), P(x1, y0 + 2.3, 10), P(x1, y0 + 1.5, 10)], TEAL);  // the door
+    win([P(x1, y0 + 1.65, 5), P(x1, y0 + 2.15, 5), P(x1, y0 + 2.15, 9), P(x1, y0 + 1.65, 9)]);
+    const kn = P(x1, y0 + 1.62, 5); px(g, kn[0], kn[1], 1, 1, "#e3b54b");
+    for (let i = 0; i < 4; i++) {  // a striped awning over it
+      const ya = y0 + 1.35 + i * 0.275, yb = ya + 0.275;
+      poly(g, [P(x1, ya, 13), P(x1, yb, 13), P(x1 + 0.55, yb, 11), P(x1 + 0.55, ya, 11)], i % 2 ? "#f4efe4" : TEAL);
+    }
+    const t0 = P(x1, y0 + 3.09, 26);
+    text(g, "IDEAS", t0[0], t0[1], TEAL, { shear: -1 });
+    // the notes board by the side: a note pinned for each idea
+    poly(g, [P(x0 + 0.35, y1, 3), P(x0 + 2.95, y1, 3), P(x0 + 2.95, y1, 10), P(x0 + 0.35, y1, 10)], "#a8774a");
+    seg(g, P(x0 + 0.35, y1, 10), P(x0 + 2.95, y1, 10), "#6b4a2c"); seg(g, P(x0 + 0.35, y1, 3), P(x0 + 2.95, y1, 3), "#6b4a2c");
+    const notes = ideasNow(), rr = rng(hash("notes"));
+    for (let k = 0; k < Math.min(notes.length, 10); k++) {
+      const q = P(x0 + 0.55 + (k % 5) * 0.47 + rr() * 0.06, y1, k < 5 ? 9 : 6);
+      px(g, q[0], q[1], 2, 2, notes[k].status === "built" ? "#b7e3a1" : ["#f7e26b", "#f6a6b2", "#9fd3f0", "#f7e26b", "#f9c58b"][k % 5]);
+      px(g, q[0], q[1], 1, 1, "#c0392b");
+    }
+    // the light bulb on the roof: lit after dark, and it flashes as each idea is read out
+    const rb = P((x0 + x1) / 2, (y0 + y1) / 2, h), cx = rb[0], cy = rb[1] - 13;
+    px(g, cx - 4, rb[1] - 3, 9, 1, "#5d6166"); px(g, cx - 4, rb[1] - 3, 1, 3, "#5d6166"); px(g, cx + 4, rb[1] - 3, 1, 3, "#5d6166");
+    disc(g, cx, cy, 5, "#c9a850"); disc(g, cx, cy, 4, "#fff3bd");
+    px(g, cx - 3, cy + 4, 7, 2, "#c9a850"); px(g, cx - 2, cy + 4, 5, 2, "#fff3bd");
+    px(g, cx - 2, cy + 6, 5, 3, "#9aa0a6"); px(g, cx - 2, cy + 7, 5, 1, "#6f767c"); px(g, cx - 1, cy + 9, 3, 1, "#4a4f55");
+    px(g, cx - 2, cy - 2, 1, 2, "#ffffff"); px(g, cx - 1, cy - 3, 1, 1, "#ffffff");
+    px(g, cx - 1, cy + 1, 1, 1, "#d98b2b"); px(g, cx, cy, 1, 1, "#d98b2b"); px(g, cx + 1, cy + 1, 1, 1, "#d98b2b");
+    lights.idea = [cx, cy];
+    staticHits.push(Object.assign(bbox([P(x0, y1, 0), P(x1, y1, 0), P(x1, y0, 0), P(x1, y0, h), P(x0, y0, h), P(x0, y1, h), [cx, cy - 6]]), { key: IDEAS, pri: 5 }));
   }
 
   // The backdrop on each stage's set: a colour from its channel's name.
@@ -2043,7 +2092,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         set: pick(SETS, hash(ch + "/set")), dnd: ss.state === "hold" || ss.state === "dark" || ss.state === "off" });
     });
     cast = []; castBy = new Map(); props = []; taken.clear();
-    for (const fixed of ["Hermes", "Iris", "Sam", "Rio", "Claude"]) taken.add(fixed);
+    for (const fixed of ["Hermes", "Iris", "Sam", "Rio", "Claude", "Nova"]) taken.add(fixed);
     const T = { stages: stagesNow.length, rolling: 0, standby: 0, hold: 0, off: 0, dark: 0, trouble: 0, offline: 0, pending: 0,
       waiting: 0, done: 0, failed: 0, collect: 0, answering: 0, newest: null, newestAt: 0, newestOn: null, pulledToday: 0, backAt: null };
     for (const st of stagesNow) {
@@ -2062,6 +2111,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     }
     lot.T = T;
     lotWide(T, now);
+    ideasCast();
     for (const st of stagesNow) stageCast(st, now, cut);
     scenery();
   }
@@ -2099,7 +2149,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       params: [["Looks every", every + " s"], ["Last look", gen ? agoAt(gen) : "not yet"], ["Answering", T.answering + " of " + T.stages],
         ["This page asks", LIVE ? "every 5 s" : "every 20 s (example)"]],
       cmd: "fleet ping",
-      pos: (t) => ({ gx: 2.3 + 1.2, gy: towerBase + 2.6 + 1.2, z: 54, pose: "look", flip: !reduced && Math.floor(t / 7000) % 3 === 2 }) });
+      pos: (t) => ({ gx: 2.3 + 1.2, gy: towerY + 1.2, z: 54, pose: "look", flip: !reduced && Math.floor(t / 7000) % 3 === 2 }) });
     const errs = stagesNow.filter((st) => !st.node.reachable && !st.node.pending);
     add({ key: "guard", name: "Sam", role: "Gate guard", where: "The front gate · your private road", group: LOT, order: 2,
       stands: "the road to the VPSs, your Tailscale network",
@@ -2152,6 +2202,78 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     reel.list = reelOf(snap && snap.screenings);
     add(Object.assign({ key: "screen", name: "The screening room", role: "Finished videos", where: "On the lawn", group: LOT, order: 5, object: "screen",
       stands: "the videos you have collected with fleet pull, newest first", live: screenFacts }, screenFacts()));
+  }
+  // ---------------------------------------------------------------- the ideas office
+  // The head of development reads your ideas list out at the easel, one idea at a time, a longer
+  // one a little longer, then says how to add one. Open their card and they start from the top.
+  const IDEAS = "ideas";
+  const reading = { slots: [], total: 0, n: 0, t0: 0 };
+  const ideasNow = () => (snap && Array.isArray(snap.ideas) ? snap.ideas.filter((i) => i && i.title) : []);
+  const IDEA_HOW = { next: "next to build", building: "being built", built: "built" };
+  function ideaSaid(i, k) {
+    const how = { next: ", the next one to build", building: ", being built now", built: ", already built" }[i.status] || "";
+    return "Number " + (k + 1) + how + ": " + sentence(i.title) + (i.note ? " " + sentence(i.note) : "");
+  }
+  function readList(list) {  // a slot of time for each idea, then the closing line
+    const said = list.map(ideaSaid);
+    said.push(list.length ? "That's the list: " + plural(list.length, "idea", "ideas") + ", best first. To add one, tell Hermes on Telegram or run fleet ideas add."
+      : "The list is empty. To add an idea, tell Hermes on Telegram or run fleet ideas add.");
+    let at = 0;
+    reading.slots = said.map((q) => { const ms = Math.max(5000, Math.min(11000, 2000 + q.length * 40)), sl = { said: q, start: at, ms }; at += ms; return sl; });
+    reading.total = at; reading.n = list.length;
+  }
+  function readNow() {  // the idea being read out (k = n for the closing line)
+    const R = reading;
+    if (!R.total) return null;
+    const e = (((Date.now() - R.t0) % R.total) + R.total) % R.total;
+    let k = 0;
+    while (k < R.slots.length - 1 && e >= R.slots[k].start + R.slots[k].ms) k++;
+    return { k, slot: R.slots[k], into: e - R.slots[k].start };
+  }
+  function ideasCast() {
+    const list = ideasNow(), err = snap && snap.ideas_error;
+    readList(list);
+    const facts = () => {
+      if (err) return { quote: "I can't read the ideas list: " + sentence(err), params: [["Problem", err]] };
+      const r = readNow(), cur = r ? r.k : -1;
+      return { quote: r ? r.slot.said : "",
+        params: [["On the list", plural(list.length, "idea", "ideas") + ", best first" + (snap && snap.ideas_starter ? " (the starter list, until you change it)" : "")]]
+          .concat(list.map((i, k) => [(k === cur ? "▶ " : "") + (k + 1), i.title + (IDEA_HOW[i.status] ? " · " + IDEA_HOW[i.status] : "")])) };
+    };
+    add({ key: IDEAS, name: "Nova", role: "Head of development", where: "The ideas office · before stage 1", group: IDEAS, order: 0,
+      stands: "your ideas list on your PC: notes and features to build later, best first",
+      quote: err ? "I can't read the ideas list." : list.length ? plural(list.length, "idea", "ideas") + " on the list. Number 1: " + sentence(list[0].title) : "The ideas list is empty.",
+      look: look(IDEAS, { shirt: TEAL, pants: "#3a3340", prop: "clipboard" }), reads: !err, live: facts,
+      cmd: "fleet ideas",
+      bubble: () => { const r = readNow(); return r && r.k < reading.n && r.into < 2600 ? String(r.k + 1) : null; },
+      pos: () => ({ gx: 3.6, gy: ideasBase + 5.4 }) });
+    const e = [4.7, ideasBase + 4.9];
+    props.push({ gx: e[0], gy: e[1], key: IDEAS, draw: (g) => { const q = P(e[0], e[1]); return easel(g, q[0], q[1], list); } });
+  }
+  function easel(g, x, y, list) {  // the list on an easel: a line for each idea, the one read out marked
+    const r = readNow(), cur = r && r.k < list.length ? r.k : -1;
+    line(g, x - 6, y, x - 3, y - 20, "#6b4a2c"); line(g, x + 6, y, x + 3, y - 20, "#6b4a2c"); line(g, x + 1, y - 2, x + 1, y - 12, "#4f3520");
+    const bw = 15, bh = 21, bx = x - 7, by = y - 27, rows = 8, from = Math.max(0, Math.min(list.length - rows, cur - 3));
+    px(g, bx - 1, by - 1, bw + 2, bh + 2, "#6b4a2c"); px(g, bx, by, bw, bh, "#f6f2e6"); px(g, bx, by, bw, 3, TEAL);
+    for (let k = from; k < Math.min(list.length, from + rows); k++) {
+      const i = list[k], yy = by + 5 + (k - from) * 2, len = Math.min(10, 3 + Math.round(String(i.title).length / 3));
+      if (k === cur) px(g, bx + 1, yy - 1, bw - 2, 3, "#ffe680");
+      px(g, bx + 1, yy, 1, 1, i.status === "built" ? "#3a9a5b" : IDEA_HOW[i.status] ? "#d6402f" : TEAL);
+      px(g, bx + 3, yy, len, 1, i.status === "built" ? "#b8bdb5" : "#5a5f66");
+    }
+    if (cur >= 0) { const yy = by + 5 + (cur - from) * 2; px(g, bx - 3, yy - 1, 1, 3, "#d6402f"); px(g, bx - 2, yy, 1, 1, "#d6402f"); }
+    return { x: bx - 4, y: by - 1, w: bw + 6, h: y - by + 2 };
+  }
+  function ideaGlow(g, Lt) {  // the bulb on the ideas office: lit after dark, a flash at each new idea
+    const r = readNow(), [x, y] = lights.idea;
+    const flash = r && r.k < reading.n && !reduced ? clamp01(1 - r.into / 700) : 0;
+    const a = Math.max(clamp01((Lt.dark - 0.2) / 0.3) * 0.85, flash);
+    if (a < 0.02) return;
+    g.save(); g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.55 * a; disc(g, x, y, 4, "#fff0a0");
+    g.globalAlpha = 0.22 * a; disc(g, x, y, 8, "#ffd77a");
+    g.globalAlpha = 0.1 * a; disc(g, x, y, 13, "#ffc46b");
+    g.restore();
   }
   let courierAt = () => ({ gx: G - 5.9, gy: 10.3, dir: "x-", moving: false });
   function courierNear(t) { const v = courierAt(t); return v.moving && Math.abs(v.gx - (G - 3)) < 2.2 && Math.abs(v.gy - 9) < 2.5; }
@@ -2635,7 +2757,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       drawGround(lotG);
       drawOffice(lotG);
       const things = stagesNow.map((st) => ({ d: st.base + 4.5, f: () => drawStage(lotG, st) }));
-      things.push({ d: towerBase + 4.9, f: () => drawTower(lotG) });
+      things.push({ d: ideasBase + 4.5, f: () => drawIdeas(lotG) });
+      things.push({ d: towerY + 2.3, f: () => drawTower(lotG) });
       things.sort((a, b) => a.d - b.d).forEach((x) => x.f());
       drawFront(lotG);
     } finally { swap = null; }
@@ -3139,6 +3262,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       halos(g, lights.posts.map(([gx, gy]) => { const q = P(gx, gy); return { x: q[0], y: q[1] - 20, r: 5, thr: 0.25, c: "#ffc46b" }; }), Lt);
     }
     if (lights.tower && (reduced || Math.floor(t / 900) % 2 === 0)) px(g, lights.tower[0], lights.tower[1], 1, 1, "#ff4b3a");
+    if (lights.idea) ideaGlow(g, Lt);
     for (const m of cast) {
       const p = m._p;
       if (!p || p.hidden) continue;
@@ -3148,7 +3272,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         text(g, "Z", s[0] + 3 + Math.round(kk * 3), s[1] - 21 - Math.round(kk * 7), "#f7f4ec");
         if (kk > 0.45) text(g, "Z", s[0] + 7, s[1] - 27 - Math.round((kk - 0.45) * 8), "#cfcabd");
       }
-      if (m.bubble) bubble(g, s[0], s[1] - 19, m.bubble === "…" ? "..." : m.bubble);
+      const said = typeof m.bubble === "function" ? m.bubble(t) : m.bubble;
+      if (said) bubble(g, s[0], s[1] - 19, said === "…" ? "..." : said);
       if (m.sparks && !reduced && (t + m.phase) % 1700 < 280) {
         for (let i = 0; i < 6; i++) px(g, s[0] - 5 + Math.floor((t / 37 + i * 7) % 10), s[1] - 17 + Math.floor((t / 23 + i * 5) % 8), 1, 1, i % 2 ? "#fff3a0" : "#ffb347");
       }
@@ -3247,6 +3372,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     if (!m) return;
     const fresh = key !== selected || dialog.hidden;
     selected = key;
+    if (fresh && m.reads) reading.t0 = Date.now();  // from the top of the list
     fillDialog(m, fresh);
     const r = rectOf(key);  // bring them into view, and keep the box clear of them
     reveal(r);
@@ -3265,7 +3391,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     D.cmd.hidden = !m.cmd;
     D.watch.hidden = !m.film;
     if (D.code.textContent !== (m.cmd || "")) { D.code.textContent = m.cmd || ""; D.copy.textContent = "Copy"; }
-    if (fresh || m.quote !== shownQuote) type(m.quote, fresh);
+    if (fresh || m.quote !== shownQuote) type(m.quote, fresh || !!m.reads);
     drawPortrait($("portrait"), m);
   }
   function type(q, animate) {
@@ -3330,7 +3456,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   // The call sheet: everyone, grouped by where they work.
   let sheetKeys = [], sheetSig = "";
   function renderSheet() {
-    const groups = [{ key: LOT, title: "The lot", c: "var(--gold)", sub: "your PC and the road" }]
+    const groups = [{ key: LOT, title: "The lot", c: "var(--gold)", sub: "your PC and the road" },
+      { key: IDEAS, title: "The ideas office", c: TEAL, sub: "notes for later" }]
       .concat(stagesNow.map((st) => ({ key: st.key, title: "Stage " + st.no + " · " + st.node.name, c: CSSC[st.ss.state], sub: st.ss.sign })));
     const keys = [], parts = [];
     for (const gr of groups) {
@@ -3827,6 +3954,10 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   });
   setInterval(() => { if (snap) refresh(); }, 5000);
   setInterval(tick, 1000);
+  setInterval(() => {  // the next idea, read out in the open card
+    const m = selected && !dialog.hidden ? castBy.get(selected) : null;
+    if (m && m.reads && m.live().quote !== shownQuote) fillDialog(m, false);
+  }, 250);
   window.addEventListener("resize", fit);
   syncTime(true);
   requestAnimationFrame(loop);

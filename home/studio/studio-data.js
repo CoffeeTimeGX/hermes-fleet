@@ -309,6 +309,17 @@
   const STEPS = [{ kind: "tool", name: "WebSearch", detail: "facts and sources for the script" }, { kind: "tool", name: "Write", detail: "/home/fleet/fleet/work/script.md" },
     { kind: "tool", name: "Bash", detail: "Make the voice-over" }, { kind: "tool", name: "Bash", detail: "Render the 1080x1920 video with ffmpeg" },
     { kind: "text", text: "The video is rendered. Checking that it plays from start to end." }];
+  // The starter ideas, as `fleet ideas` lists them until you change the list (STARTER_IDEAS in the CLI).
+  const IDEAS = [
+    { title: "Trend looker", note: "A zeppelin over the lot, coming later. It watches what blows up in each channel's niche, and Hermes proposes a video the same day. You say go, and it skips ahead in that channel's queue.", status: "idea" },
+    { title: "Post everywhere", note: "Each short also goes to Facebook Reels and Pinterest, through their official APIs. Same video, more reach.", status: "idea" },
+    { title: "Go multilingual", note: "A dubbed copy of each video in Spanish, Portuguese or Hindi, with translated captions, for extra channels.", status: "idea" },
+    { title: "Answer comments early", note: "In a video's first hours, Hermes drafts replies on Telegram for you to send, and keeps viewers' questions as new topics.", status: "idea" },
+    { title: "Titles people search for", note: "Before it names a video, Hermes checks what people search for and the videos it would compete with.", status: "idea" },
+    { title: "Remake the hits", note: "When a video takes off, the Sunday plan suggests a part 2 or a new angle.", status: "idea" },
+    { title: "Affiliate links", note: "Matching links from your own list go in each description, with the disclosure line.", status: "idea" },
+    { title: "Run series", note: "Recurring formats like \"Part 3\" or \"Day 12 of...\", planned in the week plan, so viewers come back.", status: "idea" },
+  ];
   let made = 0;
   function exampleJob(ch, o) {
     const t = when(o.submitted_at) || Date.now(), d = new Date(t), p = (x) => String(x).padStart(2, "0");
@@ -325,11 +336,12 @@
     const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token", credential_age_days: 23 }];
     const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
       disk_free_gb: 71.3, disk_free_pct: 74, min_free_gb: 5, load1: 0.4, cpus: 2, mem_available_mb: 6100, mem_total_mb: 7900,
-      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.7.0",
+      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.8.0",
       providers: claude, queue: {} }, o);
     const SF = "Space Facts", HI = "History", CO = "Cooking", NA = "Nature";
     const snap = {
-      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.7.0",
+      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.8.0",
+      ideas: IDEAS.map((i) => Object.assign({}, i)), ideas_starter: true,
       nodes: [
         { name: "vps1", channels: [SF], sessions: 1, reachable: true, status: status({ load1: 1.9 }),
           jobs: [

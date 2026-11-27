@@ -41,6 +41,18 @@ Two things are not covered by `fleet sync`:
   `fleet bootstrap vps1 --skip-upgrade`. It is safe to repeat, keeps public SSH closed
   on a locked-down VPS, and does not stop running jobs.
 
+### From version 1.7 to 1.8
+
+Version 1.8 adds the ideas list (`fleet ideas`) and the ideas office on the pixel lot.
+After `git pull`:
+
+```powershell
+fleet sync
+```
+
+It keeps the VPSs on the same version number as your PC; nothing else changes on them.
+Hermes' skill comes with `git pull`, so Hermes can add your ideas from Telegram.
+
 ### From version 1.6 to 1.7
 
 Version 1.7 adds the [video check](video-check.md), the [week plan](week-plan.md),

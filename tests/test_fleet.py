@@ -1105,6 +1105,7 @@ class StudioTest(TempDirTest):
         self.assertEqual(snap["nodes"][1], dict(fleet.studio_base(cfg.nodes["vps2"]), reachable=False,
                                                 error="no route to vps2"))
         self.assertEqual(snap["screenings"], [])  # nothing collected yet
+        self.assertEqual((snap["ideas"][0]["title"], snap["ideas_starter"]), ("Trend looker", True))
         json.dumps(snap)
 
     @unittest.skipUnless(POSIX and shutil.which("jq"), "the VPS side runs on Linux, with jq")
@@ -1714,6 +1715,102 @@ class PlanTest(TempDirTest):
         with fleet.plan_locked(self.cfg):
             pass
         self.assertFalse(lock.exists())
+
+
+# --------------------------------------------------------------------------- ideas
+
+class IdeasTest(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.cfg = make_cfg(self.tmp, "vps1")
+        self.cfg.path.write_text("", encoding="utf-8")
+
+    def ideas(self, action="list", *args, **kw):
+        base = dict(action=action, args=list(args), note=None, title=None, status=None, at=None, to=None, json=False)
+        base.update(kw)
+        return quietly(fleet.cmd_ideas, self.cfg, argparse.Namespace(**base))
+
+    def keep(self, *titles):
+        fleet.ideas_file(self.cfg).write_text(json.dumps({"version": 1, "ideas": [{"title": t} for t in titles]}),
+                                              encoding="utf-8")
+
+    def titles(self):
+        return [i["title"] for i in fleet.load_ideas(self.cfg)["ideas"]]
+
+    def test_the_starter_list_until_the_owner_changes_it(self):
+        rc, out, _ = self.ideas()
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("1. Trend looker\n   A zeppelin over the lot"), out)
+        self.assertIn("These are the starter ideas", out)
+        self.assertFalse(fleet.ideas_file(self.cfg).exists())  # looking writes nothing
+        rc, out, _ = self.ideas("add", "Weekly", "summary", note=" On Sundays: what was made. ")
+        self.assertEqual(out, f"added {len(fleet.STARTER_IDEAS) + 1}. Weekly summary\n")
+        d = json.loads(fleet.ideas_file(self.cfg).read_text(encoding="utf-8"))
+        self.assertNotIn("starter", d)
+        self.assertEqual(d["ideas"][0]["title"], "Trend looker")
+        self.assertEqual(d["ideas"][-1], {"title": "Weekly summary", "note": "On Sundays: what was made.", "status": "idea",
+                                          "added": fleet.datetime.now().date().isoformat()})
+        self.assertNotIn("starter ideas", self.ideas()[1])
+        self.assertFalse(fleet.ideas_file(self.cfg).with_name("ideas.lock").exists())
+
+    def test_add_edit_move_and_remove(self):
+        self.keep(*"ABCD")
+        self.assertEqual(self.ideas("add", "E", at=1)[1], "added 1. E\n")
+        self.assertEqual(self.ideas("move", "5", to="2")[1], "moved D from 5 to 2\n")
+        self.assertEqual(self.ideas("move", "#1", "3")[1], "moved E from 1 to 3\n")  # `move 1 3` works too
+        self.assertEqual(self.titles(), list("DAEBC"))
+        self.assertEqual(self.ideas("edit", "1", status="built")[1], "changed 5. D [built]\n")  # built: to the end
+        self.assertEqual(self.titles(), list("AEBCD"))
+        self.assertEqual(self.ideas("edit", "2", title=" E  two ", note="  why  ", status="next")[1], "changed 2. E two [next]\n")
+        i = fleet.load_ideas(self.cfg)["ideas"][1]
+        self.assertEqual((i["title"], i["note"], i["status"]), ("E two", "why", "next"))
+        self.assertEqual(self.ideas("remove", "1,3", "1")[1], "removed 1. A\nremoved 3. B\n")
+        got = json.loads(self.ideas(json=True)[1])
+        self.assertEqual([(i["n"], i["title"], i["status"]) for i in got], [(1, "E two", "next"), (2, "C", "idea"), (3, "D", "built")])
+        with self.assertRaises(fleet.FleetError):
+            self.ideas("remove", "1", "9")  # one wrong number: nothing goes
+        self.assertEqual(len(self.titles()), 3)
+
+    def test_mistakes(self):
+        self.keep("A")
+        for args, kw, msg in [(("add",), {}, "needs a title"), (("add", "x" * 81), {}, "keep the title short"),
+                              (("add", "x"), {"note": "y" * 1001}, "1000 at most"), (("add", "x"), {"at": 3}, "--at must be 1 to 2"),
+                              (("edit", "1"), {}, "say what changes"), (("edit", "2"), {"title": "x"}, "not an idea number"),
+                              (("move", "1"), {}, "usage: fleet ideas move"), (("remove",), {}, "name the idea numbers"),
+                              (("remove", "1-3"), {}, "not an idea number")]:
+            with self.subTest(args=args), self.assertRaisesRegex(fleet.FleetError, msg):
+                self.ideas(*args, **kw)
+        self.keep()
+        with self.assertRaisesRegex(fleet.FleetError, "the ideas list is empty"):
+            self.ideas("remove", "1")
+        self.assertEqual(self.ideas()[1], 'no ideas yet: fleet ideas add "Title" --note "what it does"\n')
+
+    def test_a_broken_file_is_named_and_the_studio_says_so(self):
+        fleet.ideas_file(self.cfg).write_text("{not json", encoding="utf-8")
+        with self.assertRaisesRegex(fleet.FleetError, "ideas.json cannot be read"):
+            fleet.load_ideas(self.cfg)
+        got = fleet.studio_ideas(self.cfg)
+        self.assertEqual(got["ideas"], [])
+        self.assertIn("ideas.json cannot be read", got["ideas_error"])
+        fleet.ideas_file(self.cfg).write_text(json.dumps({"ideas": [{"title": "A", "status": "weird"}, {"note": "no title"}, 3]}),
+                                              encoding="utf-8")
+        self.assertEqual(fleet.studio_ideas(self.cfg), {"ideas": [{"title": "A", "note": "", "status": "idea"}],
+                                                       "ideas_starter": False})
+
+    def test_the_example_lot_has_the_same_starter_ideas(self):
+        js = (REPO / "home" / "studio" / "studio-data.js").read_text(encoding="utf-8")
+        for title, note in fleet.STARTER_IDEAS:
+            self.assertIn(f"{{ title: {json.dumps(title)}, note: {json.dumps(note)}, status: \"idea\" }}", js)
+        self.assertEqual(js.count('status: "idea" }'), len(fleet.STARTER_IDEAS))
+
+    def test_command_line(self):
+        a = fleet.parse_cli(["ideas"])
+        self.assertEqual((a.action, a.args), ("list", []))
+        a = fleet.parse_cli(["ideas", "add", "Trend", "looker", "--note", "A zeppelin", "--at", "1"])
+        self.assertEqual((a.action, a.args, a.note, a.at), ("add", ["Trend", "looker"], "A zeppelin", 1))
+        a = fleet.parse_cli(["ideas", "move", "3", "--to", "1"])
+        self.assertEqual((a.args, a.to), (["3"], "1"))
+        self.assertEqual(fleet.parse_cli(["ideas", "edit", "2", "--status", "built"]).status, "built")
 
 
 # --------------------------------------------------------------------------- publishing

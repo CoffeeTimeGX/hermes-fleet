@@ -50,6 +50,8 @@ On Sundays Hermes also sends you next week's topics to approve. See
 | *"Put that video on YouTube and TikTok."* | `fleet publish vps1 <job-id> --to youtube,tiktok` |
 | *"vps1 should only work 8 to 11 pm."* | `fleet schedule set vps1 --hours 20:00-23:00` |
 | *"Let vps1 work for two more hours."* | `fleet schedule open vps1 --for 2h` |
+| *"Idea: a weekly summary on Sunday evenings."* | `fleet ideas add "Weekly summary" --note "..."` |
+| *"What ideas do we have?"* | `fleet ideas` |
 
 For anything that changes a server (closing SSH, rebooting, deleting) or moves work to
 another VPS, the director says what it will run and waits for your yes. It approves no

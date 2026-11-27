@@ -20,6 +20,7 @@ Everyday
   fleet report [--hours 24]                the daily report: what was made, what went wrong
   fleet plan show|slots|import|approve|reject|edit|remove|run
                                            the week plan: topics you approve, queued on time
+  fleet ideas [add|edit|move|remove]       the ideas list: notes and features for later, best first
   fleet publish NODE JOB_ID --to youtube[,tiktok,instagram]
                                            a YouTube private draft, the TikTok inbox, or (with
                                            --now) an Instagram Reel; --login PLATFORM first
@@ -76,7 +77,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -1674,9 +1675,8 @@ def save_plan(cfg: Config, plan: dict) -> None:
 
 
 @contextlib.contextmanager
-def plan_locked(cfg: Config):
-    """Hold the week plan's lock: the hourly run and an answer from Telegram can come at once."""
-    lock = plan_file(cfg).with_name("plan.lock")
+def file_lock(lock: Path, what: str):
+    """Hold a lock file next to fleet.ini, for a file that two runs could change at once."""
     lock.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + 120
     while True:
@@ -1691,7 +1691,7 @@ def plan_locked(cfg: Config):
             except OSError:
                 pass
             if time.time() > deadline:
-                raise FleetError(f"the week plan is busy ({lock} exists); try again in a minute") from None
+                raise FleetError(f"{what} is busy ({lock} exists); try again in a minute") from None
             time.sleep(0.25)
     try:
         yield
@@ -1700,6 +1700,11 @@ def plan_locked(cfg: Config):
             lock.unlink()
         except OSError:
             pass
+
+
+def plan_locked(cfg: Config):
+    """Hold the week plan's lock: the hourly run and an answer from Telegram can come at once."""
+    return file_lock(plan_file(cfg).with_name("plan.lock"), "the week plan")
 
 
 def plan_due(i: dict) -> datetime:
@@ -2057,6 +2062,190 @@ def cmd_plan(cfg: Config, a) -> int:
                "approve": lambda c, x: plan_set_status(c, x, "approved"),
                "reject": lambda c, x: plan_set_status(c, x, "rejected")}
     return actions[a.action](cfg, a)
+
+
+# --------------------------------------------------------------------------- ideas
+
+# The ideas list (ideas.json next to fleet.ini): notes and features to build later, best first.
+# The studio shows it in the ideas office on the pixel lot. Until the owner changes it, it holds
+# these starter ideas.
+IDEA_STATUSES = ("idea", "next", "building", "built")
+IDEA_TITLE_MAX, IDEA_NOTE_MAX = 80, 1000
+STARTER_IDEAS = (
+    ("Trend looker", "A zeppelin over the lot, coming later. It watches what blows up in each channel's niche, "
+                     "and Hermes proposes a video the same day. You say go, and it skips ahead in that channel's "
+                     "queue."),
+    ("Post everywhere", "Each short also goes to Facebook Reels and Pinterest, through their official APIs. "
+                        "Same video, more reach."),
+    ("Go multilingual", "A dubbed copy of each video in Spanish, Portuguese or Hindi, with translated captions, "
+                        "for extra channels."),
+    ("Answer comments early", "In a video's first hours, Hermes drafts replies on Telegram for you to send, and "
+                              "keeps viewers' questions as new topics."),
+    ("Titles people search for", "Before it names a video, Hermes checks what people search for and the videos "
+                                 "it would compete with."),
+    ("Remake the hits", "When a video takes off, the Sunday plan suggests a part 2 or a new angle."),
+    ("Affiliate links", "Matching links from your own list go in each description, with the disclosure line."),
+    ("Run series", "Recurring formats like \"Part 3\" or \"Day 12 of...\", planned in the week plan, so viewers "
+                   "come back."),
+)
+
+
+def ideas_file(cfg: Config) -> Path:
+    return cfg.path.parent / "ideas.json"
+
+
+def load_ideas(cfg: Config) -> dict:
+    """The ideas list, best first: the starter ideas until the owner changes it."""
+    p = ideas_file(cfg)
+    if not p.exists():
+        return {"version": 1, "starter": True,
+                "ideas": [{"title": t, "note": n, "status": "idea", "added": ""} for t, n in STARTER_IDEAS]}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        raise FleetError(f"{p} cannot be read ({e}); fix it or move it away") from None
+    if not isinstance(d, dict) or not isinstance(d.get("ideas"), list):
+        raise FleetError(f"{p} is not an ideas list")
+    d["ideas"] = [dict(i, title=str(i["title"]).strip(), note=str(i.get("note") or "").strip(),
+                       status=i.get("status") if i.get("status") in IDEA_STATUSES else "idea")
+                  for i in d["ideas"] if isinstance(i, dict) and str(i.get("title") or "").strip()]
+    return d
+
+
+def save_ideas(cfg: Config, d: dict) -> None:
+    d.pop("starter", None)
+    p = ideas_file(cfg)
+    tmp = p.with_name(p.name + ".tmp")
+    write_file(tmp, json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)
+
+
+def ideas_locked(cfg: Config):
+    """Hold the ideas list's lock: Hermes and the owner can change it at once."""
+    return file_lock(ideas_file(cfg).with_name("ideas.lock"), "the ideas list")
+
+
+def idea_number(v, d: dict) -> int:
+    s, n = str(v).strip().lstrip("#"), len(d["ideas"])
+    if not n:
+        raise FleetError("the ideas list is empty")
+    if not s.isdigit() or not 1 <= int(s) <= n:
+        raise FleetError(f"{v!r} is not an idea number: fleet ideas shows them, 1 to {n}")
+    return int(s)
+
+
+def idea_text(title, note) -> tuple:
+    title, note = " ".join(str(title or "").split()), str(note or "").strip()
+    if not title:
+        raise FleetError('an idea needs a title: fleet ideas add "Trend looker" --note "what it does"')
+    if len(title) > IDEA_TITLE_MAX:
+        raise FleetError(f"keep the title short ({IDEA_TITLE_MAX} characters at most) and put the rest in --note")
+    if len(note) > IDEA_NOTE_MAX:
+        raise FleetError(f"the note has {len(note)} characters; {IDEA_NOTE_MAX} at most")
+    return title, note
+
+
+def idea_line(k: int, i: dict) -> str:
+    return f"{k}. {i['title']}" + ("" if i["status"] == "idea" else f" [{i['status']}]")
+
+
+def ideas_list(cfg: Config, a) -> int:
+    d = load_ideas(cfg)
+    if a.json:
+        print(json.dumps([dict(i, n=k) for k, i in enumerate(d["ideas"], 1)], indent=2, ensure_ascii=False))
+        return 0
+    if not d["ideas"]:
+        print('no ideas yet: fleet ideas add "Title" --note "what it does"')
+        return 0
+    for k, i in enumerate(d["ideas"], 1):
+        print(idea_line(k, i))
+        if i["note"]:
+            print(f"   {i['note']}")
+    if d.get("starter"):
+        print("\nThese are the starter ideas. Change them with fleet ideas add, edit, move and remove.")
+    return 0
+
+
+def ideas_add(cfg: Config, a) -> int:
+    title, note = idea_text(" ".join(a.args), a.note)
+    with ideas_locked(cfg):
+        d = load_ideas(cfg)
+        n = len(d["ideas"])
+        at = n + 1 if a.at is None else a.at
+        if not 1 <= at <= n + 1:
+            raise FleetError(f"--at must be 1 to {n + 1}")
+        i = {"title": title, "note": note, "status": a.status or "idea", "added": datetime.now().date().isoformat()}
+        d["ideas"].insert(at - 1, i)
+        save_ideas(cfg, d)
+    print(f"added {idea_line(at, i)}")
+    return 0
+
+
+def ideas_edit(cfg: Config, a) -> int:
+    if len(a.args) != 1:
+        raise FleetError("usage: fleet ideas edit NUMBER [--title T] [--note N] [--status idea|next|building|built]")
+    if a.title is None and a.note is None and a.status is None:
+        raise FleetError("say what changes: --title, --note or --status")
+    with ideas_locked(cfg):
+        d = load_ideas(cfg)
+        k = idea_number(a.args[0], d)
+        i = d["ideas"][k - 1]
+        title, note = idea_text(i["title"] if a.title is None else a.title, i["note"] if a.note is None else a.note)
+        was = i["status"]
+        i.update(title=title, note=note, status=a.status or was, edited=datetime.now().date().isoformat())
+        if i["status"] == "built" and was != "built":  # built ideas wait at the end of the list
+            d["ideas"].append(d["ideas"].pop(k - 1))
+            k = len(d["ideas"])
+        save_ideas(cfg, d)
+    print(f"changed {idea_line(k, i)}")
+    return 0
+
+
+def ideas_move(cfg: Config, a) -> int:
+    args, to = list(a.args), a.to
+    if to is None and len(args) == 2:
+        to = args.pop()
+    if len(args) != 1 or to is None:
+        raise FleetError("usage: fleet ideas move NUMBER --to NUMBER")
+    with ideas_locked(cfg):
+        d = load_ideas(cfg)
+        k, m = idea_number(args[0], d), idea_number(to, d)
+        i = d["ideas"].pop(k - 1)
+        d["ideas"].insert(m - 1, i)
+        save_ideas(cfg, d)
+    print(f"moved {i['title']} from {k} to {m}")
+    return 0
+
+
+def ideas_remove(cfg: Config, a) -> int:
+    specs = [x for arg in a.args for x in str(arg).split(",") if x.strip()]
+    if not specs:
+        raise FleetError("name the idea numbers: fleet ideas remove 3 (or 3,5)")
+    with ideas_locked(cfg):
+        d = load_ideas(cfg)
+        ks = sorted({idea_number(x, d) for x in specs})
+        gone = [(k, d["ideas"][k - 1]) for k in ks]
+        for k in reversed(ks):
+            d["ideas"].pop(k - 1)
+        save_ideas(cfg, d)
+    for k, i in gone:
+        print(f"removed {idea_line(k, i)}")
+    return 0
+
+
+def cmd_ideas(cfg: Config, a) -> int:
+    return {"list": ideas_list, "add": ideas_add, "edit": ideas_edit, "move": ideas_move,
+            "remove": ideas_remove}[a.action](cfg, a)
+
+
+def studio_ideas(cfg: Config) -> dict:
+    """The ideas list as the studio shows it, or what is wrong with ideas.json."""
+    try:
+        d = load_ideas(cfg)
+    except FleetError as e:
+        return {"ideas": [], "ideas_error": str(e)[:300]}
+    return {"ideas": [{"title": i["title"], "note": i["note"], "status": i["status"]} for i in d["ideas"]],
+            "ideas_starter": bool(d.get("starter"))}
 
 
 # --------------------------------------------------------------------------- publishing
@@ -3492,7 +3681,8 @@ def studio_snapshot(cfg: Config, every: int) -> dict:
         screenings = studio_screenings(cfg)
     except OSError:
         screenings = []
-    return {"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out, "screenings": screenings}
+    return dict({"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out,
+                 "screenings": screenings}, **studio_ideas(cfg))
 
 
 # The screening room: the finished videos `fleet pull` collected, which the studio plays from
@@ -3895,6 +4085,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--quiet", action="store_true", help="run: print nothing when nothing is due")
     s.add_argument("--dry-run", action="store_true", help="run: print the jobs, queue nothing")
     s.add_argument("--json", action="store_true")
+    s = sp.add_parser("ideas", help="the ideas list: notes and features to build later, best first")
+    s.add_argument("action", nargs="?", default="list", choices=["list", "add", "edit", "move", "remove"])
+    s.add_argument("args", nargs="*", metavar="TITLE|NUMBER", help="add: the title; edit, move, remove: idea numbers")
+    s.add_argument("--note", help="add, edit: what the idea is, in a sentence or two")
+    s.add_argument("--title", help="edit: a new title")
+    s.add_argument("--status", choices=IDEA_STATUSES, help="add, edit: idea (the default), next, building or built")
+    s.add_argument("--at", type=int, help="add: its place in the list (default: the end)")
+    s.add_argument("--to", help="move: its new place, 1 for the top")
+    s.add_argument("--json", action="store_true")
     s = sp.add_parser("publish", help="send a finished video to YouTube (a private draft), TikTok (the inbox) "
                                       "or Instagram")
     s.add_argument("node", nargs="?")
@@ -3969,7 +4168,7 @@ COMMANDS = {
     "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
     "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "handover": cmd_handover,
     "pause": cmd_pause,
-    "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "publish": cmd_publish, "studio": cmd_studio,
+    "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "ideas": cmd_ideas, "publish": cmd_publish, "studio": cmd_studio,
     "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
     "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,

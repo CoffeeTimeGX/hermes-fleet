@@ -258,6 +258,24 @@ draft). `import` takes a JSON list of `{"channel", "day", "title", "brief"}`, or
 read it from the keyboard or a pipe. `run` queues what is due; Hermes runs it every
 hour. See [Week plan](../operations/week-plan.md).
 
+### fleet ideas
+
+```
+fleet ideas [--json]
+fleet ideas add TITLE [--note TEXT] [--at NUMBER] [--status STATUS]
+fleet ideas edit NUMBER [--title T] [--note TEXT] [--status idea|next|building|built]
+fleet ideas move NUMBER --to NUMBER
+fleet ideas remove NUMBERS
+```
+
+Your ideas list: notes and features to build into the fleet later, best first. The
+numbers are the places in the list, so look with `fleet ideas` before you change one.
+`--at 1` and `--to 1` put an idea first. An idea marked `built` moves to the end of the
+list. `NUMBERS` are one or more numbers, like `3` or `3,5`. Until you change it, the list
+holds the starter ideas, with the trend looker first. The studio shows it in the ideas
+office on the pixel lot, and Hermes adds what you tell it on Telegram. The list is
+`ideas.json`, next to `fleet.ini`.
+
 ### fleet publish
 
 ```

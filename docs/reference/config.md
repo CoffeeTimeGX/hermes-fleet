@@ -10,6 +10,7 @@ once and never overwrites them.
 | `~/.config/fleet/secrets/` | Credentials for the VPSs (Claude, Tailscale), and the sign-ins for publishing. |
 | `~/.config/fleet/channels/` | Optional: one file per channel, with its job settings and its days in the week plan. See [Week plan](../operations/week-plan.md). |
 | `~/.config/fleet/plan.json` | The week plan: the topics, approved or not. |
+| `~/.config/fleet/ideas.json` | Your ideas list, once you change it (`fleet ideas`). |
 | `~/.ssh/fleet_ed25519` and `.pub` | The fleet SSH key. |
 | `~/.ssh/config.d/fleet` | SSH settings, so `ssh vps1` works. |
 | The director's folder in Hermes | The director's settings, its `.env` with its own secrets, `SOUL.md`, scripts. |

@@ -126,6 +126,7 @@ Around the lot:
 | Rio, the courier | At the pickup bay, or driving the van | Finished videos that wait to be collected on your PC. The van stops at each stage that has some. | How many wait on each VPS, `fleet pull` |
 | The marquee | By the red carpet | The newest video finished in the last 24 hours. | Its title, its VPS, and the counts for today |
 | The screen | On the lawn, by the marquee | The videos you have collected with `fleet pull`. It shows the newest of each channel in turn. | The video on the screen, its channel and VPS, and **Watch** |
+| Nova, the head of development | At the easel by the ideas office, before stage 1 | Your ideas list: notes and features to build into the fleet later, best first. | Every idea in order, the one being read out marked, `fleet ideas` |
 
 On each stage:
 
@@ -159,6 +160,19 @@ The crew's trade shows what the session does right now:
 | Researcher | It searches the web or reads a web page. |
 | Assistant director | It updates its plan. |
 | Second unit | It hands a part of the work to a helper. |
+
+### The ideas office
+
+The yellow building with a light bulb on its roof, just before stage 1, holds your ideas
+list. Click it, and Nova reads the list out from the top, one idea at a time: the card
+types each one, the easel marks its line, and the bulb flashes. A note is pinned on the
+side of the office for each idea.
+
+![Nova's card in the ideas office: the trend looker read out first, and the whole list below it](../assets/studio-pixel-ideas.png){ width="480" }
+
+To add an idea, tell Hermes on Telegram, for example *"Idea: a weekly summary on Sunday
+evenings"*, or run `fleet ideas add`. Until you change the list, it holds the starter
+ideas, with the trend looker first. See [`fleet ideas`](../reference/cli.md#fleet-ideas).
 
 ### All day and all night
 
