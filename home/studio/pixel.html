@@ -2121,6 +2121,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     lot.T = T;
     lotWide(T, now);
     ideasCast();
+    trendsCast();
     for (const st of stagesNow) stageCast(st, now, cut);
     scenery();
   }
@@ -2287,6 +2288,131 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     g.globalAlpha = 0.1 * a; disc(g, x, y, 13, "#ffc46b");
     g.restore();
   }
+  // ---------------------------------------------------------------- the trend looker
+  // A zeppelin over the lot: the trend looker on your PC, beside Hermes, never on a VPS. Three
+  // times a day it looks at what is rising on YouTube in each channel's niche; when something
+  // is, Hermes pitches a video on it, and "go 3" makes that video next on the channel's VPS.
+  // Its board shows a rising line when something rises; a banner trails behind it while a
+  // pitch waits for your answer.
+  const TRENDS = "trends";
+  const trendsNow = () => (snap && snap.trends && typeof snap.trends === "object" ? snap.trends : {});
+  const count = (n) => Number(n || 0).toLocaleString();
+  function trendsState() {
+    const tr = trendsNow(), chans = Array.isArray(tr.channels) ? tr.channels : [], ps = Array.isArray(tr.pitches) ? tr.pitches : [];
+    const rising = [];
+    for (const c of chans) for (const f of c.finds || []) if (!c.off && Number(f.vph) >= Number(c.min_vph || 1000)) rising.push([c, f]);
+    rising.sort((a, b) => Number(b[1].vph) - Number(a[1].vph));
+    const errors = (Array.isArray(tr.errors) ? tr.errors : []).map(String);
+    return { tr, chans, ps, rising, errors, waiting: ps.filter((x) => x.status === "waiting"), last: when(tr.last_look),
+      broken: !!tr.error, key: !!tr.key };
+  }
+  const madeOn = (z, ch) => (z.chans.find((c) => c.channel === ch) || {}).on || "its VPS";
+  function trendFacts() {
+    const z = trendsState(), tr = z.tr, q = tr.quota || {};
+    let quote;
+    if (z.broken) quote = "I can't read my notes on your PC, trends.json. Fix it or move it away, and I start afresh.";
+    else if (!z.key) quote = "I'm up, but blind until I have a YouTube key. Make one in Google Cloud, then run fleet trends key on your PC.";
+    else if (z.waiting.length) { const x = z.waiting[0]; quote = "Pitch " + x.n + " for " + x.channel + ": “" + short(x.title, 70) + "”. Say go " + x.n + " to Hermes and it's next on " + madeOn(z, x.channel) + "."; }
+    else if (!z.last) quote = "Up and ready. Hermes sends me to look three times a day, or run fleet trends look.";
+    else if (z.errors.length) quote = "The last look hit a snag: " + sentence(short(z.errors[0].replace(/\bGET \S+: /, ""), 110));
+    else if (z.rising.length) { const [c, f] = z.rising[0]; quote = "Rising in " + c.channel + "'s niche: “" + short(f.title, 60) + "”, " + count(f.vph) + " views an hour."; }
+    else quote = "Last look at " + clock(z.last / 1000) + ": nothing rising fast in your channels' niches.";
+    const params = [["Runs on", "your PC, beside Hermes (never on a VPS)"]];
+    if (z.broken) return { quote, params: params.concat([["Problem", short(tr.error, 300)]]), cmd: "fleet trends" };
+    params.push(["Last look", z.last ? agoAt(z.last) : "not yet"], ["Looks", "3 times a day, when Hermes sends it (its fleet-trends job)"],
+      ["YouTube quota", count(q.used) + " of " + count(q.budget || 2000) + " units today"]);
+    for (const c of z.chans) {
+      const f = (c.finds || [])[0], up = f && Number(f.vph) >= Number(c.min_vph || 1000);
+      params.push([c.channel, c.off ? "not watched (fleet trends watch --on)" : !f ? (z.last ? "nothing found in the last look" : "not looked at yet")
+        : "“" + short(f.title, 60) + "”, " + count(f.vph) + " views an hour" + (up ? ", rising" : "")]);
+    }
+    for (const x of z.ps) {
+      params.push(["Pitch " + x.n, x.channel + ": “" + short(x.title, 60) + "”" + (x.status === "waiting" ? ". Say go " + x.n + " or drop " + x.n
+        : x.status === "go" ? ", queued on " + (x.node || "its VPS") : ", " + (x.status || "?"))]);
+    }
+    for (const e of z.errors.slice(0, 2)) params.push(["Problem", short(e, 300)]);
+    return { quote, params, cmd: !z.key ? "fleet trends key" : z.waiting.length ? "fleet trends go " + z.waiting[0].n : "fleet trends" };
+  }
+  function trendsCast() {
+    add(Object.assign({ key: TRENDS, name: "The trend looker", role: "Zeppelin", where: "Over the lot · on your PC, beside Hermes", group: LOT, order: 6,
+      object: "zeppelin", stands: "what is rising on YouTube in your channels' niches, and the videos Hermes pitches on it",
+      live: trendFacts }, trendFacts()));
+  }
+  function zepAt(t) {  // drifting to and fro over the lot, clear of the controls in the corners, turning at each end
+    const tt = reduced ? 0 : t, ph = ((tt % 260000) / 260000) * Math.PI * 2, amp = Math.max(0, Math.min(70, W / 2 - 150));
+    return { x: Math.round(OX + Math.sin(ph) * amp), y: Math.round(Math.max(24, MTN() * 0.4) + (reduced ? 0 : Math.sin(tt / 1700))),
+      d: reduced || Math.cos(ph) < 0 ? -1 : 1 };
+  }
+  function zeppelin(g, t, Lt) {
+    if (!castBy.has(TRENDS)) return null;
+    const z = trendsState(), { x, y, d } = zepAt(t), tt = reduced ? 0 : t, night = clamp01((Lt.dark - 0.25) / 0.35);
+    const L = (c) => litCol(c, Lt), rx = 16, ry = 5, tail = x - d * rx;
+    if (night > 0 && z.key && !z.broken) {  // looking down at the lot after dark
+      const a = (reduced ? 0 : Math.sin(tt / 2600) * 0.35) + Math.PI / 2, len = Math.max(60, OY - y + 30), w = 0.12;
+      g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.07 * night;
+      poly(g, [[x + d * 2, y + ry + 4], [x + d * 2 + Math.cos(a - w) * len, y + ry + 4 + Math.sin(a - w) * len], [x + d * 2 + Math.cos(a + w) * len, y + ry + 4 + Math.sin(a + w) * len]], "#cfe3ff");
+      g.restore();
+    }
+    // the fins at the tail, teal like the pitch room: one up, one down, one flat
+    const fin = L("#2f7f7a"), fin2 = L("#225e5a");
+    for (let i = 0; i < 5; i++) {
+      const fx = d > 0 ? tail - 1 : tail - 3 + i;
+      px(g, fx, y - 4 - i, 5 - i, 1, fin); px(g, fx, y + 4 + i, 5 - i, 1, fin2);
+    }
+    px(g, d > 0 ? tail - 3 : tail + 1, y, 3, 1, fin2);
+    // the envelope: outlined, lit from above, a red band low on its side
+    const body = L("#d3d9e0"), hi = L("#f1f4f7"), lo = L("#9ba4b1"), edge = L("#5d6676"), band = L("#c0392b");
+    for (let dy = -ry - 1; dy <= ry + 1; dy++) {
+      const hw = Math.round((rx + 1) * Math.sqrt(Math.max(0, 1 - (dy / (ry + 1.6)) ** 2)));
+      px(g, x - hw, y + dy, hw * 2 + 1, 1, edge);
+    }
+    for (let dy = -ry; dy <= ry; dy++) {
+      const hw = Math.round(rx * Math.sqrt(Math.max(0, 1 - (dy / (ry + 0.6)) ** 2)));
+      px(g, x - hw + 1, y + dy, hw * 2 - 1, 1, dy <= -3 ? hi : dy >= 3 ? lo : body);
+      if (dy === 3) px(g, x - hw + 2, y + dy, hw * 2 - 3, 1, band);
+    }
+    px(g, x + d * (rx - 1) - (d > 0 ? 1 : 0), y - 1, 2, 3, L("#b9c1cc"));  // the nose cap
+    // the board on its side: a rising line when something rises, dark without a key, a red ! on a problem
+    const bx = x - 7 - d * 3, by = y - 2, on = z.key && !z.broken;
+    px(g, bx - 1, by - 1, 14, 7, edge); px(g, bx, by, 12, 5, on ? "#16202c" : L("#2a2f38"));
+    if (z.broken || (on && z.errors.length && !z.rising.length)) { if (reduced || Math.floor(tt / 600) % 2 === 0) text(g, "!", bx + 5, by, "#ff5a4a"); }
+    else if (on) {
+      const up = z.rising.length > 0, c = up ? "#4ff08a" : "#3f7f63", pts = up ? [[0, 4], [2, 3], [4, 4], [6, 2], [8, 3], [11, 0]] : [[0, 3], [3, 2], [6, 3], [9, 2], [11, 2]];
+      const shown = up && !reduced ? 2 + Math.floor((tt / 260) % (pts.length + 3)) : pts.length;
+      for (let i = 1; i < Math.min(shown, pts.length); i++) line(g, bx + pts[i - 1][0], by + pts[i - 1][1], bx + pts[i][0], by + pts[i][1], c);
+      if (up) px(g, bx + 11, by, 1, 1, "#d8ffe6");
+    }
+    // the gondola, its windows lit after dark, on two struts
+    const gx = x - 5 + d * 3, gy = y + ry + 2;
+    px(g, gx + 2, gy - 1, 1, 1, edge); px(g, gx + 7, gy - 1, 1, 1, edge);
+    px(g, gx, gy, 10, 3, L("#4a515c")); px(g, gx, gy + 2, 10, 1, L("#383e47"));
+    for (let i = 0; i < 3; i++) px(g, gx + 2 + i * 3, gy + 1, 1, 1, night > 0.2 ? "#ffd27a" : L("#9fd3ff"));
+    let r = { x: x - rx - 4, y: y - ry - 6, w: 2 * rx + 9, h: 2 * ry + 12 };
+    // a banner trailing behind while a pitch waits for your answer
+    if (z.waiting.length) {
+      const label = z.waiting.length === 1 ? "PITCH " + z.waiting[0].n : z.waiting.length + " PITCHES", w = textW(label) + 5, h = 8;
+      const x0 = d > 0 ? tail - 6 - w : tail + 6, flap = reduced ? 0 : Math.floor(tt / 420) % 2;
+      const cloth = mix(L("#f6f2e6"), "#f6f2e6", 0.35 * night), ink = mix(L("#d6402f"), "#ff6a55", 0.4 * night);
+      line(g, tail - d, y + 1, d > 0 ? x0 + w : x0, y + 4, edge);
+      px(g, x0, y + 1, w, h, cloth);
+      const far = d > 0 ? x0 : x0 + w - 1;
+      px(g, far, y + 1 + flap, 1, h - 1, mix(cloth, edge, 0.35));
+      text(g, label, x0 + 3, y + 2, ink);
+      r = { x: Math.min(r.x, x0 - 1), y: r.y, w: Math.max(r.x + r.w, x0 + w + 1) - Math.min(r.x, x0 - 1), h: r.h };
+    }
+    // the lights: red on the tail, white on the nose, after dark
+    if (night > 0) {
+      const blink = reduced || Math.floor(tt / 700) % 2 === 0;
+      if (blink) px(g, tail - d * 2 - (d > 0 ? 0 : 1), y - 8, 1, 1, "#ff4b3a");
+      px(g, x + d * rx, y, 1, 1, "#f4f7ff");
+      g.save(); g.globalCompositeOperation = "lighter"; g.globalAlpha = 0.35 * night;
+      if (on) px(g, bx - 1, by - 1, 14, 7, z.rising.length ? "#1d5a36" : "#14301f");
+      px(g, gx - 1, gy, 12, 3, "#5a4318");
+      g.restore();
+    }
+    return r;
+  }
+
   let courierAt = () => ({ gx: G - 5.9, gy: 10.3, dir: "x-", moving: false });
   function courierNear(t) { const v = courierAt(t); return v.moving && Math.abs(v.gx - (G - 3)) < 2.2 && Math.abs(v.gy - 9) < 2.5; }
 
@@ -3131,6 +3257,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     ctx.drawImage(litFrontC, 0, 0);
     if (haloOn) { ctx.globalCompositeOperation = "lighter"; ctx.drawImage(haloC, 0, 0); ctx.globalCompositeOperation = "source-over"; }
     bulbs(ctx, city.bulbsF, t, Lt);
+    const zr = zeppelin(ctx, t, Lt);  // the highest thing over the lot: drawn over it, picked first
+    if (zr) hits.push(Object.assign({ key: TRENDS }, zr));
     veil(ctx, Lt, 0.2);
     fogBanks(ctx, t, Lt);
     fall(ctx, t, Lt);
@@ -3501,6 +3629,10 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     if (m.look) g.drawImage(personSprite(Object.assign({}, m.look, { pose: "stand" }), false), Math.floor((w - 9) / 2), h - 16 - (big ? 3 : 0));
     else icon(g, m.object, w, h);
   }
+  // The trend looker, small: the tail on the left. f its fins, h, b and l its envelope from the top down,
+  // k its board and g the rising line on it, r its band, d the gondola.
+  const ZEP_ICON = ["f.hhhhh..", "fbbbbbbb.", "bbkkkgbbb", "bbkggkbbb", "fbrrrrrb.", "f.lllll..", "...ddd..."];
+  const ZEP_INK = { f: "#2f7f7a", h: "#f1f4f7", b: "#d3d9e0", k: "#16202c", g: "#4ff08a", l: "#9ba4b1", r: "#c0392b", d: "#4a515c" };
   function icon(g, kind, w, h) {
     const x = Math.floor(w / 2), y = h - (w > 9 ? 4 : 1);
     if (kind === "stage") { px(g, x - 4, y - 8, 9, 8, PAL.wall); px(g, x - 4, y - 10, 9, 2, PAL.roof); px(g, x - 3, y - 11, 7, 1, PAL.roof); px(g, x - 2, y - 5, 3, 5, PAL.door); px(g, x + 2, y - 7, 2, 3, PAL.number); }
@@ -3509,6 +3641,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     else if (kind === "board") board(g, x, y, 4, 1);
     else if (kind === "clock") { px(g, x - 4, y - 8, 9, 6, "#1c1b1a"); px(g, x - 3, y - 6, 2, 2, "#f3a51f"); px(g, x + 1, y - 6, 2, 2, "#f3a51f"); px(g, x - 3, y - 2, 1, 2, "#3b3a37"); px(g, x + 3, y - 2, 1, 2, "#3b3a37"); }
     else if (kind === "screen") { px(g, x - 4, y - 14, 9, 12, "#1d1714"); px(g, x - 3, y - 13, 7, 10, "#4bb0ff"); px(g, x - 3, y - 6, 7, 3, "#2e86c1"); px(g, x - 2, y - 2, 1, 2, "#3a3530"); px(g, x + 2, y - 2, 1, 2, "#3a3530"); }
+    else if (kind === "zeppelin") ZEP_ICON.forEach((row, r) => { for (let c = 0; c < row.length; c++) if (ZEP_INK[row[c]]) px(g, x - 4 + c, y - 13 + r, 1, 1, ZEP_INK[row[c]]); });
     else if (kind === "marquee") { px(g, x - 4, y - 12, 9, 2, "#b3262e"); px(g, x - 4, y - 10, 9, 5, "#2a1f1c"); px(g, x - 3, y - 8, 7, 1, "#fff3d6"); px(g, x - 3, y - 5, 1, 5, "#3a3530"); px(g, x + 3, y - 5, 1, 5, "#3a3530"); px(g, x - 4, y - 13, 1, 1, "#ffe39a"); px(g, x + 4, y - 13, 1, 1, "#ffe39a"); }
   }
 

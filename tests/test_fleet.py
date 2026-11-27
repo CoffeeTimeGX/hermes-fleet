@@ -450,7 +450,7 @@ class ReadinessAndDispatchTest(TempDirTest):
         uploaded = []
         fake_status = mock.patch.object(fleet, "fetch_status",
                                         side_effect=lambda c, n: dict(statuses[n.name], node=n.name))
-        fake_upload = mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j: uploaded.append((n.name, j)))
+        fake_upload = mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j, first=False: uploaded.append((n.name, j)))
         with fake_status as fs, fake_upload:
             rc, out, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job(j) for j in jobs], spec, dry_run, False)
             if dry_run:
@@ -536,7 +536,7 @@ class UsageLimitTest(TempDirTest):
         cfg = make_cfg(self.tmp, *statuses)
         uploaded = []
         with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)), \
-                mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j: uploaded.append(n.name)):
+                mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j, first=False: uploaded.append(n.name)):
             rc, _, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job({"prompt": "x"})], "auto", False, False)
         return rc, uploaded, err
 
@@ -565,7 +565,7 @@ class ChannelTest(TempDirTest):
         uploaded = []
         with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)), \
                 mock.patch.object(fleet, "upload_job",
-                                  side_effect=lambda c, n, j: uploaded.append((n.name, j["channel"]))):
+                                  side_effect=lambda c, n, j, first=False: uploaded.append((n.name, j["channel"]))):
             rc, _, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job(j) for j in jobs], spec, False, False)
         return rc, uploaded, err
 
@@ -929,7 +929,7 @@ class DirectorProfileTest(TempDirTest):
         self.assertEqual(rc, 0)
         home = self.tmp / "hermes" / "profiles" / "director"
         self.assertEqual((home / "SOUL.md").read_bytes(), (REPO / "home" / "hermes" / "SOUL.md").read_bytes())
-        for script in ("fleet_health.py", "fleet_pull.py", "fleet_report.py", "fleet_plan.py"):
+        for script in ("fleet_health.py", "fleet_pull.py", "fleet_report.py", "fleet_plan.py", "fleet_trends.py"):
             self.assertTrue((home / "scripts" / script).is_file(), script)
         self.assertEqual(fake.store["terminal.cwd"], fleet.REPO_ROOT.as_posix())
         self.assertEqual({p for p, args in fake.calls if args[0] == "config"}, {"director"})
@@ -946,7 +946,8 @@ class DirectorProfileTest(TempDirTest):
             rc, out, _ = quietly(fleet.cmd_hermes_cron, cfg, a)
             self.assertEqual(rc, 0)
             self.assertIn("- fleet-daily-report (replaced by fleet-report)", out)
-            self.assertEqual(fake.cron, ["fleet-health", "fleet-pull", "fleet-report", "fleet-plan", "fleet-week-plan"])
+            self.assertEqual(fake.cron, ["fleet-health", "fleet-pull", "fleet-report", "fleet-plan", "fleet-week-plan",
+                                         "fleet-trends"])
             self.assertIn("= fleet-health already exists", quietly(fleet.cmd_hermes_cron, cfg, a)[1])
         self.assertEqual({p for p, args in fake.calls if args[0] == "cron"}, {"director"})
         creates = {args[args.index("--name") + 1]: args for _, args in fake.calls if args[:2] == ("cron", "create")}
@@ -957,8 +958,15 @@ class DirectorProfileTest(TempDirTest):
         self.assertIn("fleet plan import", week[3])
         self.assertIn("Do not approve anything yourself", week[3])
         self.assertIn("fleet-ops", week)
+        trends = creates["fleet-trends"]  # an agent job that sleeps unless its script finds something to pitch
+        self.assertEqual(trends[2], "0 8,13,18 * * *")
+        self.assertIn("fleet trends pitch", trends[3])
+        self.assertIn("Never say go yourself", trends[3])
+        self.assertEqual(trends[trends.index("--script") + 1], "fleet_trends.py")
+        self.assertNotIn("--no-agent", trends)
         scripts = self.tmp / "profiles" / "director" / "scripts"
         self.assertIn("'plan', 'run', '--quiet'", (scripts / "fleet_plan.py").read_text(encoding="utf-8"))
+        self.assertIn("['trends', 'look', '--wake']", (scripts / "fleet_trends.py").read_text(encoding="utf-8"))
         self.assertIn("['report']", (scripts / "fleet_report.py").read_text(encoding="utf-8"))
 
 
@@ -1105,7 +1113,9 @@ class StudioTest(TempDirTest):
         self.assertEqual(snap["nodes"][1], dict(fleet.studio_base(cfg.nodes["vps2"]), reachable=False,
                                                 error="no route to vps2"))
         self.assertEqual(snap["screenings"], [])  # nothing collected yet
-        self.assertEqual((snap["ideas"][0]["title"], snap["ideas_starter"]), ("Trend looker", True))
+        self.assertEqual((snap["ideas"][0]["title"], snap["ideas_starter"]), ("Post everywhere", True))
+        self.assertEqual(snap["ideas"][-1]["status"], "built")  # the trend looker: the zeppelin
+        self.assertEqual((snap["trends"]["key"], snap["trends"]["pitches"]), (False, []))
         json.dumps(snap)
 
     @unittest.skipUnless(POSIX and shutil.which("jq"), "the VPS side runs on Linux, with jq")
@@ -1740,14 +1750,15 @@ class IdeasTest(TempDirTest):
     def test_the_starter_list_until_the_owner_changes_it(self):
         rc, out, _ = self.ideas()
         self.assertEqual(rc, 0)
-        self.assertTrue(out.startswith("1. Trend looker\n   A zeppelin over the lot"), out)
+        self.assertTrue(out.startswith("1. Post everywhere\n   Each short also goes"), out)
+        self.assertIn(f"{len(fleet.STARTER_IDEAS)}. Trend looker [built]\n   The zeppelin over the lot", out)
         self.assertIn("These are the starter ideas", out)
         self.assertFalse(fleet.ideas_file(self.cfg).exists())  # looking writes nothing
         rc, out, _ = self.ideas("add", "Weekly", "summary", note=" On Sundays: what was made. ")
         self.assertEqual(out, f"added {len(fleet.STARTER_IDEAS) + 1}. Weekly summary\n")
         d = json.loads(fleet.ideas_file(self.cfg).read_text(encoding="utf-8"))
         self.assertNotIn("starter", d)
-        self.assertEqual(d["ideas"][0]["title"], "Trend looker")
+        self.assertEqual(d["ideas"][0]["title"], "Post everywhere")
         self.assertEqual(d["ideas"][-1], {"title": "Weekly summary", "note": "On Sundays: what was made.", "status": "idea",
                                           "added": fleet.datetime.now().date().isoformat()})
         self.assertNotIn("starter ideas", self.ideas()[1])
@@ -1799,9 +1810,10 @@ class IdeasTest(TempDirTest):
 
     def test_the_example_lot_has_the_same_starter_ideas(self):
         js = (REPO / "home" / "studio" / "studio-data.js").read_text(encoding="utf-8")
-        for title, note in fleet.STARTER_IDEAS:
-            self.assertIn(f"{{ title: {json.dumps(title)}, note: {json.dumps(note)}, status: \"idea\" }}", js)
-        self.assertEqual(js.count('status: "idea" }'), len(fleet.STARTER_IDEAS))
+        for title, note, status in fleet.STARTER_IDEAS:
+            self.assertIn(f"{{ title: {json.dumps(title)}, note: {json.dumps(note)}, status: {json.dumps(status)} }}", js)
+        start = js.index("const IDEAS = [")
+        self.assertEqual(js[start:js.index("];", start)].count("{ title: "), len(fleet.STARTER_IDEAS))
 
     def test_command_line(self):
         a = fleet.parse_cli(["ideas"])
@@ -1823,6 +1835,7 @@ class FakePlatforms:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from urllib.parse import parse_qs, urlparse
         self.calls, self.ig_status, self.got = [], ["IN_PROGRESS", "FINISHED"], {"yt": 0, "tt": 0}
+        self.yt_search, self.yt_videos, self.yt_fail = {}, {}, None  # the YouTube Data API, for the trend looker
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -1896,11 +1909,24 @@ class FakePlatforms:
                     return self.answer(200, {"id": "media-1"})
                 if p == "/instagram_root/refresh_access_token":
                     return self.answer(200, {"access_token": "ig-renewed", "expires_in": 5184000})
+                q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                if p.startswith("/youtube_data/") and fake.yt_fail:
+                    return self.answer(*fake.yt_fail)
+                if p == "/youtube_data/search":
+                    ids = fake.yt_search.get(q.get("q"), [])
+                    return self.answer(200, {"items": [{"id": {"kind": "youtube#video", "videoId": i}} for i in ids]})
+                if p == "/youtube_data/videos":
+                    return self.answer(200, {"items": [fake.yt_videos[i] for i in q["id"].split(",")
+                                                       if i in fake.yt_videos]})
+                if p == "/youtube_data/videoCategories":
+                    if q.get("key") == "good-key":
+                        return self.answer(200, {"items": [{"id": "1"}]})
+                    return self.answer(400, {"error": {"message": "API key not valid. Please pass a valid API key."}})
                 return self.answer(404, {"error": {"message": f"no route {method} {p}"}})
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
 
     def paths(self, method=None):
         return [c["path"] for c in self.calls if method in (None, c["method"])]
@@ -2118,6 +2144,318 @@ def urllib_get(url: str) -> None:
     import urllib.request
     with urllib.request.urlopen(url, timeout=10) as r:
         r.read()
+
+
+# --------------------------------------------------------------------------- the trend looker
+
+class TrendsTest(TempDirTest):
+    def setUp(self):
+        super().setUp()
+        self.fake = FakePlatforms()
+        self.addCleanup(self.fake.close)
+        env = mock.patch.dict(os.environ, {"FLEET_PUBLISH_FAKE_API": self.fake.base,
+                                           "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.cfg = make_cfg(self.tmp, "vps1", "vps2")
+        self.cfg.nodes["vps1"].channels = "Space Facts"
+        self.cfg.nodes["vps2"].channels = "History"
+        self.cfg.path.write_text("", encoding="utf-8")
+        (self.tmp / "channels").mkdir()
+        (self.tmp / "channels" / "space-facts.json").write_text(json.dumps({
+            "channel": "Space Facts", "plan": {"ideas": "Black holes, rockets and the Moon. Keep it simple."}}),
+            encoding="utf-8")
+        self.space = "Black holes|rockets|the Moon"  # what the looker searches for Space Facts
+
+    def key(self, k="good-key"):
+        fleet.save_private(self.cfg, fleet.trends_key_file(self.cfg), {"key": k})
+
+    def video(self, vid, views, hours, title=None, by="Someone"):
+        at = fleet.datetime.now(fleet.timezone.utc) - fleet.timedelta(hours=hours)
+        self.fake.yt_videos[vid] = {"id": vid, "snippet": {
+            "title": title or f"Video {vid} &amp; more", "channelTitle": by, "publishedAt": at.strftime("%Y-%m-%dT%H:%M:%SZ")},
+            "statistics": {"viewCount": str(views)}}
+
+    def trends(self, action="show", *args, **kw):
+        base = dict(action=action, args=list(args), brief=None, source=None, words=None, region=None, language=None,
+                    min=None, off=False, on=False, wake=False, json=False)
+        base.update(kw)
+        return quietly(fleet.cmd_trends, self.cfg, argparse.Namespace(**base))
+
+    def data(self):
+        return fleet.load_trends(self.cfg)
+
+    def rising(self):
+        """Space Facts: a and c rise fast, b does not. History: nothing rises."""
+        self.key()
+        self.fake.yt_search = {self.space: ["a", "b", "c"], "History": ["h"]}
+        self.video("a", 48_000, 4, title="Black hole &quot;spaghetti&quot;", by="Sky Lab")
+        self.video("b", 3_000, 10)
+        self.video("c", 20_000, 2)
+        self.video("h", 500, 1)
+
+    def test_what_it_looks_for(self):
+        d = self.data()
+        space, history = fleet.trend_watch(self.cfg, d, "Space Facts"), fleet.trend_watch(self.cfg, d, "History")
+        self.assertEqual((space["words"], space["own_words"], space["min_vph"]), (["Black holes", "rockets", "the Moon"],
+                                                                                 False, fleet.TRENDS_MIN_VPH))
+        self.assertEqual(history["words"], ["History"])  # no week plan ideas: the channel's name
+        self.assertEqual(fleet.watch_line(self.cfg, space), "Space Facts (made on vps1): looking for Black holes | "
+                         "rockets | the Moon (from its week plan ideas), rising from 1,000 views an hour")
+        rc, out, _ = self.trends("watch", "space facts", words="black holes, mars | comets", region="us", language="EN",
+                                 min=500)
+        self.assertEqual(out, "Space Facts (made on vps1): looking for black holes | mars | comets in US in the "
+                              "language en, rising from 500 views an hour\n")
+        self.assertIn("OFF, looking", self.trends("watch", "Space Facts", off=True)[1])
+        self.assertNotIn("OFF", self.trends("watch", "Space Facts", on=True)[1])
+        self.trends("watch", "Space Facts", words="", region="")
+        w = fleet.trend_watch(self.cfg, self.data(), "Space Facts")
+        self.assertEqual((w["words"], w["region"], w["language"], w["min_vph"]), (["Black holes", "rockets", "the Moon"],
+                                                                                 "", "en", 500))
+        for args, kw, msg in [(("Cooking",), {}, "no VPS makes videos for channel 'Cooking'"),
+                              (("History",), {"region": "USA"}, "two-letter country code"),
+                              (("History",), {"language": "english!"}, "language code"),
+                              (("History",), {"min": 0}, "1 or more"),
+                              (("History",), {"words": ",".join("abcdefghi")}, "at most 8"),
+                              (("History",), {"off": True, "on": True}, "not both"), ((), {}, "fleet trends watch")]:
+            with self.subTest(kw=kw), self.assertRaisesRegex(fleet.FleetError, msg):
+                self.trends("watch", *args, **kw)
+
+    def test_a_look_wakes_hermes_once_for_what_rises(self):
+        self.rising()
+        rc, out, err = self.trends("look", wake=True)
+        self.assertEqual((rc, err), (0, ""))
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("New videos rising fast on YouTube"), out)
+        self.assertTrue(lines[1].startswith("Space Facts (made on vps1): looking for"), out)
+        self.assertEqual(lines[2], '  yt:a  "Black hole "spaghetti"" by Sky Lab: 48,000 views in 4 h, 12,000 an hour. '
+                                   "https://www.youtube.com/watch?v=a")
+        self.assertTrue(lines[3].startswith("  yt:c  "), out)  # the fastest first; b and History do not rise
+        self.assertEqual(len(lines), 4, out)
+        search = [c["query"] for c in self.fake.calls if c["path"] == "/youtube_data/search"]
+        self.assertEqual([q["q"][0] for q in search], ["History", self.space])  # the channels in name order
+        q = search[1]
+        self.assertEqual({k: q[k][0] for k in ("part", "type", "order", "maxResults", "key")},
+                         {"part": "snippet", "type": "video", "order": "viewCount", "maxResults": "10", "key": "good-key"})
+        self.assertRegex(q["publishedAfter"][0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        d = self.data()
+        self.assertEqual(d["quota"], {"day": fleet.quota_day(), "units": 2 * fleet.TRENDS_UNITS})
+        self.assertEqual([f["id"] for f in d["finds"]["space-facts"]], ["yt:a", "yt:c", "yt:b"])
+        self.assertEqual(d["looks"][-1]["rising"], 2)
+        self.assertEqual(self.trends("look", wake=True)[1], fleet.WAKE_NOT + "\n")  # seen already: Hermes sleeps
+        self.assertEqual(self.data()["finds"]["space-facts"][0]["first_seen"], d["finds"]["space-facts"][0]["first_seen"])
+        rc, out, _ = self.trends("look")
+        self.assertEqual(rc, 0)
+        self.assertIn('  yt:a  "Black hole "spaghetti"" by Sky Lab: 48,000 views in 4 h, 12,000 an hour  RISING', out)
+        self.assertIn("YouTube quota used today by the trend looker: 606 of 2,000 units", out)
+        got = json.loads(self.trends("look", json=True)[1])
+        self.assertEqual((got["new"], got["look"]["rising"]), ([], 2))
+
+    def test_a_channel_with_a_pitch_is_quiet_and_the_budget_holds(self):
+        self.rising()
+        d = self.data()
+        d["pitches"].append({"n": 1, "channel": "Space Facts", "title": "T", "status": "waiting", "at": fleet.now_iso()})
+        fleet.save_trends(self.cfg, d)
+        self.assertEqual(self.trends("look", wake=True)[1], fleet.WAKE_NOT + "\n")
+        d = self.data()
+        d["pitches"][0].update(status="dropped", at="2020-01-01T00:00:00Z", answered_at=fleet.now_iso())
+        fleet.save_trends(self.cfg, d)
+        self.assertIn("yt:a", self.trends("look", wake=True)[1])  # quiet no more, and those finds are still news
+        self.cfg.trends_budget = 5 * fleet.TRENDS_UNITS + 50  # two looks so far: 4 calls of 101 units
+        rc, out, err = self.trends("look")
+        self.assertEqual(rc, 1)
+        self.assertIn("Space Facts: not looked at: the trend looker has used today's YouTube budget (505 of 555 units",
+                      err)
+        self.assertEqual(self.data()["quota"]["units"], 5 * fleet.TRENDS_UNITS)
+        self.cfg.trends_budget = 0
+        self.assertEqual(self.trends("watch", "History", off=True)[0], 0)
+        self.assertEqual(self.trends("look", wake=True), (0, fleet.WAKE_NOT + "\n", ""))
+
+    def test_no_key_a_refused_key_and_a_broken_file(self):
+        self.assertEqual(self.trends("look", wake=True), (0, fleet.WAKE_NOT + "\n", ""))
+        with self.assertRaisesRegex(fleet.FleetError, "no YouTube API key yet"):
+            self.trends("look")
+        self.assertIn("No YouTube API key yet", self.trends()[1])
+        self.rising()
+        self.fake.yt_fail = (403, {"error": {"message": "The request cannot be completed because you have exceeded "
+                                                        "your quota."}})
+        rc, out, err = self.trends("look")
+        self.assertEqual(rc, 1)
+        self.assertIn("fleet: trend looker: History: GET ", err)
+        self.assertIn("/youtube_data/search: HTTP 403: The request cannot be completed", err)
+        self.assertNotIn("Space Facts", err)  # the other channels would fail the same way: not tried
+        self.assertNotIn("good-key", out + err)
+        self.assertEqual(self.data()["quota"]["units"], fleet.TRENDS_UNITS)  # Space Facts' share comes back
+        self.assertIn("The last look had problems:", out)
+        self.assertEqual(self.trends("look", wake=True)[1], fleet.WAKE_NOT + "\n")
+        self.assertIn("HTTP 403", fleet.trends_summary(self.cfg, 0)["problems"][0])
+        fleet.trends_file(self.cfg).write_text("{oops", encoding="utf-8")
+        rc, out, err = self.trends("look", wake=True)
+        self.assertEqual((rc, out), (0, fleet.WAKE_NOT + "\n"))
+        self.assertIn("trends.json", err)
+        self.assertIn("trends.json", fleet.studio_trends(self.cfg)["trends"]["error"])
+        self.assertIn("trends.json", fleet.trends_summary(self.cfg, 0)["error"])
+
+    def test_pitch_go_and_drop(self):
+        self.rising()
+        self.trends("look", wake=True)
+        brief = "What a black hole does to a star that comes too close, in simple words."
+        rc, out, _ = self.trends("pitch", "space facts", "  Why black holes  make spaghetti ", brief=brief, source="yt:a")
+        self.assertEqual(out, 'pitch 1 for Space Facts: "Why black holes make spaghetti". Answer "go 1" to make it next '
+                              'on vps1, or "drop 1".\n')
+        for args, kw, msg in [(("Space Facts", "Again"), {"brief": brief}, "pitch 1 for Space Facts still waits"),
+                              (("History", "x" * 101), {"brief": brief}, "at most 100 characters"),
+                              (("History", "Paper"), {"brief": "short"}, "two or three sentences"),
+                              (("History", "Paper"), {"brief": brief, "source": "yt:zzz"}, "not among the finds"),
+                              (("Cooking", "Paper"), {"brief": brief}, "no VPS makes videos"),
+                              (("History",), {"brief": brief}, "fleet trends pitch")]:
+            with self.subTest(args=args), self.assertRaisesRegex(fleet.FleetError, msg):
+                self.trends("pitch", *args, **kw)
+        self.assertIn('1. Space Facts: "Why black holes make spaghetti" (What a black hole', self.trends()[1])
+        sent = []
+
+        def dispatch(cfg, jobs, spec, dry_run, as_json, first=False):
+            sent.append((jobs, spec, dry_run, as_json, first))
+            print(json.dumps([{"node": "vps1", "id": j["id"], "channel": j["channel"]} for j in jobs]))
+            return 0
+        with mock.patch.object(fleet, "dispatch_jobs", dispatch):
+            rc, out, _ = self.trends("go", "#1")
+            self.assertEqual(self.trends("go", "1")[1], f"pitch 1 is already queued on vps1 as {sent[0][0][0]['id']}\n")
+        jobs, spec, dry_run, as_json, first = sent[0]
+        self.assertEqual((len(sent), spec, dry_run, as_json, first), (1, "auto", False, True, True))
+        job = jobs[0]
+        self.assertEqual(out, f'queued pitch 1 "Why black holes make spaghetti" on vps1 as {job["id"]}, first in its queue\n')
+        self.assertEqual((job["channel"], job["title"], job["trend_pitch"]), ("Space Facts", "Why black holes make spaghetti", 1))
+        self.assertIn("-space-facts-", job["id"])
+        topic = next(f["content"] for f in job["files"] if f["path"] == "topic.md")
+        self.assertTrue(topic.startswith("# Why black holes make spaghetti\n\nChannel: Space Facts\n"), topic)
+        self.assertIn(brief, topic)
+        self.assertIn('Why now: a video on this subject is rising fast on YouTube: "Black hole "spaghetti"" by Sky Lab, '
+                      "48,000 views in 4 hours (https://www.youtube.com/watch?v=a). Make our own video with a fresh "
+                      "angle; do not copy theirs.", topic)
+        x = self.data()["pitches"][0]
+        self.assertEqual((x["status"], x["node"], x["job_id"]), ("go", "vps1", job["id"]))
+        with self.assertRaisesRegex(fleet.FleetError, f"already queued on vps1 as {job['id']}; to stop it: fleet cancel"):
+            self.trends("drop", "1")
+        for args in [(), ("x",), ("1", "2")]:
+            with self.subTest(args=args), self.assertRaisesRegex(fleet.FleetError, "give one pitch number"):
+                self.trends("go", *args)
+        with self.assertRaisesRegex(fleet.FleetError, "there is no pitch 7"):
+            self.trends("drop", "7")
+        self.trends("pitch", "History", "The first coins", brief="Why people made coins, and what came before them.")
+        self.assertEqual(self.trends("drop", "2")[1], 'dropped pitch 2 (History: "The first coins")\n')
+        self.assertEqual(self.data()["pitches"][1]["status"], "dropped")
+
+    def test_a_go_that_fails_can_be_said_again(self):
+        self.key()
+        self.trends("pitch", "History", "The first coins", brief="Why people made coins, and what came before them.")
+
+        def refused(cfg, jobs, spec, dry_run, as_json, first=False):
+            print(f"fleet: {jobs[0]['id']}: channel 'History' is made on vps2, and no VPS can take a claude job",
+                  file=sys.stderr)
+            print("[]")
+            return 1
+
+        def sent_before(cfg, jobs, spec, dry_run, as_json, first=False):
+            print(f"fleet: vps2: could not queue {jobs[0]['id']}: job id {jobs[0]['id']} already exists on vps2",
+                  file=sys.stderr)
+            print("[]")
+            return 1
+        with mock.patch.object(fleet, "dispatch_jobs", refused), \
+                self.assertRaisesRegex(fleet.FleetError, "pitch 1 was not queued: .*no VPS can take a claude job. "
+                                                         "Try again later with: fleet trends go 1"):
+            self.trends("go", "1")
+        x = self.data()["pitches"][0]
+        self.assertEqual(x["status"], "waiting")
+        self.assertIn("no VPS can take", x["error"])
+        jid = x["job_id"]  # kept, so the same video is never queued twice
+        with mock.patch.object(fleet, "dispatch_jobs", sent_before):
+            self.assertEqual(self.trends("go", "1")[1], f'queued pitch 1 "The first coins" on vps2 as {jid}, first in its queue\n')
+        x = self.data()["pitches"][0]
+        self.assertEqual((x["status"], x["node"], x["job_id"], "error" in x), ("go", "vps2", jid, False))
+
+    def test_pitches_expire_and_old_ones_go(self):
+        old, now = "2020-01-01T00:00:00Z", fleet.now_iso()
+        ago = (fleet.datetime.now(fleet.timezone.utc) - fleet.timedelta(hours=49)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fleet.trends_file(self.cfg).write_text(json.dumps({"next": 9, "seen": {"space-facts:yt:x": 1, "space-facts:yt:y": fleet.time.time()},
+                                                           "pitches": [{"n": 3, "channel": "History", "title": "A", "status": "waiting", "at": ago},
+                                                                       {"n": 4, "channel": "History", "title": "B", "status": "go", "at": old,
+                                                                        "answered_at": old},
+                                                                       {"n": 5, "channel": "History", "title": "C", "status": "?", "at": now},
+                                                                       {"n": "6", "title": "bad"}]}), encoding="utf-8")
+        d = self.data()
+        self.assertEqual([(x["n"], x["status"]) for x in d["pitches"]], [(3, "expired"), (4, "go"), (5, "waiting")])
+        self.assertEqual(d["next"], 9)
+        fleet.save_trends(self.cfg, d)
+        d = self.data()
+        self.assertEqual([x["n"] for x in d["pitches"]], [3, 5])  # 3 expired an hour ago; 4 was answered long ago
+        self.assertEqual(fleet.parse_stamp(d["pitches"][0]["answered_at"]),
+                         fleet.parse_stamp(ago) + fleet.TRENDS_PITCH_HOURS * 3600)
+        self.assertEqual(list(d["seen"]), ["space-facts:yt:y"])
+
+    def test_the_key_is_checked_then_kept_private(self):
+        with mock.patch("getpass.getpass", return_value=" bad-key "), \
+                self.assertRaisesRegex(fleet.FleetError, "Google did not take the key, so nothing was saved: GET .*"
+                                                         "videoCategories: HTTP 400: API key not valid") as cm:
+            self.trends("key")
+        self.assertNotIn("bad-key", str(cm.exception))
+        self.assertFalse(fleet.trends_key_file(self.cfg).exists())
+        with mock.patch("getpass.getpass", return_value="two words"), \
+                self.assertRaisesRegex(fleet.FleetError, "does not look like an API key"):
+            self.trends("key")
+        with mock.patch("getpass.getpass", return_value="good-key"):
+            rc, out, _ = self.trends("key")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("good-key", out)
+        self.assertEqual(fleet.trends_key(self.cfg), "good-key")
+        if POSIX:
+            self.assertEqual(fleet.trends_key_file(self.cfg).stat().st_mode & 0o777, 0o600)
+
+    def test_the_studio_and_the_report(self):
+        self.rising()
+        self.trends("look", wake=True)
+        self.trends("pitch", "Space Facts", "Spaghetti", brief="What a black hole does to a star.", source="yt:a")
+        t = fleet.studio_trends(self.cfg)["trends"]
+        self.assertEqual((t["key"], t["quota"], t["errors"]), (True, {"used": 202, "budget": 2000}, []))
+        self.assertEqual([(c["channel"], c["on"], len(c["finds"])) for c in t["channels"]],
+                         [("History", "vps2", 1), ("Space Facts", "vps1", 3)])
+        self.assertEqual(t["channels"][1]["finds"][0]["url"], "https://www.youtube.com/watch?v=a")
+        self.assertEqual([(x["n"], x["status"], x["title"]) for x in t["pitches"]], [(1, "waiting", "Spaghetti")])
+        json.dumps(t)
+        with mock.patch.object(fleet, "parallel", return_value={"vps1": healthy(), "vps2": healthy()}), \
+                mock.patch.object(fleet, "fetch_jobs", return_value=([], [])):
+            d = fleet.report_data(self.cfg, 24)
+        self.assertEqual(d["trends"], {"key": True, "looks": 1, "pitched": 1, "went": 0, "waiting": 1})
+        out = fleet.report_text(d)
+        self.assertIn("Trend looker: 1 look(s), 1 pitch(es), 0 sent to a VPS", out)
+        self.assertIn('- Trend looker: pitch 1 for Space Facts waits for your answer: "Spaghetti". Say "go 1" or "drop 1"', out)
+        base = {"hours": 24, "nodes": [], "problems": [], "failed": [], "needs": [], "plan": {}, "published": {}}
+        self.assertIn("Trend looker: off until it has a YouTube API key",
+                      fleet.report_text(dict(base, trends={"key": False})))
+        self.assertIn("Trend looker: no look in that time",
+                      fleet.report_text(dict(base, trends={"key": True, "looks": 0, "pitched": 0})))
+        self.assertNotIn("Trend looker", fleet.report_text(dict(base, hours=6, trends={"key": True, "looks": 0})))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the VPS side runs Linux, with GNU touch")
+    def test_first_dates_the_job_before_the_queue(self):
+        n = self.cfg.nodes["vps1"]
+        for jid, first in (("20261127-080000-a-aaaaa", False), ("20261127-090000-b-bbbbb", True)):
+            fleet.upload_job(self.cfg, n, fleet.validate_job({"prompt": "x", "id": jid}), first=first)
+        inbox = Path(fleet.root_of(self.cfg, n)) / "jobs" / "inbox"
+        self.assertEqual(int((inbox / "20261127-090000-b-bbbbb.json").stat().st_mtime), fleet.FIRST_MTIME)
+        self.assertGreater((inbox / "20261127-080000-a-aaaaa.json").stat().st_mtime, fleet.FIRST_MTIME)
+        self.assertEqual(sorted(p.name for p in inbox.iterdir()), ["20261127-080000-a-aaaaa.json", "20261127-090000-b-bbbbb.json"])
+
+    def test_command_line(self):
+        a = fleet.parse_cli(["trends"])
+        self.assertEqual((a.cmd, a.action, a.args), ("trends", "show", []))
+        a = fleet.parse_cli(["trends", "pitch", "Space Facts", "Spaghetti", "--brief", "b", "--from", "yt:a"])
+        self.assertEqual((a.action, a.args, a.brief, a.source), ("pitch", ["Space Facts", "Spaghetti"], "b", "yt:a"))
+        a = fleet.parse_cli(["trends", "watch", "History", "--words", "coins, maps", "--min", "500", "--off"])
+        self.assertEqual((a.args, a.words, a.min, a.off), (["History"], "coins, maps", 500, True))
+        self.assertTrue(fleet.parse_cli(["trends", "look", "--wake"]).wake)
+        self.assertTrue(fleet.parse_cli(["dispatch", "--prompt", "x", "--channel", "History", "--first"]).first)
+        self.assertFalse(fleet.parse_cli(["dispatch", "job.json"]).first)
 
 
 # --------------------------------------------------------------------------- schedules
@@ -2410,7 +2748,7 @@ class ScheduleCliTest(TempDirTest):
         uploaded = []
         statuses = {"vps1": healthy(schedule=off), "vps2": healthy(schedule=dict(off, until=fleet.time.time() + 60))}
         with mock.patch.object(fleet, "fetch_status", side_effect=lambda c, n: dict(statuses[n.name], node=n.name)), \
-                mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j: uploaded.append(n.name)):
+                mock.patch.object(fleet, "upload_job", side_effect=lambda c, n, j, first=False: uploaded.append(n.name)):
             rc, _, err = quietly(fleet.dispatch_jobs, cfg, [fleet.validate_job({"prompt": "a", "channel": "Space Facts"}),
                                                             fleet.validate_job({"prompt": "b", "channel": "History"})],
                                  "auto", False, False)

@@ -27,6 +27,7 @@ Running it again only adds the jobs that are missing. It also replaces the
 | `fleet-report` | every day at 9 am | Runs `fleet report` and sends you the daily report. | nothing |
 | `fleet-plan` | every hour | Runs `fleet plan run --quiet`: queues the approved topics whose time has come. | nothing |
 | `fleet-week-plan` | Sundays at 10 am | Hermes plans next week's topics and sends them to you to approve. See [Week plan](week-plan.md). | one Hermes conversation |
+| `fleet-trends` | every day at 8 am, 1 pm and 6 pm | Runs `fleet trends look`. Only when a video rises fast in a channel's niche, Hermes wakes and pitches you a video on it. See [Trend looker](trends.md). | YouTube quota; a Hermes conversation only when something rises |
 
 The first four are plain scripts: Hermes runs them without its model and sends whatever
 they print. When they print nothing, you get no message. That is how the fleet stays
@@ -104,13 +105,16 @@ Failed:
 - vps3 "Five-minute pancakes" (20261124-020011-cooking-a9k2m): timed out after 180m. Again: fleet retry vps3 20261124-020011-cooking-a9k2m
 Week plan: 3 video(s) queued, 6 approved and waiting for their day
 Published: 1 TikTok inbox upload(s), 2 YouTube draft(s)
+Trend looker: 3 look(s), 1 pitch(es), 0 sent to a VPS
 Needs you:
 - Week plan: 2 topic(s) wait for your yes. Answer "approve all" or "approve 15-16"; see them with: fleet plan show
+- Trend looker: pitch 3 for Space Facts waits for your answer: "Why black holes make spaghetti". Say "go 3" or "drop 3"
 ```
 
 It covers each VPS, the [video check](video-check.md)'s problems, failed jobs, the
-[week plan](week-plan.md), what was [published](publishing.md), and what needs you: the
-open health problems, topics that wait for your yes, and sign-ins that end soon. Run
+[week plan](week-plan.md), what was [published](publishing.md), the
+[trend looker](trends.md), and what needs you: the open health problems, topics and
+pitches that wait for your answer, and sign-ins that end soon. Run
 `fleet report` yourself at any time; `--hours 72` looks back three days.
 
 ## Where the messages go

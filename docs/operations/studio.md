@@ -127,6 +127,7 @@ Around the lot:
 | The marquee | By the red carpet | The newest video finished in the last 24 hours. | Its title, its VPS, and the counts for today |
 | The screen | On the lawn, by the marquee | The videos you have collected with `fleet pull`. It shows the newest of each channel in turn. | The video on the screen, its channel and VPS, and **Watch** |
 | Nova, the head of development | At the easel by the pitch room, before stage 1 | Your ideas list: notes and features to build into the fleet later, best first. | Every idea in order, the one being pitched marked, `fleet ideas` |
+| The trend looker, a zeppelin | Over the lot | The trend looker on your PC: what is rising on YouTube in each channel's niche, and the videos Hermes pitches on it. | The last look, each channel's top find, the pitches, the day's quota, `fleet trends` |
 
 On each stage:
 
@@ -176,11 +177,30 @@ Nova says where an idea stands in film words: *greenlit* is the next one to buil
 (`--status next`), *in production* is being built (`building`) and *wrapped* is built
 (`built`).
 
-![Nova's card in the pitch room: the trend looker pitched first, and the whole list below it](../assets/studio-pixel-ideas.png){ width="480" }
+![Nova's card in the pitch room: the first idea pitched, and the whole list below it](../assets/studio-pixel-ideas.png){ width="480" }
 
 To add an idea, tell Hermes on Telegram, for example *"Idea: a weekly summary on Sunday
 evenings"*, or run `fleet ideas add`. Until you change the list, it holds the starter
-ideas, with the trend looker first. See [`fleet ideas`](../reference/cli.md#fleet-ideas).
+ideas. The first of them, the trend looker, is wrapped: it is the zeppelin over the lot.
+See [`fleet ideas`](../reference/cli.md#fleet-ideas).
+
+### The trend looker
+
+The zeppelin that drifts over the lot is the [trend looker](trends.md). It runs on your
+PC, beside Hermes, and three times a day looks at what is rising on YouTube in each
+channel's niche.
+
+- The board on its side draws a green line that climbs when something rises fast. It
+  stays dark until the trend looker has a YouTube key, and shows a red **!** when the
+  last look had a problem.
+- While a pitch waits for your answer, a banner trails behind it: **PITCH 3**. Say *go 3*
+  to Hermes and the video is next on its channel's VPS.
+- After dark its lights blink, and a searchlight sweeps the lot.
+
+Click it to open its card: the last look, each channel's top find and how fast it
+rises, the pitches and what became of them, and the YouTube quota used today.
+
+![The trend looker's card: a pitch that waits for go, and each channel's top find](../assets/studio-pixel-trends.png){ width="480" }
 
 ### All day and all night
 

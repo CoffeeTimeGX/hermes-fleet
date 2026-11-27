@@ -311,7 +311,6 @@
     { kind: "text", text: "The video is rendered. Checking that it plays from start to end." }];
   // The starter ideas, as `fleet ideas` lists them until you change the list (STARTER_IDEAS in the CLI).
   const IDEAS = [
-    { title: "Trend looker", note: "A zeppelin over the lot, coming later. It watches what blows up in each channel's niche, and Hermes proposes a video the same day. You say go, and it skips ahead in that channel's queue.", status: "idea" },
     { title: "Post everywhere", note: "Each short also goes to Facebook Reels and Pinterest, through their official APIs. Same video, more reach.", status: "idea" },
     { title: "Go multilingual", note: "A dubbed copy of each video in Spanish, Portuguese or Hindi, with translated captions, for extra channels.", status: "idea" },
     { title: "Answer comments early", note: "In a video's first hours, Hermes drafts replies on Telegram for you to send, and keeps viewers' questions as new topics.", status: "idea" },
@@ -319,6 +318,7 @@
     { title: "Remake the hits", note: "When a video takes off, the Sunday plan suggests a part 2 or a new angle.", status: "idea" },
     { title: "Affiliate links", note: "Matching links from your own list go in each description, with the disclosure line.", status: "idea" },
     { title: "Run series", note: "Recurring formats like \"Part 3\" or \"Day 12 of...\", planned in the week plan, so viewers come back.", status: "idea" },
+    { title: "Trend looker", note: "The zeppelin over the lot. Three times a day it looks at what is rising on YouTube in each channel's niche, Hermes pitches a video on it, and \"go\" makes it next in that channel's queue.", status: "built" },
   ];
   let made = 0;
   function exampleJob(ch, o) {
@@ -328,6 +328,27 @@
       "-" + ch.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + ((made * 7919 + 104729) % 60466176).toString(36).padStart(5, "0").slice(-5);
     return Object.assign({ id, channel: ch, provider: "claude", attempts: 1, limit_waits: 0, pulled: false }, o);
   }
+  // The trend looker's last look, as `fleet trends` keeps it: what rises in each channel's niche,
+  // and the videos Hermes pitched on it.
+  function exampleTrends(t, iso) {
+    const hr = 3600000, find = (id, title, by, views, hours) => ({ id: "yt:" + id, title, by, views, hours, vph: Math.floor(views / hours) });
+    const watch = (channel, on, words, finds) => ({ channel, on, words, off: false, min_vph: 1000, finds });
+    return {
+      key: true, last_look: iso(2 * hr + 14 * 60000), errors: [], quota: { used: 606, budget: 2000 },
+      channels: [
+        watch("Cooking", "vps3", ["easy dinners", "one pan"], [find("ex-c1", "Crispy rice in 10 minutes", "Home Wok", 18400, 9), find("ex-c2", "Air fryer churros", "Snack Lab", 3100, 12)]),
+        watch("History", "vps2", ["ancient Rome", "old maps"], [find("ex-h1", "Why Rome's coins shrank", "Coin Stories", 51000, 30)]),
+        watch("Mysteries", "vps5", ["Mysteries"], []),
+        watch("Nature", "vps4", ["ocean animals", "birds"], [find("ex-n1", "Octopus opens a jar", "Reef Cam", 140000, 20), find("ex-n2", "Owl's first flight", "Wild Nest", 9800, 16)]),
+        watch("Space Facts", "vps1", ["black holes", "planets", "rockets"], [find("ex-s1", "Black hole spaghetti, explained", "Sky Lab", 48000, 4), find("ex-s2", "Mars in 4K", "Orbit Daily", 22000, 30)]),
+      ],
+      pitches: [
+        { n: 3, channel: "Space Facts", title: "Why black holes make spaghetti", status: "waiting", at: iso(2 * hr + 10 * 60000),
+          brief: "What a black hole does to a star that comes too close, in simple words, with a fresh angle." },
+        { n: 2, channel: "History", title: "The coins that built Rome", status: "go", at: iso(26 * hr), node: "vps2", job_id: "" },
+      ],
+    };
+  }
   function exampleLot() {
     const t = Date.now(), min = 60000, iso = (back) => new Date(t - back).toISOString();
     // a finished take: started a minutes ago, finished b minutes ago
@@ -336,12 +357,13 @@
     const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token", credential_age_days: 23 }];
     const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
       disk_free_gb: 71.3, disk_free_pct: 74, min_free_gb: 5, load1: 0.4, cpus: 2, mem_available_mb: 6100, mem_total_mb: 7900,
-      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.8.0",
+      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.9.0",
       providers: claude, queue: {} }, o);
     const SF = "Space Facts", HI = "History", CO = "Cooking", NA = "Nature";
     const snap = {
-      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.8.0",
+      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.9.0",
       ideas: IDEAS.map((i) => Object.assign({}, i)), ideas_starter: true,
+      trends: exampleTrends(t, iso),
       nodes: [
         { name: "vps1", channels: [SF], sessions: 1, reachable: true, status: status({ load1: 1.9 }),
           jobs: [

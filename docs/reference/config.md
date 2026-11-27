@@ -11,6 +11,7 @@ once and never overwrites them.
 | `~/.config/fleet/channels/` | Optional: one file per channel, with its job settings and its days in the week plan. See [Week plan](../operations/week-plan.md). |
 | `~/.config/fleet/plan.json` | The week plan: the topics, approved or not. |
 | `~/.config/fleet/ideas.json` | Your ideas list, once you change it (`fleet ideas`). |
+| `~/.config/fleet/trends.json` | The trend looker's notes: what each channel watches, the last looks and finds, the day's YouTube quota, and the pitches (`fleet trends`). |
 | `~/.ssh/fleet_ed25519` and `.pub` | The fleet SSH key. |
 | `~/.ssh/config.d/fleet` | SSH settings, so `ssh vps1` works. |
 | The director's folder in Hermes | The director's settings, its `.env` with its own secrets, `SOUL.md`, scripts. |
@@ -31,6 +32,7 @@ secrets_dir = ~/.config/fleet/secrets
 ssh_key = ~/.ssh/fleet_ed25519
 connect_timeout = 10
 timezone =
+trends_budget = 2000
 
 [vps1]
 host = vps1
@@ -51,6 +53,7 @@ enabled = true
 | `ssh_key` | `~/.ssh/fleet_ed25519` | The private key `fleet` logs in with. |
 | `connect_timeout` | `10` | Seconds to wait for a VPS to answer. |
 | `timezone` | your PC's | The time zone of the hours you give `fleet schedule`, like `Europe/Paris`. Set it on Windows, where the fleet can only read your PC's offset from UTC, which does not follow summer time. See [Work schedule](../operations/schedule.md#time-zone). |
+| `trends_budget` | `2000` | The YouTube quota units a day the [trend looker](../operations/trends.md) may use, of the 10,000 Google gives your Cloud project. One look at one channel uses 101. |
 | `user` | `fleet` | The user `fleet` logs in as. Leave it. |
 | `remote_root` | `/home/fleet/fleet` | The fleet's folder on each VPS. The bootstrap creates this one; leave it. |
 
@@ -91,6 +94,7 @@ The secrets folder holds one folder per VPS, plus the files all VPSs share:
   tailscale.env              the Tailscale auth key for the bootstrap
   publish/                   the sign-ins for fleet publish (they stay on your PC)
     youtube-client.json      your Google app
+    youtube-api-key.json     the trend looker's YouTube API key (fleet trends key)
     tiktok-app.json          your TikTok app's key and secret
     youtube-space-facts.json one file per platform and channel, written by --login
 ```

@@ -27,6 +27,9 @@ connect_timeout = 10
 ; The time zone of the hours you give `fleet schedule`, such as Europe/Paris. Empty:
 ; your PC's. Set it on Windows, where the fleet only knows your PC's offset from UTC.
 timezone =
+; The YouTube quota units a day the trend looker may use (fleet trends). Google gives
+; each Cloud project 10,000; one look at one channel uses 101.
+trends_budget = 2000
 
 [vps1]
 host = vps1

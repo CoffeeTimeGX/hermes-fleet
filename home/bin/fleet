@@ -9,7 +9,7 @@ Everyday
   fleet status [TARGETS] [--json]          worker, queue, disk and provider state
   fleet health [--quiet|--changes-only]    problems only (scheduled checks use this)
   fleet dispatch JOB.json [...] [--to T]   queue jobs on their channel's VPS
-  fleet dispatch --prompt "..." --channel C [--to T]
+  fleet dispatch --prompt "..." --channel C [--to T] [--first]
   fleet jobs [TARGETS] [--state S] [--json]
   fleet logs NODE JOB_ID [-f]              a job's provider log
   fleet cancel NODE JOB_ID                 cancel a queued or running job
@@ -21,6 +21,9 @@ Everyday
   fleet plan show|slots|import|approve|reject|edit|remove|run
                                            the week plan: topics you approve, queued on time
   fleet ideas [add|edit|move|remove]       the ideas list: notes and features for later, best first
+  fleet trends [look|go N|drop N|watch|key]
+                                           the trend looker: what is rising on YouTube in each
+                                           channel's niche; "go N" makes a pitch next on its VPS
   fleet publish NODE JOB_ID --to youtube[,tiktok,instagram]
                                            a YouTube private draft, the TikTok inbox, or (with
                                            --now) an Instagram Reel; --login PLATFORM first
@@ -77,7 +80,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -126,6 +129,7 @@ class Config:
     transport: str
     nodes: dict
     timezone: str = ""  # [defaults] timezone: the zone `fleet schedule` times are in
+    trends_budget: int = 2000  # [defaults] trends_budget: YouTube quota units a day for the trend looker
 
 
 def _expand(v: str) -> Path:
@@ -160,6 +164,13 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Config:
             )
         except ValueError as e:
             raise FleetError(f"bad value in [{sec}] of {path}: {e}") from None
+    try:
+        budget = int(d.get("trends_budget", "").strip() or "2000")
+        if budget < 0:
+            raise ValueError("it cannot be below 0")
+    except ValueError as e:
+        raise FleetError(f"bad trends_budget in [defaults] of {path}: {e}. It is the YouTube quota units "
+                         "a day the trend looker may use, like 2000") from None
     return Config(
         path=path,
         remote_root=d.get("remote_root", "/home/fleet/fleet"),
@@ -170,6 +181,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Config:
         transport=os.environ.get("FLEET_TRANSPORT", d.get("transport", "ssh")),
         nodes=nodes,
         timezone=d.get("timezone", "").strip(),
+        trends_budget=budget,
     )
 
 
@@ -639,21 +651,28 @@ def load_jobs(a) -> list:
     return out
 
 
-def upload_job(cfg: Config, n: Node, job: dict) -> None:
+# The worker starts the inbox's oldest file first. A job that a usage limit stopped goes back
+# dated 2000-01-01 00:00:00 UTC (946684800), so it goes on first; a job sent with --first is
+# dated one second later, so it starts next, before every other job in the queue.
+FIRST_MTIME = 946684801
+
+
+def upload_job(cfg: Config, n: Node, job: dict, first: bool = False) -> None:
     root, jid = shlex.quote(root_of(cfg, n)), job["id"]
     cmd = (f"set -e; r={root}; id={jid}\n"
            f"if [ -e \"$r/work/$id\" ] || ls \"$r\"/jobs/*/\"$id\".json >/dev/null 2>&1; then\n"
            f"  echo \"job id $id already exists on {n.name}\" >&2; exit 3; fi\n"
            f"mkdir -p \"$r/jobs/inbox\"\n"
            f"cat > \"$r/jobs/inbox/.$id.tmp\"\n"
-           f"mv \"$r/jobs/inbox/.$id.tmp\" \"$r/jobs/inbox/$id.json\"\n")
+           + (f"touch -d '@{FIRST_MTIME}' \"$r/jobs/inbox/.$id.tmp\" || true\n" if first else "")
+           + "mv \"$r/jobs/inbox/.$id.tmp\" \"$r/jobs/inbox/$id.json\"\n")
     r = remote(cfg, n, cmd, stdin=json.dumps(job, indent=2).encode("utf-8"), timeout=60)
     if r.returncode != 0:
         raise FleetError(f"{n.name}: could not queue {jid}: {text(r.stderr) or 'exit ' + str(r.returncode)}")
 
 
 def cmd_dispatch(cfg: Config, a) -> int:
-    return dispatch_jobs(cfg, load_jobs(a), a.to or "auto", a.dry_run, a.json)
+    return dispatch_jobs(cfg, load_jobs(a), a.to or "auto", a.dry_run, a.json, first=a.first)
 
 
 LIMIT_WORDS = "at its usage limit"
@@ -697,7 +716,7 @@ def provider_broken(why, provider: str) -> bool:
     return bool(why) and why.startswith(f"{provider} is not")
 
 
-def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bool) -> int:
+def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bool, first: bool = False) -> int:
     """auto: the VPS that makes videos for the job's channel (`channels` in
     fleet.ini; the least busy one when several do). The job waits there when that
     VPS is busy, paused or at its usage limit: work never moves to another VPS by
@@ -705,7 +724,8 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
     installed or has no credentials, because it would only fail. A channel that no
     VPS names goes to the least busy ready VPS with `channels = all`. all: a copy on
     every VPS. A node list: the least busy ready node in the list (or, if none is
-    ready, it still queues there and warns, because you asked for those nodes)."""
+    ready, it still queues there and warns, because you asked for those nodes). first: each
+    job starts before the others in its VPS's queue."""
     explicit = spec not in ("auto", "all")
     pool = resolve_targets(cfg, spec if explicit else None)
     status = {} if dry_run else parallel(pool, lambda n: fetch_status(cfg, n))
@@ -783,14 +803,15 @@ def dispatch_jobs(cfg: Config, jobs: list, spec: str, dry_run: bool, as_json: bo
                 print(f"note: {n.name} does not make videos for channel '{ch}' (its channels: "
                       f"{n.channels or 'none'}); the job goes there because you named it", file=sys.stderr)
             try:
-                upload_job(cfg, n, j)
+                upload_job(cfg, n, j, first)
             except FleetError as e:
                 print(f"fleet: {e}", file=sys.stderr)
                 rc = 1
                 continue
             queued.append({"node": n.name, "id": j["id"], "channel": j["channel"]})
             if not as_json:
-                print(f"queued {j['id']} on {n.name} (channel {j['channel']}, provider {j['provider']})")
+                print(f"queued {j['id']} on {n.name} (channel {j['channel']}, provider {j['provider']})"
+                      + (", first in its queue" if first else ""))
     if as_json:
         print(json.dumps(queued))
     return rc
@@ -1505,9 +1526,17 @@ def report_data(cfg: Config, hours: float) -> dict:
     for i in plan.get("not_queued", [])[:5]:
         needs.append(f"Week plan: {plan_line(i)} could not be queued: {i.get('error')}")
     needs += publish_needs(cfg)
+    trends = trends_summary(cfg, since)
+    if trends.get("error"):
+        needs.append(f"Trend looker: {trends['error']}")
+    for x in trends.get("waiting", [])[:5]:
+        needs.append(f"Trend looker: pitch {x['n']} for {x['channel']} waits for your answer: \"{x['title']}\". "
+                     f"Say \"go {x['n']}\" or \"drop {x['n']}\"")
+    needs += [f"Trend looker: {e}" for e in trends.get("problems", [])]
     return {"hours": hours, "nodes": per_node, "problems": with_problems, "failed": failed, "needs": needs,
             "plan": {k: len(v) for k, v in plan.items() if isinstance(v, list)},
-            "published": publish_summary(cfg, since)}
+            "published": publish_summary(cfg, since),
+            "trends": {k: len(v) if isinstance(v, list) else v for k, v in trends.items() if k != "problems"}}
 
 
 def report_text(d: dict) -> str:
@@ -1548,6 +1577,15 @@ def report_text(d: dict) -> str:
     if sent:
         words = {"youtube": "YouTube draft(s)", "tiktok": "TikTok inbox upload(s)", "instagram": "Instagram Reel(s)"}
         lines.append("Published: " + ", ".join(f"{n} {words.get(k, k)}" for k, n in sorted(sent.items())))
+    t = d.get("trends") or {}
+    if t and not t.get("error"):
+        if not t.get("key"):
+            lines.append("Trend looker: off until it has a YouTube API key (fleet trends key)")
+        elif t.get("looks") or t.get("pitched"):
+            lines.append(f"Trend looker: {t.get('looks', 0)} look(s), {t.get('pitched', 0)} pitch(es), "
+                         f"{t.get('went', 0)} sent to a VPS")
+        elif d["hours"] >= 24:
+            lines.append("Trend looker: no look in that time. Is its Hermes job there? (fleet hermes-cron)")
     if d["needs"]:
         lines.append("Needs you:")
         lines += [f"- {x}" for x in d["needs"][:12]]
@@ -1783,17 +1821,18 @@ def plan_item(cfg: Config, raw, where: str) -> dict:
     return {"channel": ch, "day": day.isoformat(), "time": t, "title": title.strip(), "brief": brief.strip()}
 
 
-def plan_job(cfg: Config, i: dict) -> dict:
-    """The job for a plan item: the channel's own job file (channels/<channel>.json), or the
-    default, with {title}, {brief}, {day} and {channel} filled in and the topic in topic.md."""
-    job = json.loads(json.dumps(channel_file(cfg, i["channel"]) or {}))  # a deep copy
+def topic_job(cfg: Config, channel: str, title: str, brief: str, day: str, more: str = "") -> dict:
+    """A video on one topic for a channel: the channel's own job file (channels/<channel>.json),
+    or the default, with {title}, {brief}, {day} and {channel} filled in, and the topic in
+    topic.md with `more` after it. The caller gives it an id and validates it."""
+    job = json.loads(json.dumps(channel_file(cfg, channel) or {}))  # a deep copy
     for key in ("plan", "publish", "id", "node", "submitted_at"):
         job.pop(key, None)
     if not (isinstance(job.get("prompt"), str) and job["prompt"].strip()):
         job["prompt"] = DEFAULT_PLAN_JOB["prompt"]  # a channel file may hold only its days and time
     for key, value in DEFAULT_PLAN_JOB.items():
         job.setdefault(key, value)
-    values = {"title": i["title"], "brief": i.get("brief") or "", "day": i["day"], "channel": i["channel"]}
+    values = {"title": title, "brief": brief or "", "day": day, "channel": channel}
     fill = lambda t: PLAN_FIELDS.sub(lambda m: values[m.group(1)], t)  # noqa: E731 - one pass, no repeats
     prompt = job.get("prompt") if isinstance(job.get("prompt"), str) else ""
     if "{title}" not in prompt:
@@ -1803,10 +1842,20 @@ def plan_job(cfg: Config, i: dict) -> dict:
     for f in files:
         if f.get("encoding", "utf-8") == "utf-8" and isinstance(f.get("content"), str):
             f["content"] = fill(f["content"])
-    if not any(f.get("path") == "topic.md" for f in files):
-        files.append({"path": "topic.md", "content": fill("# {title}\n\nChannel: {channel}\nDay: {day}\n\n{brief}\n")})
-    job.update(files=files, channel=i["channel"], title=i["title"], plan_id=i["id"],
-               id=i.get("job_id") or make_job_id(i["channel"]))
+    topic = next((f for f in files if f.get("path") == "topic.md"), None)
+    if topic is None:
+        topic = {"path": "topic.md", "content": fill("# {title}\n\nChannel: {channel}\nDay: {day}\n\n{brief}\n")}
+        files.append(topic)
+    if more and topic.get("encoding", "utf-8") == "utf-8" and isinstance(topic.get("content"), str):
+        topic["content"] = topic["content"].rstrip("\n") + "\n\n" + more.strip() + "\n"
+    job.update(files=files, channel=channel, title=title)
+    return job
+
+
+def plan_job(cfg: Config, i: dict) -> dict:
+    """The job for a plan item: its topic, on the channel's own job file."""
+    job = topic_job(cfg, i["channel"], i["title"], i.get("brief") or "", i["day"])
+    job.update(plan_id=i["id"], id=i.get("job_id") or make_job_id(i["channel"]))
     return validate_job(job, f"plan item #{i['id']} ({channels_dir(cfg) / (channel_key(i['channel']) + '.json')})")
 
 
@@ -2068,25 +2117,25 @@ def cmd_plan(cfg: Config, a) -> int:
 
 # The ideas list (ideas.json next to fleet.ini): notes and features to build later, best first.
 # The studio's pitch room reads it out on the pixel lot. Until the owner changes it, it holds
-# these starter ideas.
+# these starter ideas: (title, note, status).
 IDEA_STATUSES = ("idea", "next", "building", "built")
 IDEA_TITLE_MAX, IDEA_NOTE_MAX = 80, 1000
 STARTER_IDEAS = (
-    ("Trend looker", "A zeppelin over the lot, coming later. It watches what blows up in each channel's niche, "
-                     "and Hermes proposes a video the same day. You say go, and it skips ahead in that channel's "
-                     "queue."),
     ("Post everywhere", "Each short also goes to Facebook Reels and Pinterest, through their official APIs. "
-                        "Same video, more reach."),
+                        "Same video, more reach.", "idea"),
     ("Go multilingual", "A dubbed copy of each video in Spanish, Portuguese or Hindi, with translated captions, "
-                        "for extra channels."),
+                        "for extra channels.", "idea"),
     ("Answer comments early", "In a video's first hours, Hermes drafts replies on Telegram for you to send, and "
-                              "keeps viewers' questions as new topics."),
+                              "keeps viewers' questions as new topics.", "idea"),
     ("Titles people search for", "Before it names a video, Hermes checks what people search for and the videos "
-                                 "it would compete with."),
-    ("Remake the hits", "When a video takes off, the Sunday plan suggests a part 2 or a new angle."),
-    ("Affiliate links", "Matching links from your own list go in each description, with the disclosure line."),
+                                 "it would compete with.", "idea"),
+    ("Remake the hits", "When a video takes off, the Sunday plan suggests a part 2 or a new angle.", "idea"),
+    ("Affiliate links", "Matching links from your own list go in each description, with the disclosure line.", "idea"),
     ("Run series", "Recurring formats like \"Part 3\" or \"Day 12 of...\", planned in the week plan, so viewers "
-                   "come back."),
+                   "come back.", "idea"),
+    ("Trend looker", "The zeppelin over the lot. Three times a day it looks at what is rising on YouTube in each "
+                     "channel's niche, Hermes pitches a video on it, and \"go\" makes it next in that channel's "
+                     "queue.", "built"),
 )
 
 
@@ -2099,7 +2148,7 @@ def load_ideas(cfg: Config) -> dict:
     p = ideas_file(cfg)
     if not p.exists():
         return {"version": 1, "starter": True,
-                "ideas": [{"title": t, "note": n, "status": "idea", "added": ""} for t, n in STARTER_IDEAS]}
+                "ideas": [{"title": t, "note": n, "status": st, "added": ""} for t, n, st in STARTER_IDEAS]}
     try:
         d = json.loads(p.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
@@ -2255,6 +2304,7 @@ PUBLISH_API = {  # FLEET_PUBLISH_FAKE_API points them all at one local server, f
     "google_auth": "https://accounts.google.com/o/oauth2/v2/auth",
     "google_token": "https://oauth2.googleapis.com/token",
     "youtube_upload": "https://www.googleapis.com/upload/youtube/v3",
+    "youtube_data": "https://www.googleapis.com/youtube/v3",  # the trend looker: public data, with an API key
     "tiktok_auth": "https://www.tiktok.com/v2/auth/authorize/",
     "tiktok_api": "https://open.tiktokapis.com/v2",
     "instagram_api": "https://graph.instagram.com/v25.0",
@@ -2955,6 +3005,553 @@ def publish_summary(cfg: Config, since: float) -> dict:
     return counts
 
 
+# --------------------------------------------------------------------------- the trend looker
+
+# The trend looker is the zeppelin over the studio's lot. It runs on this computer, beside
+# Hermes, never on a VPS. Three times a day Hermes' fleet-trends job runs `fleet trends look
+# --wake`: one YouTube search per channel for the videos of the last two days in the channel's
+# niche, most watched first, and their views an hour. When one is new and rising fast, Hermes
+# pitches the owner a video on it, and "go 3" queues that video first on the channel's own VPS.
+# It watches YouTube only, through Google's official YouTube Data API.
+TRENDS_HOURS = 48           # how far back a look searches
+TRENDS_ASK = 10             # videos asked for per channel and look
+TRENDS_KEEP = 5             # the fastest of them kept per channel
+TRENDS_MIN_VPH = 1000       # views an hour that make a find "rising", unless the channel's watch says otherwise
+TRENDS_UNITS = 101          # one look at one channel: a search (100 quota units) and the videos' numbers (1)
+TRENDS_QUIET_HOURS = 20     # a channel that got a pitch this recently is not pitched again
+TRENDS_SEEN_DAYS = 7        # a video found once is not news again for this long
+TRENDS_PITCH_HOURS = 48     # a pitch nobody answered expires after this long: trends fade
+TRENDS_KEEP_DAYS = 30       # answered pitches leave trends.json after this long
+TREND_WORDS_MAX = 8
+PITCH_TITLE_MAX = 100       # YouTube's limit for a title
+PITCH_STATUSES = ("waiting", "go", "dropped", "expired")
+WAKE_NOT = '{"wakeAgent": false}'  # the last line of a Hermes cron script that lets the agent sleep
+TRENDS_PROMPT = (
+    "The trend looker found videos rising fast on YouTube in the niches of the owner's channels; they are listed "
+    "above. Follow \"Spot a trend\" in the fleet-ops skill. For each channel, decide whether one of its finds would "
+    "make a good video for that channel: a fresh angle on the same subject, never a copy, and nothing close to a "
+    "topic already planned or made (`fleet plan show --week all --json`, `fleet jobs --json`). For at most one find "
+    "per channel, run `fleet trends pitch \"<channel>\" \"<title>\" --brief \"<two or three sentences>\" --from "
+    "<find id>`. Then send the owner the new pitches as `fleet trends` prints them under Pitches, and say how to "
+    "answer: \"go 3\" makes that video next on its channel's VPS, \"drop 3\" lets it go. Never say go yourself. If "
+    "no find is worth a video, answer with only [SILENT].")
+
+
+def trends_file(cfg: Config) -> Path:
+    return cfg.path.parent / "trends.json"
+
+
+def trends_key_file(cfg: Config) -> Path:
+    return publish_dir(cfg) / "youtube-api-key.json"
+
+
+def trends_key(cfg: Config) -> str:
+    d = read_json(trends_key_file(cfg), {})
+    k = d.get("key") if isinstance(d, dict) else ""
+    return k.strip() if isinstance(k, str) else ""
+
+
+def quota_day() -> str:
+    """The day YouTube counts its quota in: it starts again at midnight, Pacific time (UTC-8 is near enough)."""
+    return (datetime.now(timezone.utc) - timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def load_trends(cfg: Config) -> dict:
+    """What the trend looker keeps in trends.json next to fleet.ini: each channel's watch, the last
+    looks and finds, the videos already seen, the day's quota, and the pitches."""
+    p, d = trends_file(cfg), {}
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as e:
+            raise FleetError(f"{p}: {e}. Fix it, or move it away to start the trend looker afresh") from None
+        if not isinstance(d, dict):
+            raise FleetError(f"{p} should hold one JSON object; move it away to start the trend looker afresh")
+    part = lambda k, kind: d.get(k) if isinstance(d.get(k), kind) else kind()  # noqa: E731
+    q = part("quota", dict)
+    pitches = [x for x in part("pitches", list) if isinstance(x, dict) and isinstance(x.get("n"), int)
+               and isinstance(x.get("channel"), str) and isinstance(x.get("title"), str)]
+    now = time.time()
+    for x in pitches:
+        if x.get("status") not in PITCH_STATUSES:
+            x["status"] = "waiting"
+        at = parse_stamp(x.get("at")) or now
+        if x["status"] == "waiting" and now - at > TRENDS_PITCH_HOURS * 3600:
+            x.update(status="expired", answered_at=datetime.fromtimestamp(at + TRENDS_PITCH_HOURS * 3600, timezone.utc)
+                     .strftime("%Y-%m-%dT%H:%M:%SZ"))
+    return {
+        "version": 1,
+        "watch": {k: v for k, v in part("watch", dict).items() if isinstance(v, dict)},
+        "looks": [x for x in part("looks", list) if isinstance(x, dict)][-30:],
+        "quota": {"day": str(q.get("day") or ""), "units": int(number(q.get("units"), 0))},
+        "finds": {k: [f for f in v if isinstance(f, dict) and f.get("id")]
+                  for k, v in part("finds", dict).items() if isinstance(v, list)},
+        "seen": {k: v for k, v in part("seen", dict).items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
+        "pitches": pitches,
+        "next": max([int(number(d.get("next"), 1))] + [x["n"] + 1 for x in pitches]),
+    }
+
+
+def save_trends(cfg: Config, d: dict) -> None:
+    now = time.time()
+    d["seen"] = {k: v for k, v in d["seen"].items() if now - v < TRENDS_SEEN_DAYS * 86400}
+    d["pitches"] = [x for x in d["pitches"] if x["status"] == "waiting" or
+                    now - (parse_stamp(x.get("answered_at") or x.get("at")) or now) < TRENDS_KEEP_DAYS * 86400]
+    p = trends_file(cfg)
+    tmp = p.with_name(p.name + ".tmp")
+    write_file(tmp, json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)
+
+
+def trends_locked(cfg: Config):
+    return file_lock(trends_file(cfg).with_name("trends.lock"), "the trend looker")
+
+
+def trend_watch(cfg: Config, d: dict, channel: str) -> dict:
+    """What the looker searches for one channel: the words the owner gave it, or else the first
+    sentence of the channel's ideas for the week plan, or else the channel's name."""
+    w = d["watch"].get(channel_key(channel)) or {}
+    words = [" ".join(str(x).split()) for x in w.get("words") or [] if str(x).strip()][:TREND_WORDS_MAX]
+    own = bool(words)
+    if not words:
+        try:
+            ideas = channel_schedule(cfg, channel)[2]
+        except FleetError:
+            ideas = ""
+        first = re.split(r"[.!?\n]", ideas or "", maxsplit=1)[0]
+        words = [x.strip(" -'\"") for x in re.split(r",|;|/|&|\band\b|\bor\b", first, flags=re.I)]
+        words = [x for x in words if 2 <= len(x) <= 40][:5] or [channel]
+    return {"channel": channel, "words": words, "own_words": own, "region": str(w.get("region") or ""),
+            "language": str(w.get("language") or ""), "min_vph": int(number(w.get("min_vph"), TRENDS_MIN_VPH)),
+            "off": bool(w.get("off"))}
+
+
+def trend_channels(cfg: Config, d: dict) -> list:
+    return [trend_watch(cfg, d, c) for c in plan_channels(cfg)]
+
+
+def made_on(cfg: Config, channel: str) -> str:
+    nodes = channel_home([n for n in cfg.nodes.values() if n.enabled], channel)[0]
+    return ", ".join(n.name for n in nodes) or "no VPS yet"
+
+
+def youtube_data(key: str, what: str, **params) -> dict:
+    """GET from the YouTube Data API with the owner's API key (public data only)."""
+    url = f"{api('youtube_data')}/{what}?" + urlencode(dict(params, key=key))
+    _, _, body = http_call("GET", url, timeout=30)  # its errors name the address without the key
+    try:
+        d = json.loads(body)
+    except ValueError:
+        raise FleetError(f"YouTube {what}: the answer was not JSON") from None
+    return d if isinstance(d, dict) else {}
+
+
+def rising_now(key: str, w: dict) -> list:
+    """The videos of the last TRENDS_HOURS in one channel's niche, the fastest risers first:
+    one search, then the videos' numbers (TRENDS_UNITS of the day's YouTube quota)."""
+    from html import unescape
+    now = time.time()
+    since = datetime.fromtimestamp(now - TRENDS_HOURS * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = {"part": "snippet", "type": "video", "order": "viewCount", "publishedAfter": since,
+         "maxResults": TRENDS_ASK, "q": "|".join(w["words"])}
+    if w["region"]:
+        q["regionCode"] = w["region"]
+    if w["language"]:
+        q["relevanceLanguage"] = w["language"]
+    ids = []
+    for i in youtube_data(key, "search", **q).get("items") or []:
+        v = i.get("id") if isinstance(i, dict) else None
+        if isinstance(v, dict) and isinstance(v.get("videoId"), str) and v["videoId"] not in ids:
+            ids.append(v["videoId"])
+    if not ids:
+        return []
+    out = []
+    for v in youtube_data(key, "videos", part="snippet,statistics", id=",".join(ids)).get("items") or []:
+        if not (isinstance(v, dict) and isinstance(v.get("id"), str)):
+            continue
+        sn = v.get("snippet") if isinstance(v.get("snippet"), dict) else {}
+        st = v.get("statistics") if isinstance(v.get("statistics"), dict) else {}
+        m = re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", str(sn.get("publishedAt") or ""))
+        t = parse_stamp(m.group(0) + "Z") if m else None
+        hours = round(max(1.0, (now - t) / 3600), 1) if t else float(TRENDS_HOURS)
+        views = int(number(st.get("viewCount"), 0))
+        out.append({"id": "yt:" + v["id"], "title": unescape(str(sn.get("title") or v["id"]))[:200],
+                    "by": unescape(str(sn.get("channelTitle") or "someone"))[:100], "views": views,
+                    "hours": hours, "vph": int(views / hours), "published": str(sn.get("publishedAt") or ""),
+                    "url": f"https://www.youtube.com/watch?v={v['id']}"})
+    out.sort(key=lambda f: -f["vph"])
+    return out[:TRENDS_KEEP]
+
+
+def find_line(f: dict) -> str:
+    return (f"{f['id']}  \"{f['title']}\" by {f['by']}: {int(f['views']):,} views in {f['hours']:g} h, "
+            f"{int(f['vph']):,} an hour")
+
+
+def watch_line(cfg: Config, w: dict) -> str:
+    where = [f"in {w['region']}"] if w["region"] else []
+    where += [f"in the language {w['language']}"] if w["language"] else []
+    return (f"{w['channel']} (made on {made_on(cfg, w['channel'])}): " + ("OFF, " if w["off"] else "")
+            + "looking for " + " | ".join(w["words"]) + ("" if w["own_words"] else " (from its week plan ideas)")
+            + (" " + " ".join(where) if where else "") + f", rising from {w['min_vph']:,} views an hour")
+
+
+def pitch_line(x: dict) -> str:
+    s = f"{x['n']}. {x['channel']}: \"{x['title']}\""
+    if x["status"] == "waiting":
+        return s + f" ({x.get('brief', '')}) Answer \"go {x['n']}\" or \"drop {x['n']}\"."
+    if x["status"] == "go":
+        return s + f", queued on {x.get('node')} as {x.get('job_id')}"
+    return s + f", {x['status']}"
+
+
+def channel_quiet(d: dict, channel: str, now: float) -> bool:
+    """A channel is not pitched again while its pitch waits, nor for TRENDS_QUIET_HOURS after one."""
+    return any(x["channel"] == channel and (x["status"] == "waiting" or
+                                            now - (parse_stamp(x.get("at")) or 0) < TRENDS_QUIET_HOURS * 3600)
+               for x in d["pitches"])
+
+
+def trends_look(cfg: Config, a) -> int:
+    """Look once at every channel's niche. With --wake (Hermes' fleet-trends job) it prints only
+    what is new and rising, for Hermes to pitch, or else the line that lets Hermes sleep: nothing
+    to pitch, no key yet, or a problem, which the daily report and the studio tell the owner."""
+    if not a.wake:
+        return look_once(cfg, a)
+    try:
+        return look_once(cfg, a)
+    except FleetError as e:
+        print(f"fleet: trend looker: {e}", file=sys.stderr)
+        print(WAKE_NOT)
+        return 0
+
+
+def look_once(cfg: Config, a) -> int:
+    key = trends_key(cfg)
+    if not key:
+        if a.wake:
+            print(WAKE_NOT)
+            return 0
+        raise FleetError("no YouTube API key yet. Make one in Google Cloud (docs/operations/trends.md), "
+                         "then run: fleet trends key")
+    look = {"at": now_iso(), "units": 0, "rising": 0, "errors": []}
+    with trends_locked(cfg):  # the units are counted before the calls, so two looks at once cannot overspend
+        d = load_trends(cfg)
+        if d["quota"]["day"] != quota_day():
+            d["quota"] = {"day": quota_day(), "units": 0}
+        todo = []
+        for w in trend_channels(cfg, d):
+            if w["off"]:
+                continue
+            if d["quota"]["units"] + TRENDS_UNITS > cfg.trends_budget:
+                look["errors"].append(f"{w['channel']}: not looked at: the trend looker has used today's YouTube "
+                                      f"budget ({d['quota']['units']:,} of {cfg.trends_budget:,} units, trends_budget "
+                                      "in fleet.ini)")
+                continue
+            d["quota"]["units"] += TRENDS_UNITS
+            todo.append(w)
+        day = d["quota"]["day"]
+        save_trends(cfg, d)
+    found, unused = {}, 0
+    for i, w in enumerate(todo):  # no lock while Google answers: "go 3" from Telegram need not wait
+        try:
+            found[w["channel"]] = rising_now(key, w)
+            look["units"] += TRENDS_UNITS
+        except FleetError as e:
+            look["errors"].append(f"{w['channel']}: {e}")
+            look["units"] += TRENDS_UNITS  # a call that fails can still cost quota: count it
+            if re.search(r"HTTP 403|HTTP 400: .*\bkey\b", str(e), re.I):
+                unused = len(todo) - i - 1  # the API not on, the quota spent, or a bad key: the rest would fail too
+                break
+    news = []
+    with trends_locked(cfg):
+        d = load_trends(cfg)
+        if unused and d["quota"]["day"] == day:
+            d["quota"]["units"] = max(0, d["quota"]["units"] - unused * TRENDS_UNITS)
+        now = time.time()
+        for w in todo:
+            if w["channel"] not in found:
+                continue
+            ck, finds = channel_key(w["channel"]), found[w["channel"]]
+            before = {f["id"]: f for f in d["finds"].get(ck, [])}
+            quiet, fresh = channel_quiet(d, w["channel"], now), []
+            for f in finds:
+                f["first_seen"] = before.get(f["id"], {}).get("first_seen") or look["at"]
+                rising = f["vph"] >= w["min_vph"]
+                look["rising"] += rising
+                if rising and f"{ck}:{f['id']}" not in d["seen"]:
+                    fresh.append(f)
+            d["finds"][ck] = finds
+            if fresh and not quiet:  # what a quiet channel finds can still be news when it is quiet no more
+                for f in fresh[:3]:
+                    d["seen"][f"{ck}:{f['id']}"] = now
+                news.append((w, fresh[:3]))
+        d["looks"].append(look)
+        save_trends(cfg, d)
+    if a.json:
+        print(json.dumps({"look": look, "new": [dict(f, channel=w["channel"]) for w, fs in news for f in fs],
+                          "finds": d["finds"]}, indent=2, ensure_ascii=False))
+    elif a.wake:
+        if not news:
+            print(WAKE_NOT)
+            return 0
+        lines = [f"New videos rising fast on YouTube in your channels' niches (published in the last "
+                 f"{TRENDS_HOURS} hours):"]
+        for w, fs in news:
+            lines.append(watch_line(cfg, w))
+            lines += [f"  {find_line(f)}. {f['url']}" for f in fs]
+        print("\n".join(lines))
+        return 0
+    else:
+        print(trends_text(cfg, d))
+    for e in look["errors"]:
+        print(f"fleet: trend looker: {e}", file=sys.stderr)
+    return 1 if look["errors"] else 0
+
+
+def trends_text(cfg: Config, d: dict) -> str:
+    lines = [] if trends_key(cfg) else ["No YouTube API key yet: make one in Google Cloud (docs/operations/trends.md), "
+                                        "then run: fleet trends key"]
+    last = d["looks"][-1] if d["looks"] else None
+    used = d["quota"]["units"] if d["quota"]["day"] == quota_day() else 0
+    lines.append((f"Last look: {short_time(parse_stamp(last['at']))}" if last else "No look yet (fleet trends look)")
+                 + f". YouTube quota used today by the trend looker: {used:,} of {cfg.trends_budget:,} units.")
+    for w in trend_channels(cfg, d):
+        lines.append(watch_line(cfg, w))
+        finds = d["finds"].get(channel_key(w["channel"])) or []
+        lines += [f"  {find_line(f)}" + ("  RISING" if f["vph"] >= w["min_vph"] else "") for f in finds[:3]]
+        if last and not finds and not w["off"]:
+            lines.append("  nothing found in the last look")
+    waiting = [x for x in d["pitches"] if x["status"] == "waiting"]
+    answered = [x for x in reversed(d["pitches"]) if x["status"] != "waiting"][:5]
+    if waiting or answered:
+        lines.append("Pitches:")
+        lines += [f"  {pitch_line(x)}" for x in waiting + answered]
+    if last and last.get("errors"):
+        lines.append("The last look had problems:")
+        lines += [f"  {e}" for e in last["errors"][:5]]
+    return "\n".join(lines)
+
+
+def trends_show(cfg: Config, a) -> int:
+    if a.json:
+        print(json.dumps(studio_trends(cfg)["trends"], indent=2, ensure_ascii=False))
+    else:
+        print(trends_text(cfg, load_trends(cfg)))
+    return 0
+
+
+def pitch_channel(cfg: Config, name: str) -> str:
+    known = {channel_key(c): c for c in plan_channels(cfg)}
+    if channel_key(name) not in known:
+        raise FleetError(f"no VPS makes videos for channel {name!r} (the channels: "
+                         f"{', '.join(known.values()) or 'none yet'})")
+    return known[channel_key(name)]
+
+
+def pitch_number(args: list) -> int:
+    if len(args) != 1 or not re.fullmatch(r"#?\d+", str(args[0]).strip()):
+        raise FleetError("give one pitch number, like 3 (fleet trends shows them)")
+    return int(str(args[0]).strip().lstrip("#"))
+
+
+def find_pitch(d: dict, n: int) -> dict:
+    x = next((p for p in d["pitches"] if p["n"] == n), None)
+    if not x:
+        raise FleetError(f"there is no pitch {n} (fleet trends shows them)")
+    return x
+
+
+def trends_pitch(cfg: Config, a) -> int:
+    if len(a.args) != 2:
+        raise FleetError("fleet trends pitch \"<channel>\" \"<title>\" --brief \"...\" [--from yt:...]")
+    ch, title = pitch_channel(cfg, a.args[0]), " ".join(str(a.args[1]).split())
+    brief = " ".join((a.brief or "").split())
+    if not title or len(title) > PITCH_TITLE_MAX:
+        raise FleetError(f"a pitch needs a title of at most {PITCH_TITLE_MAX} characters (YouTube's limit)")
+    if not 20 <= len(brief) <= 1500:
+        raise FleetError("a pitch needs a --brief of two or three sentences (20 to 1500 characters) that says what "
+                         "the video shows")
+    with trends_locked(cfg):
+        d = load_trends(cfg)
+        src = None
+        if a.source:
+            src = next((f for f in d["finds"].get(channel_key(ch), []) if f["id"] == a.source.strip()), None)
+            if not src:
+                raise FleetError(f"{a.source} is not among the finds for {ch} (fleet trends lists them)")
+        waiting = [x for x in d["pitches"] if x["channel"] == ch and x["status"] == "waiting"]
+        if waiting:
+            raise FleetError(f"pitch {waiting[0]['n']} for {ch} still waits for an answer: one at a time for a channel")
+        x = {"n": d["next"], "channel": ch, "title": title, "brief": brief, "status": "waiting", "at": now_iso()}
+        if src:
+            x["source"] = {k: src.get(k) for k in ("id", "title", "by", "url", "views", "hours", "vph")}
+        d["pitches"].append(x)
+        d["next"] += 1
+        save_trends(cfg, d)
+    print(f"pitch {x['n']} for {ch}: \"{title}\". Answer \"go {x['n']}\" to make it next on {made_on(cfg, ch)}, "
+          f"or \"drop {x['n']}\".")
+    return 0
+
+
+def trend_job(cfg: Config, x: dict) -> dict:
+    """The job for a pitch: the channel's own job file, like a week plan topic, with why it is
+    made now in topic.md."""
+    src = x.get("source") or {}
+    why = (f"Why now: a video on this subject is rising fast on YouTube: \"{src.get('title')}\" by {src.get('by')}, "
+           f"{int(number(src.get('views'), 0)):,} views in {number(src.get('hours'), 0):g} hours ({src.get('url')}). "
+           "Make our own video with a fresh angle; do not copy theirs.") if src else ""
+    job = topic_job(cfg, x["channel"], x["title"], x.get("brief") or "", datetime.now().date().isoformat(), why)
+    job.update(trend_pitch=x["n"], id=x["job_id"])
+    return validate_job(job, f"pitch {x['n']} ({channels_dir(cfg) / (channel_key(x['channel']) + '.json')})")
+
+
+def trends_go(cfg: Config, a) -> int:
+    n = pitch_number(a.args)
+    with trends_locked(cfg):
+        d = load_trends(cfg)
+        x = find_pitch(d, n)
+        if x["status"] == "go":
+            print(f"pitch {n} is already queued on {x.get('node')} as {x.get('job_id')}")
+            return 0
+        x.setdefault("job_id", make_job_id(x["channel"]))
+        save_trends(cfg, d)  # the job id first: a go that stops half way cannot queue the video twice
+        job = trend_job(cfg, x)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            dispatch_jobs(cfg, [job], "auto", False, True, first=True)
+        q = {j["id"]: j for j in last_json(out.getvalue().encode("utf-8"), [])}.get(job["id"])
+        said = [s.strip() for s in err.getvalue().splitlines() if s.strip()]
+        again = re.search(rf"job id {re.escape(job['id'])} already exists on ([a-z0-9-]+)", " ".join(said))
+        if not q and again:  # an earlier go sent it, then stopped before it could say so
+            q, said = {"id": job["id"], "node": again.group(1)}, []
+        if not q:
+            x["error"] = ("; ".join(re.sub(r"^fleet: ", "", s) for s in said) or "it was not queued")[:300]
+            save_trends(cfg, d)
+            raise FleetError(f"pitch {n} was not queued: {x['error']}. Try again later with: fleet trends go {n}")
+        x.update(status="go", node=q["node"], job_id=q["id"], answered_at=now_iso())
+        x.pop("error", None)
+        save_trends(cfg, d)
+    notes = [re.sub(r"^(warning|note): ", "", s) for s in said]
+    print(f"queued pitch {n} \"{x['title']}\" on {q['node']} as {q['id']}, first in its queue"
+          + (f" ({'; '.join(notes)})" if notes else ""))
+    return 0
+
+
+def trends_drop(cfg: Config, a) -> int:
+    n = pitch_number(a.args)
+    with trends_locked(cfg):
+        d = load_trends(cfg)
+        x = find_pitch(d, n)
+        if x["status"] == "go":
+            raise FleetError(f"pitch {n} is already queued on {x.get('node')} as {x.get('job_id')}; to stop it: "
+                             f"fleet cancel {x.get('node')} {x.get('job_id')}")
+        x.update(status="dropped", answered_at=now_iso())
+        save_trends(cfg, d)
+    print(f"dropped pitch {n} ({x['channel']}: \"{x['title']}\")")
+    return 0
+
+
+def trends_watch(cfg: Config, a) -> int:
+    if len(a.args) != 1:
+        raise FleetError("fleet trends watch \"<channel>\" [--words \"a, b\"] [--region US] [--language en] "
+                         "[--min 1000] [--off | --on]")
+    if a.off and a.on:
+        raise FleetError("--off or --on, not both")
+    ch = pitch_channel(cfg, a.args[0])
+    with trends_locked(cfg):
+        d = load_trends(cfg)
+        w = d["watch"].setdefault(channel_key(ch), {})
+        w["channel"] = ch
+        if a.words is not None:
+            words = [" ".join(x.split()) for x in re.split(r"[,|\n]", a.words) if x.strip()]
+            if len(words) > TREND_WORDS_MAX or any(len(x) > 40 for x in words):
+                raise FleetError(f"at most {TREND_WORDS_MAX} words or short phrases (40 characters each), "
+                                 "separated by commas")
+            if words:
+                w["words"] = words
+            else:
+                w.pop("words", None)
+        if a.region is not None:
+            r = a.region.strip().upper()
+            if r and not re.fullmatch(r"[A-Z]{2}", r):
+                raise FleetError("--region is a two-letter country code, like US or FR (\"\" for anywhere)")
+            w["region"] = r
+        if a.language is not None:
+            lang = a.language.strip().lower()
+            if lang and not re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]{2,8})?", lang):
+                raise FleetError("--language is a language code, like en or fr (\"\" for any)")
+            w["language"] = lang
+        if a.min is not None:
+            if a.min < 1:
+                raise FleetError("--min is the views an hour that count as rising: 1 or more")
+            w["min_vph"] = a.min
+        if a.off:
+            w["off"] = True
+        if a.on:
+            w.pop("off", None)
+        save_trends(cfg, d)
+        w = trend_watch(cfg, d, ch)
+    print(watch_line(cfg, w))
+    return 0
+
+
+def trends_set_key(cfg: Config, a) -> int:
+    import getpass
+    print("Paste your YouTube Data API key (it stays hidden while you paste), then press Enter.")
+    k = getpass.getpass("YouTube API key: ").strip()
+    if not k or re.search(r"\s", k) or len(k) > 200:
+        raise FleetError("that does not look like an API key; nothing was saved")
+    try:
+        youtube_data(k, "videoCategories", part="id", regionCode="US")  # 1 quota unit: does Google take the key?
+    except FleetError as e:
+        raise FleetError(f"Google did not take the key, so nothing was saved: {e}") from None
+    save_private(cfg, trends_key_file(cfg), {"key": k})
+    print(f"saved in {trends_key_file(cfg)}. Look now with: fleet trends look. Hermes looks three times a day once "
+          "its fleet-trends job exists (fleet hermes-cron).")
+    return 0
+
+
+def cmd_trends(cfg: Config, a) -> int:
+    return {"show": trends_show, "look": trends_look, "pitch": trends_pitch, "go": trends_go, "drop": trends_drop,
+            "watch": trends_watch, "key": trends_set_key}[a.action](cfg, a)
+
+
+def studio_trends(cfg: Config) -> dict:
+    """The trend looker as the studio's zeppelin shows it, or what is wrong with trends.json."""
+    try:
+        d = load_trends(cfg)
+    except FleetError as e:
+        return {"trends": {"error": str(e)[:300]}}
+    last = d["looks"][-1] if d["looks"] else {}
+    chans = [{"channel": w["channel"], "words": w["words"], "off": w["off"], "min_vph": w["min_vph"],
+              "on": made_on(cfg, w["channel"]),
+              "finds": [{k: f.get(k) for k in ("id", "title", "by", "views", "hours", "vph", "url")}
+                        for f in d["finds"].get(channel_key(w["channel"]), [])[:3]]} for w in trend_channels(cfg, d)]
+    shown = [x for x in d["pitches"] if x["status"] == "waiting"] + \
+        [x for x in reversed(d["pitches"]) if x["status"] != "waiting"][:4]
+    return {"trends": {
+        "key": bool(trends_key(cfg)), "last_look": last.get("at"), "errors": (last.get("errors") or [])[:3],
+        "quota": {"used": d["quota"]["units"] if d["quota"]["day"] == quota_day() else 0, "budget": cfg.trends_budget},
+        "channels": chans,
+        "pitches": [{k: x.get(k) for k in ("n", "channel", "title", "brief", "status", "at", "node", "job_id")}
+                    for x in shown]}}
+
+
+def trends_summary(cfg: Config, since: float) -> dict:
+    """The trend looker's part of the daily report."""
+    try:
+        d = load_trends(cfg)
+    except FleetError as e:
+        return {"error": str(e)}
+    at = lambda x, k: parse_stamp(x.get(k)) or 0  # noqa: E731
+    looks = [x for x in d["looks"] if at(x, "at") >= since]
+    return {"key": bool(trends_key(cfg)), "looks": len(looks),
+            "pitched": sum(1 for x in d["pitches"] if at(x, "at") >= since),
+            "went": sum(1 for x in d["pitches"] if x["status"] == "go" and at(x, "answered_at") >= since),
+            "waiting": [x for x in d["pitches"] if x["status"] == "waiting"],
+            "problems": [str(e) for e in looks[-1].get("errors") or []][:2] if looks else []}
+
+
 # --------------------------------------------------------------------------- maintenance
 
 def cmd_list(cfg: Config, a) -> int:
@@ -3247,8 +3844,10 @@ def write_if_missing(path: Path, content: str) -> bool:
 
 
 CRON_SCRIPT = '''#!/usr/bin/env python3
-# Written by `fleet init`. Hermes runs this as a no-agent cron script: whatever it
-# prints is sent to you; printing nothing means "all quiet".
+# Written by `fleet init`. Hermes runs this for a cron job. For a no-agent job, whatever
+# it prints is sent to you and printing nothing means "all quiet". For an agent job,
+# what it prints is the agent's starting point, and a last line of {{"wakeAgent": false}}
+# lets the agent sleep.
 import os, runpy, sys
 os.environ.setdefault("FLEET_CONFIG", {config!r})
 sys.argv = ["fleet"] + {args!r}
@@ -3265,6 +3864,7 @@ CRON_SCRIPTS = {  # the no-agent scripts in the director profile's scripts/ fold
     "fleet_pull.py": ["pull", "--quiet"],
     "fleet_report.py": ["report"],
     "fleet_plan.py": ["plan", "run", "--quiet"],
+    "fleet_trends.py": ["trends", "look", "--wake"],  # before the fleet-trends agent job: what to pitch
 }
 WEEK_PLAN_PROMPT = (
     "Plan next week's videos for the owner to approve. Follow \"Plan a week ahead\" in the fleet-ops skill: run "
@@ -3509,6 +4109,9 @@ def cmd_hermes_cron(cfg: Config, a) -> int:
         ("fleet-report", ["0 9 * * *", "--no-agent", "--script", "fleet_report.py"]),
         ("fleet-plan", ["every 1h", "--no-agent", "--script", "fleet_plan.py"]),
         ("fleet-week-plan", ["0 10 * * 0", WEEK_PLAN_PROMPT, "--skill", "fleet-ops", "--workdir", REPO_ROOT.as_posix()]),
+        # The trend looker: Hermes only wakes when its script finds something new and rising.
+        ("fleet-trends", ["0 8,13,18 * * *", TRENDS_PROMPT, "--script", "fleet_trends.py", "--skill", "fleet-ops",
+                          "--workdir", REPO_ROOT.as_posix()]),
     ]
     rc = 0
     for old, new in REPLACED_CRON_JOBS.items():
@@ -3682,7 +4285,7 @@ def studio_snapshot(cfg: Config, every: int) -> dict:
     except OSError:
         screenings = []
     return dict({"generated_at": now_iso(), "every": every, "fleet_version": VERSION, "nodes": out,
-                 "screenings": screenings}, **studio_ideas(cfg))
+                 "screenings": screenings}, **studio_ideas(cfg), **studio_trends(cfg))
 
 
 # The screening room: the finished videos `fleet pull` collected, which the studio plays from
@@ -4021,6 +4624,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--channel")
     s.add_argument("--provider")
     s.add_argument("--to", help="auto (default: the channel's VPS), all (a copy on every VPS), or node name(s)")
+    s.add_argument("--first", action="store_true", help="start it before the other jobs in its VPS's queue")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--json", action="store_true")
     s = sp.add_parser("jobs", help="list jobs")
@@ -4093,6 +4697,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--status", choices=IDEA_STATUSES, help="add, edit: idea (the default), next, building or built")
     s.add_argument("--at", type=int, help="add: its place in the list (default: the end)")
     s.add_argument("--to", help="move: its new place, 1 for the top")
+    s.add_argument("--json", action="store_true")
+    s = sp.add_parser("trends", help="the trend looker: what is rising on YouTube in each channel's niche, and the "
+                                     "videos Hermes pitches on it")
+    s.add_argument("action", nargs="?", default="show", choices=["show", "look", "pitch", "go", "drop", "watch", "key"],
+                   help="show (the default); look: look now; pitch: Hermes pitches a video; go N: make pitch N next "
+                        "on its channel's VPS; drop N: let it go; watch: what to look for; key: save the API key")
+    s.add_argument("args", nargs="*", metavar="CHANNEL|TITLE|NUMBER",
+                   help="pitch: the channel and the title; go, drop: the pitch number; watch: the channel")
+    s.add_argument("--brief", help="pitch: what the video shows, in two or three sentences")
+    s.add_argument("--from", dest="source", metavar="FIND", help="pitch: the find it comes from, like yt:abc123")
+    s.add_argument("--words", help="watch: what to search for, separated by commas (\"\" for the week plan ideas)")
+    s.add_argument("--region", help="watch: a two-letter country code, like US (\"\" for anywhere)")
+    s.add_argument("--language", help="watch: a language code, like en (\"\" for any)")
+    s.add_argument("--min", type=int, help="watch: the views an hour that count as rising (default 1000)")
+    s.add_argument("--off", action="store_true", help="watch: stop looking for this channel")
+    s.add_argument("--on", action="store_true", help="watch: look for this channel again")
+    s.add_argument("--wake", action="store_true", help="look: print only what is new and rising, for Hermes")
     s.add_argument("--json", action="store_true")
     s = sp.add_parser("publish", help="send a finished video to YouTube (a private draft), TikTok (the inbox) "
                                       "or Instagram")
@@ -4168,7 +4789,7 @@ COMMANDS = {
     "list": cmd_list, "ping": cmd_ping, "status": cmd_status, "health": cmd_health, "dispatch": cmd_dispatch,
     "jobs": cmd_jobs, "logs": cmd_logs, "cancel": cmd_cancel, "retry": cmd_retry, "handover": cmd_handover,
     "pause": cmd_pause,
-    "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "ideas": cmd_ideas, "publish": cmd_publish, "studio": cmd_studio,
+    "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "ideas": cmd_ideas, "trends": cmd_trends, "publish": cmd_publish, "studio": cmd_studio,
     "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
     "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,

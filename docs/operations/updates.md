@@ -41,6 +41,26 @@ Two things are not covered by `fleet sync`:
   `fleet bootstrap vps1 --skip-upgrade`. It is safe to repeat, keeps public SSH closed
   on a locked-down VPS, and does not stop running jobs.
 
+### From version 1.8 to 1.9
+
+Version 1.9 adds the [trend looker](trends.md), the zeppelin over the pixel lot: three
+times a day it looks at what is rising on YouTube in each channel's niche, and Hermes
+pitches you a video on it. After `git pull`:
+
+```powershell
+fleet sync
+fleet hermes-cron
+fleet trends key
+```
+
+- `fleet sync` keeps the VPSs on the same version number as your PC; nothing else
+  changes on them.
+- `fleet hermes-cron` adds the `fleet-trends` job and leaves your other jobs.
+- `fleet trends key` saves your YouTube Data API key. Make the key first:
+  [Set it up](trends.md#set-it-up).
+- If you changed your ideas list, the trend looker is still on it as an idea. Mark it
+  built: `fleet ideas`, then `fleet ideas edit <its number> --status built`.
+
 ### From version 1.7 to 1.8
 
 Version 1.8 adds the ideas list (`fleet ideas`) and the pitch room on the pixel lot, where

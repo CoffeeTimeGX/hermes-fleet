@@ -24,7 +24,9 @@ shell on Linux and macOS.
    when something changes: a VPS stops answering, a job fails, the disk gets low.
 
 On Sundays Hermes also sends you next week's topics to approve. See
-[Week plan](week-plan.md).
+[Week plan](week-plan.md). And when a video takes off on YouTube in one of your channels'
+niches, Hermes pitches you a video on it: answer *go 3* to make it next. See
+[Trend looker](trends.md).
 
 ## What to ask, and what Hermes runs
 
@@ -47,6 +49,8 @@ On Sundays Hermes also sends you next week's topics to approve. See
 | *"What happened yesterday?"* | `fleet report` |
 | *"Plan next week."* | `fleet plan slots --week next`, then `fleet plan import <file>` |
 | *"Approve all."* or *"Approve 12-14."* | `fleet plan approve all` or `fleet plan approve 12-14` |
+| *"What's trending?"* | `fleet trends` |
+| *"Go 3."* or *"Drop 3."* | `fleet trends go 3` or `fleet trends drop 3` |
 | *"Put that video on YouTube and TikTok."* | `fleet publish vps1 <job-id> --to youtube,tiktok` |
 | *"vps1 should only work 8 to 11 pm."* | `fleet schedule set vps1 --hours 20:00-23:00` |
 | *"Let vps1 work for two more hours."* | `fleet schedule open vps1 --for 2h` |
@@ -55,7 +59,8 @@ On Sundays Hermes also sends you next week's topics to approve. See
 
 For anything that changes a server (closing SSH, rebooting, deleting) or moves work to
 another VPS, the director says what it will run and waits for your yes. It approves no
-week plan topic, posts nothing to Instagram and changes no schedule unless you ask.
+week plan topic, says go to no trend pitch, posts nothing to Instagram and changes no
+schedule unless you ask.
 
 ## Check the fleet
 
@@ -246,7 +251,7 @@ jobs for its channel wait there too, unless you move them with `fleet handover`.
 
 - [The studio](studio.md): watch every VPS at work in your browser.
 - [Work schedule](schedule.md): the hours each VPS works.
-- [Week plan](week-plan.md), [Video check](video-check.md) and [Publishing](publishing.md).
+- [Week plan](week-plan.md), [Trend looker](trends.md), [Video check](video-check.md) and [Publishing](publishing.md).
 - [Job format](job-format.md): every setting a job can have.
 - [Scheduled checks](scheduled-checks.md): what Hermes checks and when it messages you.
 - [Runbooks](../runbooks/index.md): what to do when something goes wrong.

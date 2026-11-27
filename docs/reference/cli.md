@@ -77,8 +77,8 @@ The problems it knows are listed in [Scheduled checks](../operations/scheduled-c
 ### fleet dispatch
 
 ```
-fleet dispatch JOB.json [JOB.json ...] [--to TARGET] [--channel C] [--provider P] [--dry-run] [--json]
-fleet dispatch --prompt "TEXT" [--channel C] [--to TARGET]
+fleet dispatch JOB.json [JOB.json ...] [--to TARGET] [--channel C] [--provider P] [--first] [--dry-run] [--json]
+fleet dispatch --prompt "TEXT" [--channel C] [--to TARGET] [--first]
 ```
 
 Checks each job and queues it. Wildcards such as `jobs/*.json` work in every shell.
@@ -90,6 +90,7 @@ Checks each job and queues it. Wildcards such as `jobs/*.json` work in every she
 | `--to vps2` or `--to vps2,vps4` | The least busy of these VPSs, whatever channels they make (you get a note when the VPS does not make the job's channel). When none of them is ready, the job is queued anyway, with a warning. |
 | `--channel C`, `--provider P` | Replace that field in every job of this command. |
 | `--prompt "TEXT"` | Make a job from this text instead of a file. |
+| `--first` | Start it before the other jobs in its VPS's queue. A job that a usage limit stopped still goes on first. |
 | `--dry-run` | Print each job as it would be queued, without contacting any VPS. |
 | `--json` | Print the queued jobs as JSON: node, id and channel. |
 
@@ -272,10 +273,31 @@ Your ideas list: notes and features to build into the fleet later, best first. T
 numbers are the places in the list, so look with `fleet ideas` before you change one.
 `--at 1` and `--to 1` put an idea first. An idea marked `built` moves to the end of the
 list. `NUMBERS` are one or more numbers, like `3` or `3,5`. Until you change it, the list
-holds the starter ideas, with the trend looker first. The pitch room on the pixel lot
+holds the starter ideas; the trend looker among them is built. The pitch room on the pixel lot
 reads it out, in film words: `next` is greenlit, `building` is in production and `built`
 is wrapped. Hermes adds what you tell it on Telegram. The list is `ideas.json`, next to
 `fleet.ini`.
+
+### fleet trends
+
+```
+fleet trends [--json]
+fleet trends look [--wake] [--json]
+fleet trends go NUMBER
+fleet trends drop NUMBER
+fleet trends watch CHANNEL [--words "a, b"] [--region CC] [--language LL] [--min N] [--off | --on]
+fleet trends key
+fleet trends pitch CHANNEL TITLE --brief TEXT [--from FIND]
+```
+
+The trend looker, on your PC: what is rising on YouTube in each channel's niche, and the
+videos Hermes pitches on it. `fleet trends` shows the last look, what each channel
+watches, and the pitches. `look` asks YouTube now; `--wake` is for Hermes' `fleet-trends`
+job and prints only what is new and rising. `go 3` queues pitch 3 first on its channel's
+VPS; `drop 3` lets it go. `watch` changes what a channel looks for. `key` saves your
+YouTube Data API key after Google accepts it; it asks for the key with the text hidden.
+`pitch` is how Hermes adds a pitch: at most 100 characters of title, and one waiting
+pitch per channel. See [Trend looker](../operations/trends.md).
 
 ### fleet publish
 
@@ -356,7 +378,7 @@ not fail it.
 fleet hermes-cron [--deliver TARGET]
 ```
 
-Creates the five scheduled Hermes jobs in the `director` profile, unless they already
+Creates the six scheduled Hermes jobs in the `director` profile, unless they already
 exist (`hermes -p director cron list` shows them). `--deliver` says where their messages
 go; the default is `telegram`. See [Scheduled checks](../operations/scheduled-checks.md).
 
