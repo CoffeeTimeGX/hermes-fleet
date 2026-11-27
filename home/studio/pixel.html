@@ -200,6 +200,15 @@ html.lot-full, html.lot-full body { overflow: hidden; }
 .film.stacked .params { max-height: none; }
 .params dt { color: var(--box-soft); }
 .params dd { overflow-wrap: anywhere; }
+.params { scrollbar-width: thin; scrollbar-color: var(--box-soft) transparent; }
+.params.up { -webkit-mask-image: linear-gradient(transparent, #000 22px); mask-image: linear-gradient(transparent, #000 22px); }
+.params.down { -webkit-mask-image: linear-gradient(#000 calc(100% - 22px), transparent); mask-image: linear-gradient(#000 calc(100% - 22px), transparent); }
+.params.up.down { -webkit-mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent); }
+.params dt[data-pick] { cursor: pointer; }
+.params .pickb { all: unset; display: block; cursor: pointer; overflow-wrap: anywhere; }
+.params .pickb:hover { background: none; color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+.params .pickb:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.params .on, .params .on .pickb { color: var(--gold); }
 .cmd { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: rgba(255, 255, 255, .06); border: 1px dashed rgba(255, 255, 255, .28); }
 .cmd[hidden] { display: none; }
 .cmd code { flex: 1; font: 500 12.5px/1.3 var(--font-mono); overflow-wrap: anywhere; }
@@ -337,7 +346,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   function plan(n) {
     const R = Math.ceil(n / 2), Lc = Math.floor(n / 2);
     G = Math.max(28, B + Math.max(R, Lc + 1) * SLOT + 5);  // at least 28: room on the lawn for the screen
-    ideasBase = B + Lc * SLOT;  // the ideas office, just before stage 1
+    ideasBase = B + Lc * SLOT;  // the pitch room, just before stage 1
     towerY = ideasBase + 8;     // then the water tower: G is always at least ideasBase + 12
     const out = [];  // read from left to right: the left edge from the outside in, then the right edge
     for (let j = Lc - 1; j >= 0; j--) out.push({ edge: "L", base: B + j * SLOT });
@@ -944,8 +953,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     staticHits.push(Object.assign(bbox([[C[0] - rx - 5, apex[1]], [C[0] + rx + 5, C[1]]]), { key: "lookout", pri: 6 }));
   }
 
-  // The ideas office, just before stage 1: notes and features to build later. A light bulb on the
-  // roof, a note pinned by the side for each idea, the list itself on an easel (see ideasCast).
+  // The pitch room, just before stage 1: your ideas for later, pitched one at a time. A light bulb
+  // on the roof, a note pinned by the side for each idea, the list itself on an easel (see ideasCast).
   const TEAL = "#2f7f7a";
   function drawIdeas(g) {
     const x0 = 0.6, x1 = 3.9, y0 = ideasBase + 0.5, y1 = ideasBase + 4.3, h = 28;
@@ -960,7 +969,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     const front = (ya, yb, za, zb) => { win([P(x1, ya, za), P(x1, yb, za), P(x1, yb, zb), P(x1, ya, zb)]); seg(g, P(x1, ya, za - 1), P(x1, yb, za - 1), "#f7f1e1"); };
     const side = (xa, xb, za, zb) => { win([P(xa, y1, za), P(xb, y1, za), P(xb, y1, zb), P(xa, y1, zb)]); seg(g, P(xa, y1, za - 1), P(xb, y1, za - 1), "#f7f1e1"); };
     front(y0 + 0.3, y0 + 1.15, 4, 10); front(y0 + 2.65, y0 + 3.5, 4, 10);                       // the ground floor
-    for (const a of [0.3, 1.55, 2.8]) front(y0 + a, y0 + a + 0.7, 14, 20);                      // the writers' room
+    for (const a of [0.3, 1.55, 2.8]) front(y0 + a, y0 + a + 0.7, 14, 20);                      // upstairs
     side(x0 + 0.45, x0 + 1.2, 14, 20); side(x0 + 1.95, x0 + 2.7, 14, 20);
     poly(g, [P(x1, y0 + 1.5, 0), P(x1, y0 + 2.3, 0), P(x1, y0 + 2.3, 10), P(x1, y0 + 1.5, 10)], TEAL);  // the door
     win([P(x1, y0 + 1.65, 5), P(x1, y0 + 2.15, 5), P(x1, y0 + 2.15, 9), P(x1, y0 + 1.65, 9)]);
@@ -970,7 +979,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       poly(g, [P(x1, ya, 13), P(x1, yb, 13), P(x1 + 0.55, yb, 11), P(x1 + 0.55, ya, 11)], i % 2 ? "#f4efe4" : TEAL);
     }
     const t0 = P(x1, y0 + 3.09, 26);
-    text(g, "IDEAS", t0[0], t0[1], TEAL, { shear: -1 });
+    text(g, "PITCH", t0[0], t0[1], TEAL, { shear: -1 });
     // the notes board by the side: a note pinned for each idea
     poly(g, [P(x0 + 0.35, y1, 3), P(x0 + 2.95, y1, 3), P(x0 + 2.95, y1, 10), P(x0 + 0.35, y1, 10)], "#a8774a");
     seg(g, P(x0 + 0.35, y1, 10), P(x0 + 2.95, y1, 10), "#6b4a2c"); seg(g, P(x0 + 0.35, y1, 3), P(x0 + 2.95, y1, 3), "#6b4a2c");
@@ -2203,21 +2212,23 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     add(Object.assign({ key: "screen", name: "The screening room", role: "Finished videos", where: "On the lawn", group: LOT, order: 5, object: "screen",
       stands: "the videos you have collected with fleet pull, newest first", live: screenFacts }, screenFacts()));
   }
-  // ---------------------------------------------------------------- the ideas office
-  // The head of development reads your ideas list out at the easel, one idea at a time, a longer
-  // one a little longer, then says how to add one. Open their card and they start from the top.
+  // ---------------------------------------------------------------- the pitch room
+  // The head of development pitches your ideas list at the easel, one idea at a time, a longer
+  // one a little longer, then says how to add one. Open their card and they start from the top;
+  // pick an idea in the card and they pitch that one, then go on from there.
   const IDEAS = "ideas";
   const reading = { slots: [], total: 0, n: 0, t0: 0 };
   const ideasNow = () => (snap && Array.isArray(snap.ideas) ? snap.ideas.filter((i) => i && i.title) : []);
-  const IDEA_HOW = { next: "next to build", building: "being built", built: "built" };
+  // Where an idea stands, in film words: next is greenlit, building is in production, built is wrapped.
+  const IDEA_HOW = { next: "greenlit", building: "in production", built: "wrapped" };
   function ideaSaid(i, k) {
-    const how = { next: ", the next one to build", building: ", being built now", built: ", already built" }[i.status] || "";
+    const how = { next: ", greenlit to be built next", building: ", in production right now", built: ", wrapped and built" }[i.status] || "";
     return "Number " + (k + 1) + how + ": " + sentence(i.title) + (i.note ? " " + sentence(i.note) : "");
   }
   function readList(list) {  // a slot of time for each idea, then the closing line
     const said = list.map(ideaSaid);
-    said.push(list.length ? "That's the list: " + plural(list.length, "idea", "ideas") + ", best first. To add one, tell Hermes on Telegram or run fleet ideas add."
-      : "The list is empty. To add an idea, tell Hermes on Telegram or run fleet ideas add.");
+    said.push(list.length ? "That's " + (list.length === 1 ? "the only pitch" : "all " + list.length + " pitches, best first") + ". To add one, tell Hermes on Telegram or run fleet ideas add."
+      : "Nothing to pitch yet. To add an idea, tell Hermes on Telegram or run fleet ideas add.");
     let at = 0;
     reading.slots = said.map((q) => { const ms = Math.max(5000, Math.min(11000, 2000 + q.length * 40)), sl = { said: q, start: at, ms }; at += ms; return sl; });
     reading.total = at; reading.n = list.length;
@@ -2237,13 +2248,14 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       if (err) return { quote: "I can't read the ideas list: " + sentence(err), params: [["Problem", err]] };
       const r = readNow(), cur = r ? r.k : -1;
       return { quote: r ? r.slot.said : "",
-        params: [["On the list", plural(list.length, "idea", "ideas") + ", best first" + (snap && snap.ideas_starter ? " (the starter list, until you change it)" : "")]]
-          .concat(list.map((i, k) => [(k === cur ? "▶ " : "") + (k + 1), i.title + (IDEA_HOW[i.status] ? " · " + IDEA_HOW[i.status] : "")])) };
+        params: [["On the list", plural(list.length, "idea", "ideas") + ", best first" + (snap && snap.ideas_starter ? " (the starter list, until you change it)" : "") + (list.length > 1 ? ". Pick one to hear it." : "")]]
+          .concat(list.map((i, k) => [(k === cur ? "▶ " : "") + (k + 1), i.title + (IDEA_HOW[i.status] ? " · " + IDEA_HOW[i.status] : ""), { pick: k, on: k === cur }])) };
     };
-    add({ key: IDEAS, name: "Nova", role: "Head of development", where: "The ideas office · before stage 1", group: IDEAS, order: 0,
+    add({ key: IDEAS, name: "Nova", role: "Head of development", where: "The pitch room · before stage 1", group: IDEAS, order: 0,
       stands: "your ideas list on your PC: notes and features to build later, best first",
-      quote: err ? "I can't read the ideas list." : list.length ? plural(list.length, "idea", "ideas") + " on the list. Number 1: " + sentence(list[0].title) : "The ideas list is empty.",
+      quote: err ? "I can't read the ideas list." : list.length ? plural(list.length, "pitch", "pitches") + " on the list. Number 1: " + sentence(list[0].title) : "Nothing to pitch yet.",
       look: look(IDEAS, { shirt: TEAL, pants: "#3a3340", prop: "clipboard" }), reads: !err, live: facts,
+      pick: (k) => { if (reading.slots[k]) reading.t0 = Date.now() - reading.slots[k].start; },  // pitch this one now
       cmd: "fleet ideas",
       bubble: () => { const r = readNow(); return r && r.k < reading.n && r.into < 2600 ? String(r.k + 1) : null; },
       pos: () => ({ gx: 3.6, gy: ideasBase + 5.4 }) });
@@ -2264,7 +2276,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     if (cur >= 0) { const yy = by + 5 + (cur - from) * 2; px(g, bx - 3, yy - 1, 1, 3, "#d6402f"); px(g, bx - 2, yy, 1, 1, "#d6402f"); }
     return { x: bx - 4, y: by - 1, w: bw + 6, h: y - by + 2 };
   }
-  function ideaGlow(g, Lt) {  // the bulb on the ideas office: lit after dark, a flash at each new idea
+  function ideaGlow(g, Lt) {  // the bulb on the pitch room: lit after dark, a flash at each new idea
     const r = readNow(), [x, y] = lights.idea;
     const flash = r && r.k < reading.n && !reduced ? clamp01(1 - r.into / 700) : 0;
     const a = Math.max(clamp01((Lt.dark - 0.2) / 0.3) * 0.85, flash);
@@ -3378,22 +3390,64 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     reveal(r);
     dialog.classList.toggle("right", !!r && panX + (r.x + r.w / 2) * scale * zoom < viewW() * 0.48);
     dialog.hidden = false;
+    follow();  // now that the box has a size
     markSheet();
     if (from === "sheet") film.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
   }
+  let paramsShown = "", listAt = 0;  // the lines in the box as drawn, and when you last scrolled them
   function fillDialog(m, fresh) {
     if (m.live) Object.assign(m, m.live());  // someone whose words change between looks (the screen)
     D.name.textContent = m.name;
     D.role.textContent = "· " + m.role;
     D.where.textContent = m.where;
-    D.params.innerHTML = [["Stands for", cap(m.stands)]].concat(m.params || [])
-      .map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("");
+    const html = [["Stands for", cap(m.stands)]].concat(m.params || []).map(paramRow).join("");
+    if (fresh || html !== paramsShown) {  // drawn again only when a line changes, so a scroll stays where it is
+      const f = D.params.contains(document.activeElement) ? document.activeElement.getAttribute("data-pick") : null;
+      D.params.innerHTML = paramsShown = html;
+      if (fresh) { D.params.scrollTop = 0; listAt = 0; }
+      const b = f != null && D.params.querySelector('button[data-pick="' + f + '"]');
+      if (b) b.focus({ preventScroll: true });
+      follow();
+    }
     D.cmd.hidden = !m.cmd;
     D.watch.hidden = !m.film;
     if (D.code.textContent !== (m.cmd || "")) { D.code.textContent = m.cmd || ""; D.copy.textContent = "Copy"; }
     if (fresh || m.quote !== shownQuote) type(m.quote, fresh || !!m.reads);
     drawPortrait($("portrait"), m);
   }
+  // A line of the box. One you can pick (an idea in the pitch room) is a button: [label, value, { pick, on }].
+  function paramRow([k, v, o]) {
+    if (!o) return "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>";
+    return "<dt" + (o.on ? ' class="on"' : "") + ' data-pick="' + o.pick + '">' + esc(k) + "</dt><dd" + (o.on ? ' class="on"' : "") + '><button type="button" class="pickb" data-pick="'
+      + o.pick + '"' + (o.on ? ' aria-current="true"' : "") + ">" + esc(v) + "</button></dd>";
+  }
+  function edges() {  // a fade at the top or the bottom of the lines while there are more that way
+    const L = D.params;
+    L.classList.toggle("up", L.scrollTop > 2);
+    L.classList.toggle("down", L.scrollTop + L.clientHeight < L.scrollHeight - 2);
+  }
+  function follow() {  // keep the line being read out in view, unless you scrolled the list a moment ago
+    const L = D.params, on = L.querySelector("dd.on");
+    if (on && Date.now() - listAt > 8000 && L.scrollHeight > L.clientHeight + 2) {
+      const lr = L.getBoundingClientRect(), r = on.getBoundingClientRect();
+      if (r.top < lr.top + 6 || r.bottom > lr.bottom - 6) {
+        L.scrollTo({ top: L.scrollTop + (r.top + r.bottom) / 2 - (lr.top + lr.bottom) / 2, behavior: reduced ? "auto" : "smooth" });
+      }
+    }
+    edges();
+  }
+  function pickLine(k) {  // pick a line: the pitch room pitches that idea now
+    const m = selected ? castBy.get(selected) : null;
+    if (!m || !m.pick || !Number.isFinite(k)) return;
+    m.pick(k);
+    fillDialog(m, false);
+  }
+  for (const ev of ["wheel", "touchstart", "pointerdown", "keydown"]) D.params.addEventListener(ev, () => { listAt = Date.now(); }, { passive: true });
+  D.params.addEventListener("scroll", edges, { passive: true });
+  D.params.addEventListener("click", (e) => {
+    const t = e.target && e.target.closest ? e.target.closest("[data-pick]") : null;
+    if (t) pickLine(Number(t.getAttribute("data-pick")));
+  });
   function type(q, animate) {
     shownQuote = q; D.said.textContent = q;
     clearInterval(typing);
@@ -3430,7 +3484,12 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   document.addEventListener("keydown", (e) => {
     if (inBox(e)) return;
     if (e.key === "Escape" && !dialog.hidden) { closeDialog(); e.preventDefault(); }
-    else if (!dialog.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(document.activeElement)) {
+    else if (!dialog.hidden && (e.key === "ArrowDown" || e.key === "ArrowUp") && document.activeElement && document.activeElement.classList.contains("pickb")) {
+      const k = Number(document.activeElement.getAttribute("data-pick")) + (e.key === "ArrowDown" ? 1 : -1);  // the next or previous idea
+      const b = D.params.querySelector('button[data-pick="' + k + '"]');
+      if (b) { b.focus(); pickLine(k); }
+      e.preventDefault();
+    } else if (!dialog.hidden && (e.key === "ArrowRight" || e.key === "ArrowLeft") && dialog.contains(document.activeElement)) {
       step(e.key === "ArrowRight" ? 1 : -1); e.preventDefault();
     }
   });
@@ -3457,7 +3516,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   let sheetKeys = [], sheetSig = "";
   function renderSheet() {
     const groups = [{ key: LOT, title: "The lot", c: "var(--gold)", sub: "your PC and the road" },
-      { key: IDEAS, title: "The ideas office", c: TEAL, sub: "notes for later" }]
+      { key: IDEAS, title: "The pitch room", c: TEAL, sub: "your ideas for later" }]
       .concat(stagesNow.map((st) => ({ key: st.key, title: "Stage " + st.no + " · " + st.node.name, c: CSSC[st.ss.state], sub: st.ss.sign })));
     const keys = [], parts = [];
     for (const gr of groups) {

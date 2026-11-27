@@ -126,7 +126,7 @@ Around the lot:
 | Rio, the courier | At the pickup bay, or driving the van | Finished videos that wait to be collected on your PC. The van stops at each stage that has some. | How many wait on each VPS, `fleet pull` |
 | The marquee | By the red carpet | The newest video finished in the last 24 hours. | Its title, its VPS, and the counts for today |
 | The screen | On the lawn, by the marquee | The videos you have collected with `fleet pull`. It shows the newest of each channel in turn. | The video on the screen, its channel and VPS, and **Watch** |
-| Nova, the head of development | At the easel by the ideas office, before stage 1 | Your ideas list: notes and features to build into the fleet later, best first. | Every idea in order, the one being read out marked, `fleet ideas` |
+| Nova, the head of development | At the easel by the pitch room, before stage 1 | Your ideas list: notes and features to build into the fleet later, best first. | Every idea in order, the one being pitched marked, `fleet ideas` |
 
 On each stage:
 
@@ -161,14 +161,22 @@ The crew's trade shows what the session does right now:
 | Assistant director | It updates its plan. |
 | Second unit | It hands a part of the work to a helper. |
 
-### The ideas office
+### The pitch room
 
 The yellow building with a light bulb on its roof, just before stage 1, holds your ideas
-list. Click it, and Nova reads the list out from the top, one idea at a time: the card
+list. Click it, and Nova pitches the list from the top, one idea at a time: the card
 types each one, the easel marks its line, and the bulb flashes. A note is pinned on the
-side of the office for each idea.
+side of the building for each idea.
 
-![Nova's card in the ideas office: the trend looker read out first, and the whole list below it](../assets/studio-pixel-ideas.png){ width="480" }
+The whole list is in the card. Scroll it to see every idea, and click one to hear it now:
+Nova goes on from there. With the keyboard, press Tab to reach the list, then the up
+and down arrows.
+
+Nova says where an idea stands in film words: *greenlit* is the next one to build
+(`--status next`), *in production* is being built (`building`) and *wrapped* is built
+(`built`).
+
+![Nova's card in the pitch room: the trend looker pitched first, and the whole list below it](../assets/studio-pixel-ideas.png){ width="480" }
 
 To add an idea, tell Hermes on Telegram, for example *"Idea: a weekly summary on Sunday
 evenings"*, or run `fleet ideas add`. Until you change the list, it holds the starter

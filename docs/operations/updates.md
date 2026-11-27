@@ -43,7 +43,8 @@ Two things are not covered by `fleet sync`:
 
 ### From version 1.7 to 1.8
 
-Version 1.8 adds the ideas list (`fleet ideas`) and the ideas office on the pixel lot.
+Version 1.8 adds the ideas list (`fleet ideas`) and the pitch room on the pixel lot, where
+Nova reads it out.
 After `git pull`:
 
 ```powershell

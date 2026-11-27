@@ -2067,7 +2067,7 @@ def cmd_plan(cfg: Config, a) -> int:
 # --------------------------------------------------------------------------- ideas
 
 # The ideas list (ideas.json next to fleet.ini): notes and features to build later, best first.
-# The studio shows it in the ideas office on the pixel lot. Until the owner changes it, it holds
+# The studio's pitch room reads it out on the pixel lot. Until the owner changes it, it holds
 # these starter ideas.
 IDEA_STATUSES = ("idea", "next", "building", "built")
 IDEA_TITLE_MAX, IDEA_NOTE_MAX = 80, 1000

@@ -1,7 +1,7 @@
 ---
 name: fleet-ops
 description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos, check them, plan the week for the owner to approve, publish when asked, set work schedules, keep the owner's ideas list, and triage failures.
-version: 1.7.0
+version: 1.7.1
 metadata:
   hermes:
     tags: [fleet, vps, ssh, video, claude]
@@ -145,14 +145,16 @@ The Sunday job asks for this. The owner approves every topic; you never do.
 
 ## Ideas for the fleet, when the owner has one
 - The ideas list holds notes and features to build into the fleet later, best first. The
-  studio reads it out in the ideas office on the pixel lot. It is not the week plan: a
-  video topic goes in with `fleet plan add`.
+  studio's pitch room reads it out on the pixel lot. It is not the week plan: a video
+  topic goes in with `fleet plan add`.
 - "Idea: ...", "note this idea", "add it to the ideas": `fleet ideas add "<short title>"
   --note "<the idea in a sentence or two, in the owner's words>"`. `--at 1` puts it first.
 - "What ideas do we have": `fleet ideas`, and send the list as it prints.
 - Changes, after `fleet ideas` shows the numbers: `fleet ideas move 4 --to 1`,
   `fleet ideas edit 2 --note "..."`, `fleet ideas edit 2 --status next` (also `building`,
   `built` or back to `idea`), `fleet ideas remove 3`.
+- The studio says these in film words: greenlit is `next`, in production is `building`,
+  wrapped is `built`. "Greenlight 2" means `fleet ideas edit 2 --status next`.
 - An idea is a note, not an order. Do not start work on one (no jobs, no settings, no
   accounts) unless the owner asks for that work.
 
