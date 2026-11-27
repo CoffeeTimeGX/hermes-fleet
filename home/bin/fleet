@@ -3815,14 +3815,22 @@ def hermes_home() -> Path:
 
 
 def restrict_dir(path: Path) -> None:
+    """Make a folder private to you. On Windows only you and SYSTEM keep access to it, and all
+    it holds, now and later, inherits that."""
     if IS_WINDOWS:
         user = os.environ.get("USERNAME", "")
         dom = os.environ.get("USERDOMAIN", "")
         who = f"{dom}\\{user}" if dom and user else user
         if who:
             subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", f"{who}:(OI)(CI)F",
-                            "/grant:r", "SYSTEM:(OI)(CI)F", "/T", "/Q"],
+                            "/grant:r", "SYSTEM:(OI)(CI)F", "/Q"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # What the folder already holds inherits the same. Not icacls /T with the grants above:
+            # a file takes no (OI)(CI) grant, so it was left with no access at all, even for you.
+            # This also mends the files that an earlier version left locked that way.
+            if any(path.iterdir()):
+                subprocess.run(["icacls", str(path / "*"), "/reset", "/T", "/Q"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
     os.chmod(path, 0o700)
     for p in path.rglob("*"):

@@ -50,12 +50,15 @@ pitches you a video on it. After `git pull`:
 ```powershell
 fleet sync
 fleet hermes-cron
+fleet init
 fleet trends key
 ```
 
 - `fleet sync` keeps the VPSs on the same version number as your PC; nothing else
   changes on them.
 - `fleet hermes-cron` adds the `fleet-trends` job and leaves your other jobs.
+- `fleet init` mends your secrets folder on Windows. An earlier version could leave the
+  files in it unreadable, even for you. It keeps your files as they are.
 - `fleet trends key` saves your YouTube Data API key. Make the key first:
   [Set it up](trends.md#set-it-up).
 - If you changed your ideas list, the trend looker is still on it as an idea. Mark it

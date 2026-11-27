@@ -791,6 +791,32 @@ class SecretsTest(TempDirTest):
         with self.assertRaisesRegex(fleet.FleetError, "chmod 600"):
             fleet.secret_file(cfg, cfg.nodes["vps1"], "claude")
 
+    @unittest.skipIf(POSIX, "Windows folder permissions")
+    def test_a_private_folder_stays_readable_on_windows(self):
+        d = self.tmp / "secrets"
+        (d / "vps1").mkdir(parents=True)
+        files = {d / "tailscale.env": "A=1\n", d / "vps1" / "claude.env": "B=2\n"}
+        for f, body in files.items():
+            f.write_text(body, encoding="utf-8")
+        # what versions before this fix did: icacls /T left each file with no access at all
+        who = f"{os.environ.get('USERDOMAIN')}\\{os.environ.get('USERNAME')}"
+        subprocess.run(["icacls", str(d), "/inheritance:r", "/grant:r", f"{who}:(OI)(CI)F", "/grant:r",
+                        "SYSTEM:(OI)(CI)F", "/T", "/Q"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with self.assertRaises(PermissionError):
+            (d / "tailscale.env").read_text(encoding="utf-8")
+        fleet.restrict_dir(d)  # mends them, and keeps the folder private
+        for f, body in files.items():
+            self.assertEqual(f.read_text(encoding="utf-8"), body)
+            f.write_text(body + "C=3\n", encoding="utf-8")
+        (d / "new.env").write_text("D=4\n", encoding="utf-8")
+        self.assertEqual((d / "new.env").read_text(encoding="utf-8"), "D=4\n")
+        acl = subprocess.run(["icacls", str(d)], capture_output=True, text=True).stdout
+        self.assertNotIn("(I)", acl)  # nothing inherited from the folders above
+        self.assertIn("SYSTEM", acl)
+        cfg = make_cfg(self.tmp, "vps1")  # the first secret in a new folder, like the YouTube API key
+        fleet.save_private(cfg, fleet.trends_key_file(cfg), {"key": "k"})
+        self.assertEqual(fleet.trends_key(cfg), "k")
+
     @unittest.skipUnless(POSIX, "file modes are POSIX only")
     def test_push_refuses_bad_names(self):
         cfg = make_cfg(self.tmp, "vps1")
