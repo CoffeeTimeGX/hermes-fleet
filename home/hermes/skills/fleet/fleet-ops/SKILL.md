@@ -1,7 +1,7 @@
 ---
 name: fleet-ops
 description: Run the 5-VPS video fleet from the home machine with the `fleet` CLI. Check health, queue Claude jobs on each channel's VPS, follow logs, cancel, retry or hand over jobs, collect finished videos, check them, plan the week for the owner to approve, pitch videos on rising trends, publish when asked, set work schedules, keep the owner's ideas list, and triage failures.
-version: 1.9.0
+version: 1.10.0
 metadata:
   hermes:
     tags: [fleet, vps, ssh, video, claude]
@@ -37,6 +37,11 @@ fryers for Cooking".
   `%USERPROFILE%\fleet-results`.
 - Each VPS checks every video a job makes before the job counts as done (the video
   check). It never fails the job; `fleet jobs` notes `video ok` or `CHECK: <problem>`.
+- Every VPS has the same Claude Code skills (`fleet skills` shows them), and each
+  session is told which ones it has. `lumina-sfx` makes sound effects offline (ambience,
+  foley, clicks, impacts, animals, weather) as WAV files, free for monetized videos. A
+  job prompt that wants sound effects can say "use the lumina-sfx skill for the sound
+  effects".
 - Each VPS can have a work schedule. It trumps everything: outside it no job starts,
   whoever queued it, and running jobs finish. `fleet status` then shows
   `OFF DUTY until <time>`. Without a schedule a VPS works 24/7.

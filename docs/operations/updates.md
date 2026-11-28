@@ -1,6 +1,6 @@
 # Updates
 
-The fleet has five parts that update separately. None of them updates by itself in a
+The fleet has six parts that update separately. None of them updates by itself in a
 way that could surprise you, except the security updates of the VPSs' operating
 system.
 
@@ -8,6 +8,7 @@ system.
 | --- | --- |
 | The fleet code (this repository) | `git pull` on your PC, then `fleet sync` for the VPSs |
 | Claude Code on the VPSs | `fleet provider install claude all` when you choose |
+| Skills on the VPSs | `fleet skills install all` when the list changes ([Skills on the VPSs](../providers/skills.md)) |
 | Hermes on your PC | `hermes update` when you choose |
 | Ubuntu on the VPSs | Security updates install by themselves; everything else with a bootstrap re-run |
 | Tailscale | By itself on your PC; on the VPSs once you turn it on (below) |
@@ -40,6 +41,21 @@ Two things are not covered by `fleet sync`:
   firewall and SSH settings). When those change, re-run the bootstrap over Tailscale:
   `fleet bootstrap vps1 --skip-upgrade`. It is safe to repeat, keeps public SSH closed
   on a locked-down VPS, and does not stop running jobs.
+
+### From version 1.10 to 1.11
+
+Version 1.11 gives every VPS the same Claude Code skills, from a list in the repository.
+The first is [Lumina SFX](../providers/skills.md#lumina-sfx): an offline library of sound
+effects that the jobs can search, layer and export as WAV files, free for monetized
+videos. After `git pull`:
+
+```powershell
+fleet skills install all
+```
+
+It syncs the fleet code to the VPSs, then installs Lumina SFX on each VPS, with the
+Node.js it needs, for the `fleet` user only (a few minutes the first time). Running jobs
+are not interrupted. Check the result with `fleet skills`.
 
 ### From version 1.9 to 1.10
 
@@ -233,4 +249,5 @@ for a moment.
 | The `fleet` command | `fleet --version` |
 | The worker on each VPS | `fleet status --json`, field `worker_version` |
 | Claude Code on each VPS | `fleet provider check claude all` |
+| The skills on each VPS | `fleet skills` |
 | Hermes | `hermes --version` |

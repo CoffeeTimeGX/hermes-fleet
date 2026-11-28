@@ -27,7 +27,7 @@ jobs:
       - run: shellcheck --version
       - run: >-
           shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh
-          tests/*.sh tests/container/* tests/lib/claude-stub
+          vps/skills/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
 
   unit:
     name: Unit tests (${{ matrix.os }}, Python ${{ matrix.python }})
@@ -79,6 +79,7 @@ jobs:
       - name: Install ffmpeg (for the video check)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: bash tests/e2e-local.sh
+      - run: bash tests/skills-local.sh
 
   fake-vps:
     name: Fake Hostinger VPS (Docker, real SSH)

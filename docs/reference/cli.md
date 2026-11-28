@@ -454,6 +454,24 @@ fleet provider check NAME [TARGETS] [--smoke]
 version such as `2.1.300`. `check` runs the provider's health check; `--smoke` also runs
 one tiny real session. `TARGETS` defaults to `all`.
 
+For Claude, `install` then installs the [skills every VPS has](../providers/skills.md) on
+the VPSs where Claude Code installed.
+
+### fleet skills
+
+```
+fleet skills [TARGETS]
+fleet skills install [TARGETS]
+fleet skills list
+```
+
+The Claude Code skills every VPS has, from `vps/skills/skills.json`, such as `lumina-sfx`
+for sound effects. With no word, or `check`, it prints each VPS's skills and whether they
+are the listed version. `install` syncs the fleet code to the VPSs, then installs or
+updates the skills (and the Node.js they need) for the `fleet` user. `list` shows the
+list without asking the VPSs. `TARGETS` defaults to `all`. See
+[Skills on the VPSs](../providers/skills.md).
+
 ### fleet secrets
 
 ```

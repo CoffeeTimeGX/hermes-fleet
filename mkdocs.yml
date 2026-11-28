@@ -88,6 +88,7 @@ nav:
       - Close public SSH: vps/lockdown.md
   - Claude:
       - Claude Code on the VPSs: providers/claude.md
+      - Skills on the VPSs: providers/skills.md
       - Claude accounts and Anthropic's rules: providers/claude-accounts.md
       - Add another provider: providers/adding-a-provider.md
   - Running the fleet:

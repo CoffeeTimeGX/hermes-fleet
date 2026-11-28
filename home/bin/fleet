@@ -42,6 +42,9 @@ Setup and maintenance
   fleet bootstrap NODE [--public]          first-time VPS setup (runs as root)
   fleet lockdown NODE [--undo]             close (or reopen) public SSH
   fleet provider install|check NAME [TARGETS] [--version V] [--smoke]
+  fleet skills [list|check|install] [TARGETS]
+                                           the Claude Code skills every VPS has, such as
+                                           lumina-sfx for sound effects (vps/skills/skills.json)
   fleet secrets push NAME [TARGETS]        copy provider credentials to VPSs
   fleet sync [TARGETS]                     push the repo's vps/ code, restart workers
   fleet restart [TARGETS]                  restart the worker service
@@ -81,7 +84,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -3956,17 +3959,58 @@ def cmd_provider(cfg: Config, a) -> int:
     else:
         flags = " --smoke" if a.smoke else ""
         res = parallel(nodes, lambda n: remote(cfg, n, f"bash {pdir(n)}/check.sh{flags}", timeout=300))
+    rc = print_runs(res)
+    if a.action == "install" and a.name == "claude":
+        # The skills come with Claude Code, so a new VPS has them from the start.
+        done = [n for n in nodes if not isinstance(res.get(n.name), Exception) and res[n.name].returncode == 0]
+        if done:
+            print("==> Claude Code skills (vps/skills/skills.json)")
+            rc = print_runs(skills_run(cfg, done, install=True), " skills") or rc
+    return rc
+
+
+def print_runs(res: dict, what: str = "") -> int:
+    """Print each node's output of a remote script; 1 when any of them failed."""
     rc = 0
     for name, r in res.items():
         if isinstance(r, Exception):
-            print(f"--- {name}: ERROR {r}")
+            print(f"--- {name}{what}: ERROR {r}")
             rc = 1
             continue
-        print(f"--- {name} (exit {r.returncode})\n{text(r.stdout)}")
+        print(f"--- {name}{what} (exit {r.returncode})\n{text(r.stdout)}")
         if r.returncode:
             print(text(r.stderr)[-1500:], file=sys.stderr)
             rc = 1
     return rc
+
+
+def skills_run(cfg: Config, nodes: list, install: bool) -> dict:
+    """Run vps/skills/install.sh on each node, as the fleet user: it installs the list's
+    Claude Code skills (and the Node.js they need), or with --check only reports them."""
+    cmd = lambda n: f"bash {shlex.quote(root_of(cfg, n) + '/app/skills/install.sh')}{'' if install else ' --check'}"  # noqa: E731
+    return parallel(nodes, lambda n: remote(cfg, n, cmd(n), timeout=1800 if install else 120))
+
+
+def skills_listed() -> list:
+    try:
+        return json.loads((REPO_ROOT / "vps" / "skills" / "skills.json").read_text(encoding="utf-8"))["skills"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def cmd_skills(cfg: Config, a) -> int:
+    if a.action == "list":
+        for s in skills_listed():
+            print(f"{s.get('name')} {s.get('tag')}: {s.get('about', '')}\n  from {s.get('repo')}")
+        print("Every VPS installs these for its Claude Code sessions: fleet skills install all")
+        return 0
+    nodes = resolve_targets(cfg, a.targets)
+    if a.action == "install":
+        for name, r in parallel(nodes, lambda n: push_code(cfg, n)).items():
+            if isinstance(r, Exception):
+                print(f"{name}: sync failed: {r}")
+                return 1
+    return print_runs(skills_run(cfg, nodes, install=a.action == "install"))
 
 
 def ssh_config_text(cfg: Config) -> str:
@@ -4982,6 +5026,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("targets", nargs="?", default="all")
     s.add_argument("--version", dest="version")
     s.add_argument("--smoke", action="store_true", help="also run a one-turn session")
+    s = sp.add_parser("skills", help="install or check the Claude Code skills every VPS has",
+                      usage="fleet skills [list|check|install] [TARGETS]")
+    s.add_argument("action", nargs="?", choices=["list", "check", "install"], default="check")
+    s.add_argument("targets", nargs="?", default="all")
     s = sp.add_parser("secrets", help="push provider credentials")
     s.add_argument("action", choices=["push"])
     s.add_argument("name")
@@ -5004,7 +5052,7 @@ COMMANDS = {
     "resume": cmd_resume, "schedule": cmd_schedule, "pull": cmd_pull, "check": cmd_check, "report": cmd_report, "plan": cmd_plan, "ideas": cmd_ideas, "trends": cmd_trends, "publish": cmd_publish, "studio": cmd_studio,
     "exec": cmd_exec,
     "sync": cmd_sync, "restart": cmd_restart, "reboot": cmd_reboot, "bootstrap": cmd_bootstrap,
-    "lockdown": cmd_lockdown, "provider": cmd_provider, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,
+    "lockdown": cmd_lockdown, "provider": cmd_provider, "skills": cmd_skills, "secrets": cmd_secrets, "ssh-config": cmd_ssh_config,
     "forget-host": cmd_forget_host, "hermes-cron": cmd_hermes_cron,
 }
 
@@ -5033,6 +5081,9 @@ def parse_cli(argv: list) -> argparse.Namespace:
     if (i is not None and argv[i] == "schedule" and len(argv) > i + 1 and not argv[i + 1].startswith("-")
             and argv[i + 1] not in ("show", "set", "open", "close")):
         argv = argv[:i + 1] + ["show"] + argv[i + 1:]  # `fleet schedule vps1` shows vps1's schedule
+    if (i is not None and argv[i] == "skills" and len(argv) > i + 1 and not argv[i + 1].startswith("-")
+            and argv[i + 1] not in ("list", "check", "install")):
+        argv = argv[:i + 1] + ["check"] + argv[i + 1:]  # `fleet skills vps1` checks vps1's skills
     a = build_parser().parse_args(argv)
     if a.cmd == "exec":
         a.command = command

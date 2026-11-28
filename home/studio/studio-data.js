@@ -363,11 +363,11 @@
     const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token", credential_age_days: 23 }];
     const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
       disk_free_gb: 71.3, disk_free_pct: 74, min_free_gb: 5, load1: 0.4, cpus: 2, mem_available_mb: 6100, mem_total_mb: 7900,
-      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.10.0",
+      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.11.0",
       providers: claude, queue: {} }, o);
     const SF = "Space Facts", HI = "History", CO = "Cooking", NA = "Nature";
     const snap = {
-      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.10.0",
+      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.11.0",
       ideas: IDEAS.map((i) => Object.assign({}, i)), ideas_starter: true,
       trends: exampleTrends(t, iso),
       nodes: [

@@ -93,7 +93,7 @@ wait_for 20 F ping vps1 && fail "ping as fleet works before bootstrap" || pass "
 echo "== bootstrap over the public address"
 F bootstrap vps1 --public --skip-upgrade >"$T/bootstrap.txt" 2>&1 || { tail -n 60 "$T/bootstrap.txt"; fail "bootstrap"; }
 pass "fleet bootstrap vps1 --public finished"
-grep -q "worker: *active (version 1.10.0)" "$T/bootstrap.txt" && pass "bootstrap starts the worker" || fail "worker not active"
+grep -q "worker: *active (version 1.11.0)" "$T/bootstrap.txt" && pass "bootstrap starts the worker" || fail "worker not active"
 F ping vps1 >/dev/null && pass "the fleet user logs in with the key" || fail "ping"
 [[ "$(VX cat /etc/hostname)" == vps1 ]] && pass "hostname set" || fail "hostname"
 [[ "$(VO grep -c '^127\.0\.1\.1 vps1$' /etc/hosts)" == 1 ]] && pass "/etc/hosts names the node" || fail "/etc/hosts"
@@ -157,7 +157,7 @@ wait_for 30 J --arg d "$id4" '.[] | select(.id == $d) | .state == "failed"' || f
 
 echo "== maintenance"
 pid_before="$(VX cat /run/fleet-worker.pid)"
-has "synced worker 1.10.0" F sync vps1 && pass "sync pushes the code" || fail "sync"
+has "synced worker 1.11.0" F sync vps1 && pass "sync pushes the code" || fail "sync"
 wait_for 10 bash -c "[[ \"\$(docker exec $NAME cat /run/fleet-worker.pid)\" != $pid_before ]]" \
   && pass "sync restarts the worker" || fail "worker not restarted"
 [[ "$(F exec vps1 --root -- id -u | sed -n 2p)" == 0 ]] && pass "exec --root works" || fail "exec --root"

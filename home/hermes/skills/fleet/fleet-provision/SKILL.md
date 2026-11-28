@@ -1,7 +1,7 @@
 ---
 name: fleet-provision
 description: Set up, repair or extend fleet VPSs. Bootstrap a fresh Hostinger VPS, join it to Tailscale, close public SSH, install or update Claude Code, push credentials, sync worker code and set which channel each VPS makes.
-version: 1.3.0
+version: 1.4.0
 metadata:
   hermes:
     tags: [fleet, provisioning, hostinger, tailscale, claude-code]
@@ -25,7 +25,8 @@ Follow `docs/vps/provisioning.md` in the fleet repository. In short:
 3. `fleet bootstrap <vps> --public` (root over the public IP, about 5 minutes).
 4. `fleet ping <vps>` must work over Tailscale (host = the node name).
 5. `fleet lockdown <vps>` closes public SSH. Ask the owner first.
-6. `fleet provider install claude <vps>`
+6. `fleet provider install claude <vps>` (it installs the VPS skills too, such as
+   `lumina-sfx`)
 7. `fleet secrets push claude <vps>`. The file `~/.config/fleet/secrets/<vps>/claude.env`
    must already be filled in by the owner; if it is not, ask them to do it.
 8. `fleet provider check claude <vps> --smoke` must print `smoke: ok`.
@@ -48,6 +49,8 @@ other VPS names. Empty means jobs reach it only with `--to`.
   `fleet sync`. Running jobs keep running.
 - Update Claude Code: `fleet provider install claude all` (add `--version <x.y.z>` to
   pin one version), then `fleet provider check claude all`.
+- The VPS skills (`vps/skills/skills.json`) changed with a `git pull`:
+  `fleet skills install all`, then `fleet skills` must print `ok` for each skill.
 - New credentials: the owner updates `~/.config/fleet/secrets/<vps>/claude.env`; then
   `fleet secrets push claude <vps>` and a `--smoke` check.
 - More sessions on a VPS: change `sessions` in `fleet.ini`, then

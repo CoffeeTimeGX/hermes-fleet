@@ -52,10 +52,11 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 | `vps/worker/fleet-check` | The video check after each job (Python, standard library, uses `ffprobe` and `ffmpeg`). It never fails a job. |
 | `vps/worker/fleet-schedule` | The work schedule (Python, standard library): reads `schedule.json` on the VPS and tells the worker when it may start a job. |
 | `vps/providers/claude/` | The Claude adapter: `install.sh`, `run.sh`, `check.sh`. The contract is in `vps/providers/README.md`. |
+| `vps/skills/` | The Claude Code skills every VPS has: `skills.json` (each pinned to a tag and its commit, plus the Node.js they need, with checksums) and `install.sh`, which installs them for the `fleet` user (`fleet skills install`). The first is `lumina-sfx`, for sound effects. |
 | `vps/templates/` | Job templates (none yet). |
 | `vps/systemd/`, `vps/logrotate/` | Units and log rotation the bootstrap installs. |
 | `jobs/examples/` | Example jobs. |
-| `tests/` | `test_fleet.py` (unit), `e2e-local.sh`, `vps-container.sh` and their helpers. |
+| `tests/` | `test_fleet.py` (unit), `e2e-local.sh`, `skills-local.sh`, `vps-container.sh` and their helpers. |
 | `docs/`, `mkdocs.yml` | This site (MkDocs Material, published to GitHub Pages by `.github/workflows/pages.yml`). |
 
 ## Rules that must hold
@@ -116,9 +117,10 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
 
 ```bash
 ruff check home/bin/fleet tests/test_fleet.py vps/worker/fleet-check vps/worker/fleet-schedule
-shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
+shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh vps/skills/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
 python3 -m unittest discover -s tests -v       # unit tests, seconds
 bash tests/e2e-local.sh                        # three fake VPSs in folders, about a minute
+bash tests/skills-local.sh                     # the skills installer, no network, seconds
 bash tests/vps-container.sh                    # a fake Hostinger VPS in Docker over real SSH, a few minutes
 pip install -r requirements-docs.txt && mkdocs build --strict
 ```
@@ -152,6 +154,7 @@ before relying on them.
 | `claude setup-token` makes a one-year token for scripts; it needs a subscription | [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) |
 | `ANTHROPIC_API_KEY` wins over `CLAUDE_CODE_OAUTH_TOKEN` when both are set | Claude Code authentication docs |
 | `--effort` takes `low`, `medium`, `high`, `xhigh`, `max` or `ultracode` (v2.1.203+) | [CLI reference](https://code.claude.com/docs/en/cli-reference) |
+| Personal skills live in `~/.claude/skills/<name>/SKILL.md` and serve every project of that user; `claude -p` loads them unless `--bare`; a skill added while a session runs is picked up without a restart | [Skills](https://code.claude.com/docs/en/skills.md), [Headless](https://code.claude.com/docs/en/headless.md) |
 | `--permission-mode dontAsk` with `--allowedTools` is an exact allowlist; `-p` runs deny what needs approval | [Permission modes](https://code.claude.com/docs/en/permission-modes) |
 | Subscription sign-in is for ordinary use of Claude Code; products should use API keys | [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) |
 | Hermes cron: `create`, `edit`, `list`, `pause`, `resume`, `run`, `remove`; `--no-agent --script` files live in `$HERMES_HOME/scripts/`; empty output means no message | [Hermes cron docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |

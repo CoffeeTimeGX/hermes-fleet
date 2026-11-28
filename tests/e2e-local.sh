@@ -33,6 +33,8 @@ has() { local pat="$1" out; shift; out="$("$@" 2>&1 || true)"; grep -q -- "$pat"
 
 export HOME="$T/home" FLEET_IGNORE_ENV_FILES=1 FLEET_STATE_DIR="$T/state" LIMIT_MARGIN_SECONDS=1
 mkdir -p "$HOME" "$T/bin" "$T/secrets"/{vps1,vps2,vps3} "$T/jobs"
+# As if `fleet skills install` had put the listed lumina-sfx skill on the nodes.
+mkdir -p "$HOME/.claude/skills/lumina-sfx" && echo '{"name": "lumina-sfx"}' >"$HOME/.claude/skills/lumina-sfx/.fleet-skill.json"
 install -m 755 "$REPO/tests/lib/claude-stub" "$T/bin/claude"
 export PATH="$T/bin:$PATH"
 
@@ -63,7 +65,7 @@ start_worker() {
 
 echo "== inventory, code and credentials"
 check "list shows the inventory" bash -c "python3 '$REPO/home/bin/fleet' --config '$T/fleet.ini' list | grep -q vps3"
-[[ "$(F sync | grep -c 'synced worker 1.10.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
+[[ "$(F sync | grep -c 'synced worker 1.11.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
 for n in vps1 vps2 vps3; do printf 'ANTHROPIC_API_KEY=sk-test\n# CLAUDE_CODE_OAUTH_TOKEN=\n' >"$T/secrets/$n/claude.env"; done
 chmod 600 "$T"/secrets/*/claude.env
 chmod 644 "$T/secrets/vps1/claude.env"
@@ -136,6 +138,7 @@ check "base64 job files are decoded" bash -c "[[ \$(cat '$T/nodes/vps2/work/$fil
 args="$T/results/vps2/$files_id/logs/stub-args.txt"
 check "job options reach Claude Code (effort, max turns, budget, mode)" bash -c \
   "grep -qx high '$args' && grep -qx 42 '$args' && grep -qx 2.5 '$args' && grep -qx bypassPermissions '$args'"
+check "the session is told which skills its VPS has" grep -q "skills on this VPS, for every job: lumina-sfx (sound effects" "$args"
 check "the job temp folder is cleaned up" test ! -e "$T/nodes/vps2/work/$files_id/.tmp"
 check "pull writes an index" bash -c "[[ \$(wc -l <'$T/results/index.jsonl') -ge 5 ]]"
 [[ -z "$(F pull --quiet)" ]] && pass "a second pull is silent" || fail "second pull not silent"

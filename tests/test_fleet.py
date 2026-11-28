@@ -328,9 +328,11 @@ class TarDirTest(TempDirTest):
         with tarfile.open(fileobj=io.BytesIO(fleet.tar_dir(REPO / "vps")), mode="r:gz") as tf:
             names = {m.name: m for m in tf.getmembers()}
         for must in ("bootstrap.sh", "lockdown.sh", "worker/fleet-worker", "providers/claude/run.sh",
-                     "providers/claude/check.sh", "providers/claude/install.sh", "systemd/fleet-worker.service"):
+                     "providers/claude/check.sh", "providers/claude/install.sh", "systemd/fleet-worker.service",
+                     "skills/install.sh", "skills/skills.json"):
             self.assertIn(must, names)
         self.assertEqual(names["worker/fleet-worker"].mode, 0o755)
+        self.assertEqual(names["skills/install.sh"].mode, 0o755)
         self.assertFalse([n for n in names if n.endswith(".env")])
 
 
@@ -829,6 +831,86 @@ class SecretsTest(TempDirTest):
             with self.assertRaisesRegex(fleet.FleetError, "BAD-NAME"):
                 fleet.cmd_secrets(cfg, a)
             remote.assert_not_called()
+
+
+class SkillsTest(TempDirTest):
+    """vps/skills/skills.json: the Claude Code skills every VPS installs (fleet skills)."""
+
+    def test_the_list_pins_each_skill_and_node(self):
+        data = json.loads((REPO / "vps" / "skills" / "skills.json").read_text(encoding="utf-8"))
+        self.assertRegex(data["node"]["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(set(data["node"]["sha256"]), {"x64", "arm64"})
+        for sha in data["node"]["sha256"].values():
+            self.assertRegex(sha, r"^[0-9a-f]{64}$")
+        names = [s["name"] for s in data["skills"]]
+        self.assertEqual(len(names), len(set(names)))
+        for sk in data["skills"]:
+            self.assertRegex(sk["name"], r"^[a-z0-9][a-z0-9-]{0,63}$")
+            self.assertTrue(sk["repo"].startswith("https://github.com/"), sk["repo"])
+            self.assertRegex(sk["commit"], r"^[0-9a-f]{40}$")
+            self.assertTrue(sk["tag"] and sk["about"])
+            if "node" in sk:  # the pinned Node.js is new enough for it
+                need = tuple(int(x) for x in sk["node"].split("."))
+                have = tuple(int(x) for x in data["node"]["version"].split("."))
+                self.assertGreaterEqual(have[:len(need)], need)
+        lumina = next(s for s in data["skills"] if s["name"] == "lumina-sfx")
+        self.assertIn("sound effects", lumina["about"])
+        self.assertEqual([s["name"] for s in fleet.skills_listed()], names)
+
+    def test_cli(self):
+        a = fleet.parse_cli(["skills"])
+        self.assertEqual((a.action, a.targets), ("check", "all"))
+        a = fleet.parse_cli(["skills", "vps2"])
+        self.assertEqual((a.action, a.targets), ("check", "vps2"))
+        a = fleet.parse_cli(["skills", "install", "vps1,vps3"])
+        self.assertEqual((a.action, a.targets), ("install", "vps1,vps3"))
+        self.assertEqual(fleet.parse_cli(["skills", "list"]).action, "list")
+
+    def test_install_syncs_then_runs_the_installer_as_the_fleet_user(self):
+        cfg = make_cfg(self.tmp, "vps1", "vps2")
+        with mock.patch.object(fleet, "push_code", return_value="synced worker x") as push, \
+                mock.patch.object(fleet, "remote", return_value=ran(0, b"lumina-sfx: installed v1.5.0\n")) as remote:
+            rc, out, _ = quietly(fleet.cmd_skills, cfg, argparse.Namespace(action="install", targets="all"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(push.call_count, 2)
+        cmds = sorted(c.args[2] for c in remote.call_args_list)
+        self.assertEqual(cmds, [f"bash {self.tmp}/nodes/{n}/app/skills/install.sh" for n in ("vps1", "vps2")])
+        self.assertTrue(all("user" not in c.kwargs for c in remote.call_args_list))
+        self.assertIn("--- vps1 (exit 0)\nlumina-sfx: installed v1.5.0", out)
+
+    def test_check_reports_a_problem_and_does_not_sync(self):
+        cfg = make_cfg(self.tmp, "vps1")
+        with mock.patch.object(fleet, "push_code") as push, \
+                mock.patch.object(fleet, "remote", return_value=ran(1, b"lumina-sfx v1.5.0: missing\n")) as remote:
+            rc, out, _ = quietly(fleet.cmd_skills, cfg, argparse.Namespace(action="check", targets="vps1"))
+        self.assertEqual(rc, 1)
+        push.assert_not_called()
+        self.assertTrue(remote.call_args.args[2].endswith("/app/skills/install.sh --check"))
+        self.assertIn("missing", out)
+
+    def test_installing_claude_brings_the_skills_where_it_worked(self):
+        cfg = make_cfg(self.tmp, "vps1", "vps2")
+
+        def fake_remote(cfg, n, cmd, **kw):
+            if "providers/claude/install.sh" in cmd:
+                return ran(0 if n.name == "vps1" else 1, b"==> Installed: 9.9.9\n")
+            return ran(0, b"lumina-sfx: installed v1.5.0\n")
+        with mock.patch.object(fleet, "push_code", return_value="ok"), \
+                mock.patch.object(fleet, "remote", side_effect=fake_remote) as remote:
+            rc, out, _ = quietly(fleet.cmd_provider, cfg, argparse.Namespace(
+                action="install", name="claude", targets="all", version=None, smoke=False))
+        self.assertEqual(rc, 1)  # vps2's Claude Code install failed
+        skills = [c.args[1].name for c in remote.call_args_list if "skills/install.sh" in c.args[2]]
+        self.assertEqual(skills, ["vps1"])
+        self.assertIn("--- vps1 skills (exit 0)", out)
+
+    def test_list_needs_no_inventory(self):
+        cfg = make_cfg(self.tmp, "vps1")
+        cfg.nodes.clear()
+        rc, out, _ = quietly(fleet.cmd_skills, cfg, argparse.Namespace(action="list", targets="all"))
+        self.assertEqual(rc, 0)
+        self.assertIn("lumina-sfx v1.5.0: sound effects", out)
+        self.assertIn("https://github.com/LuminaBench/lumina-sfx", out)
 
 
 # --------------------------------------------------------------------------- home setup

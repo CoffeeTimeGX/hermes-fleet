@@ -10,9 +10,10 @@ headless Claude Code sessions to make videos, one channel per VPS. The PC side i
 
 ```bash
 ruff check home/bin/fleet tests/test_fleet.py vps/worker/fleet-check vps/worker/fleet-schedule
-shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
+shellcheck home/install.sh vps/*.sh vps/worker/fleet-worker vps/providers/*/*.sh vps/skills/*.sh tests/*.sh tests/container/* tests/lib/claude-stub
 python3 -m unittest discover -s tests -v      # must pass on Python 3.9 and on Windows too
 bash tests/e2e-local.sh                       # local end to end, no network
+bash tests/skills-local.sh                    # the VPS skills installer, no network
 bash tests/vps-container.sh                   # fake Hostinger VPS in Docker over real SSH (slow)
 mkdocs build --strict                         # after pip install -r requirements-docs.txt
 ```
@@ -40,6 +41,10 @@ lockdown, worker, provider scripts or the CLI's SSH paths change.
   another VPS only when the owner asks: `fleet handover`, `--to` or `fleet retry --to`.
   `fleet trends shift` is the owner's answer too: today's planned videos keep their VPS
   and time and take the trend's topic. Nothing moves work automatically.
+- The skills every VPS has are listed in `vps/skills/skills.json`, each pinned to a tag and
+  its full commit; Node.js is pinned with its checksums. `fleet skills install` installs
+  them for the `fleet` user only, never as root, and never replaces a skill folder the
+  fleet did not install.
 - One Claude account per VPS, used openly. Do not add anything that hides the link
   between accounts or switches accounts to get around usage limits.
 - Bump `VERSION` in `home/bin/fleet` and `WORKER_VERSION` in `vps/worker/fleet-worker`

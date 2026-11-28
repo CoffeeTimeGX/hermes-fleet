@@ -91,6 +91,21 @@ answer questions during the run, so make reasonable decisions and note them. End
 plain-text summary of what you produced and where; it is saved as ./output/SUMMARY.txt, so do \
 not create a file with that name yourself."
 
+# Name the fleet's skills that this VPS has (vps/skills/skills.json, `fleet skills install`).
+SKILLS_LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/skills/skills.json"
+skills=""
+if [[ -f "$SKILLS_LIST" ]]; then
+  while IFS=$'\t' read -r sname sabout; do
+    if [[ -f "$HOME/.claude/skills/$sname/.fleet-skill.json" ]]; then
+      skills+="${skills:+; }$sname (${sabout:-see its SKILL.md})"
+    fi
+  done < <(jq -r '.skills[]? | [.name, (.about // "")] | @tsv' "$SKILLS_LIST" 2>/dev/null || true)
+fi
+if [[ -n "$skills" ]]; then
+  system_note+=" Claude Code skills on this VPS, for every job: $skills. Use them when the job needs what they do, and \
+write their files inside $WD."
+fi
+
 if [[ -n "$resume_sid" ]]; then
   args=(-p "Your session stopped because the Claude usage limit was reached, and it has now reset. \
 Continue the same job from where you stopped: check ./output/ and the work you already did, finish \

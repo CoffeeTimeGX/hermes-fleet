@@ -19,7 +19,8 @@ claude -p "<the job's prompt>" \
 
 - **The fleet note** tells the session that it runs unattended on a fleet VPS, which
   channel and job it works for, that every deliverable goes in `./output/`, and that its
-  final message becomes `output/SUMMARY.txt`.
+  final message becomes `output/SUMMARY.txt`. It also names the
+  [skills the VPS has](skills.md), such as `lumina-sfx` for sound effects.
 - **Permissions.** Nobody is there to approve each command, so sessions run with
   `bypassPermissions` by default. What keeps that safe is where they run: an
   unprivileged user, a workspace of their own, and a VPS that holds no secret other
@@ -63,6 +64,8 @@ the `fleet` user's `~/.local/bin`. It also writes the fleet's Claude Code settin
 
 Claude Code refuses to run unattended as root, which is one more reason everything runs
 as `fleet`.
+
+`fleet provider install claude` also installs the [skills every VPS has](skills.md).
 
 ## Credentials
 

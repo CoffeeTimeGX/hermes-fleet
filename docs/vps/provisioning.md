@@ -79,7 +79,7 @@ It ends with a summary like this:
 ```
 node:          vps1
 tailscale:     100.101.102.103 (Running)
-worker:        active (version 1.10.0)
+worker:        active (version 1.11.0)
 parallel jobs: 1
 public ssh:    open, keys only and rate limited, until fleet lockdown
 reboot needed: no
@@ -116,7 +116,8 @@ fleet provider install claude vps1
 
 This installs Claude Code for the `fleet` user with Anthropic's installer, on the stable
 release channel, and turns off its self-updates so all five VPSs stay on one version.
-See [Claude Code on the VPSs](../providers/claude.md).
+See [Claude Code on the VPSs](../providers/claude.md). Then it installs the skills every
+VPS has, such as `lumina-sfx` for sound effects: see [Skills on the VPSs](../providers/skills.md).
 
 ## 6. Push the Claude credential
 
