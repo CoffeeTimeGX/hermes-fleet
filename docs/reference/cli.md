@@ -284,20 +284,24 @@ is wrapped. Hermes adds what you tell it on Telegram. The list is `ideas.json`, 
 fleet trends [--json]
 fleet trends look [--wake] [--json]
 fleet trends go NUMBER
+fleet trends shift NUMBER
 fleet trends drop NUMBER
 fleet trends watch CHANNEL [--words "a, b"] [--region CC] [--language LL] [--min N] [--off | --on]
 fleet trends key
-fleet trends pitch CHANNEL TITLE --brief TEXT [--from FIND]
+fleet trends pitch CHANNEL TITLE --brief TEXT [--from FIND] [--swap NUMBER TITLE BRIEF]...
 ```
 
 The trend looker, on your PC: what is rising on YouTube in each channel's niche, and the
 videos Hermes pitches on it. `fleet trends` shows the last look, what each channel
 watches, and the pitches. `look` asks YouTube now; `--wake` is for Hermes' `fleet-trends`
 job and prints only what is new and rising. `go 3` queues pitch 3 first on its channel's
-VPS; `drop 3` lets it go. `watch` changes what a channel looks for. `key` saves your
-YouTube Data API key after Google accepts it; it asks for the key with the text hidden.
-`pitch` is how Hermes adds a pitch: at most 100 characters of title, and one waiting
-pitch per channel. See [Trend looker](../operations/trends.md).
+VPS; `shift 3` does that and gives today's other planned videos the new topics the pitch
+came with, each one on its VPS and at its time; `drop 3` lets it go. `watch` changes what
+a channel looks for. `key` saves your YouTube Data API key after Google accepts it; it asks
+for the key with the text hidden. `pitch` is how Hermes adds a pitch: at most 100
+characters of title, and one waiting pitch per channel. Each `--swap` gives one of
+today's videos that no VPS has yet (its week plan number) a new title and brief on the
+pitch's subject, for `shift`. See [Trend looker](../operations/trends.md).
 
 ### fleet publish
 

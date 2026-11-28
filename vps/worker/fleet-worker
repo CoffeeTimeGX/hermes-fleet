@@ -54,7 +54,7 @@
 #   version
 set -euo pipefail
 
-WORKER_VERSION="1.9.0"
+WORKER_VERSION="1.10.0"
 
 for _env in /etc/fleet/worker.env /etc/fleet/worker.local.env; do
   if [[ -r "$_env" && -z "${FLEET_IGNORE_ENV_FILES:-}" ]]; then

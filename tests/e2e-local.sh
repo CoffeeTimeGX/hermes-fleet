@@ -63,7 +63,7 @@ start_worker() {
 
 echo "== inventory, code and credentials"
 check "list shows the inventory" bash -c "python3 '$REPO/home/bin/fleet' --config '$T/fleet.ini' list | grep -q vps3"
-[[ "$(F sync | grep -c 'synced worker 1.9.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
+[[ "$(F sync | grep -c 'synced worker 1.10.0')" == 3 ]] && pass "sync installs the worker on all 3 nodes" || fail "sync"
 for n in vps1 vps2 vps3; do printf 'ANTHROPIC_API_KEY=sk-test\n# CLAUDE_CODE_OAUTH_TOKEN=\n' >"$T/secrets/$n/claude.env"; done
 chmod 600 "$T"/secrets/*/claude.env
 chmod 644 "$T/secrets/vps1/claude.env"

@@ -51,6 +51,9 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* Pixelify Sans draws "fl" and "fi" as one odd glyph: "flyers" read "Ayers". The font shorthand would bring
+   ligatures back on each element that sets it, hence !important. */
+* { font-variant-ligatures: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -2293,7 +2296,9 @@ html.lot-full, html.lot-full body { overflow: hidden; }
   // times a day it looks at what is rising on YouTube in each channel's niche; when something
   // is, Hermes pitches a video on it, and "go 3" makes that video next on the channel's VPS.
   // Its board shows a rising line when something rises; a banner trails behind it while a
-  // pitch waits for your answer.
+  // pitch waits for your answer. When the pitch can shift the day, the banner also asks
+  // SHIFT 3? and flyers flutter down from the gondola onto the roofs of the stages whose
+  // videos of today "shift 3" would turn to the trend.
   const TRENDS = "trends";
   const trendsNow = () => (snap && snap.trends && typeof snap.trends === "object" ? snap.trends : {});
   const count = (n) => Number(n || 0).toLocaleString();
@@ -2303,16 +2308,37 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     for (const c of chans) for (const f of c.finds || []) if (!c.off && Number(f.vph) >= Number(c.min_vph || 1000)) rising.push([c, f]);
     rising.sort((a, b) => Number(b[1].vph) - Number(a[1].vph));
     const errors = (Array.isArray(tr.errors) ? tr.errors : []).map(String);
-    return { tr, chans, ps, rising, errors, waiting: ps.filter((x) => x.status === "waiting"), last: when(tr.last_look),
-      broken: !!tr.error, key: !!tr.key };
+    const waiting = ps.filter((x) => x.status === "waiting");
+    return { tr, chans, ps, rising, errors, waiting, shift: waiting.find((x) => x.can_shift && (x.swaps || []).length) || null,
+      last: when(tr.last_look), broken: !!tr.error, key: !!tr.key };
   }
   const madeOn = (z, ch) => (z.chans.find((c) => c.channel === ch) || {}).on || "its VPS";
+  const swapOn = (w) => String((w.was || {}).on || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const others = (n) => plural(n, "other video", "other videos");
+  function shiftStages(z) {  // the stages whose videos of today the waiting pitch would turn to its trend
+    const names = new Set(z.shift ? z.shift.swaps.flatMap(swapOn) : []);
+    return stagesNow.filter((st) => names.has(st.node.name));
+  }
+  function stageTrend(nm) {  // on a stage's card: what a pitch would change on this VPS today, or changed
+    const rows = [];
+    for (const x of trendsState().ps) for (const w of x.swaps || []) {
+      if (!swapOn(w).includes(nm)) continue;
+      const was = w.was || {}, at = "#" + w.id + (was.time ? " at " + was.time : "");
+      if (x.can_shift) rows.push(["Trend", "pitch " + x.n + " would turn " + at + ", “" + short(was.title, 40) + "”, into “" + short(w.title, 50) + "”. Say shift " + x.n + " to Hermes"]);
+      else if (x.shifted_at && (x.shifted || []).includes(w.id)) rows.push(["Trend", at + " turned to " + x.channel + " by pitch " + x.n + ": “" + short(w.title, 60) + "”"]);
+    }
+    return rows;
+  }
   function trendFacts() {
     const z = trendsState(), tr = z.tr, q = tr.quota || {};
     let quote;
     if (z.broken) quote = "I can't read my notes on your PC, trends.json. Fix it or move it away, and I start afresh.";
     else if (!z.key) quote = "I'm up, but blind until I have a YouTube key. Make one in Google Cloud, then run fleet trends key on your PC.";
-    else if (z.waiting.length) { const x = z.waiting[0]; quote = "Pitch " + x.n + " for " + x.channel + ": “" + short(x.title, 70) + "”. Say go " + x.n + " to Hermes and it's next on " + madeOn(z, x.channel) + "."; }
+    else if (z.waiting.length) {
+      const x = z.shift || z.waiting[0];
+      quote = "Pitch " + x.n + " for " + x.channel + ": “" + short(x.title, 70) + "”. Say go " + x.n + " to Hermes and it's next on " + madeOn(z, x.channel)
+        + (x === z.shift ? ". Or say shift " + x.n + ", and today's " + others(x.swaps.length) + " turn to it too: I've dropped flyers on their stages." : ".");
+    }
     else if (!z.last) quote = "Up and ready. Hermes sends me to look three times a day, or run fleet trends look.";
     else if (z.errors.length) quote = "The last look hit a snag: " + sentence(short(z.errors[0].replace(/\bGET \S+: /, ""), 110));
     else if (z.rising.length) { const [c, f] = z.rising[0]; quote = "Rising in " + c.channel + "'s niche: “" + short(f.title, 60) + "”, " + count(f.vph) + " views an hour."; }
@@ -2327,11 +2353,17 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         : "“" + short(f.title, 60) + "”, " + count(f.vph) + " views an hour" + (up ? ", rising" : "")]);
     }
     for (const x of z.ps) {
-      params.push(["Pitch " + x.n, x.channel + ": “" + short(x.title, 60) + "”" + (x.status === "waiting" ? ". Say go " + x.n + " or drop " + x.n
-        : x.status === "go" ? ", queued on " + (x.node || "its VPS") : ", " + (x.status || "?"))]);
+      const said = x.status === "waiting" ? (x.can_shift ? ". Say go " + x.n + ", shift " + x.n + " or drop " + x.n : ". Say go " + x.n + " or drop " + x.n)
+        : x.status === "go" ? ", queued on " + (x.node || "its VPS") + ((x.shifted || []).length ? ", and today's " + others(x.shifted.length) + " turned to it"
+          : x.can_shift ? ". Shift " + x.n + " still turns today's " + others(x.swaps.length) + " to it" : "") : ", " + (x.status || "?");
+      params.push(["Pitch " + x.n, x.channel + ": “" + short(x.title, 60) + "”" + said]);
+      if (x.can_shift) for (const w of x.swaps) {
+        const was = w.was || {};
+        params.push(["Shift #" + w.id, (was.on || "?") + (was.time ? " at " + was.time : "") + ": “" + short(was.title, 40) + "” becomes “" + short(w.title, 50) + "”"]);
+      }
     }
     for (const e of z.errors.slice(0, 2)) params.push(["Problem", short(e, 300)]);
-    return { quote, params, cmd: !z.key ? "fleet trends key" : z.waiting.length ? "fleet trends go " + z.waiting[0].n : "fleet trends" };
+    return { quote, params, cmd: !z.key ? "fleet trends key" : z.shift ? "fleet trends shift " + z.shift.n : z.waiting.length ? "fleet trends go " + z.waiting[0].n : "fleet trends" };
   }
   function trendsCast() {
     add(Object.assign({ key: TRENDS, name: "The trend looker", role: "Zeppelin", where: "Over the lot · on your PC, beside Hermes", group: LOT, order: 6,
@@ -2390,14 +2422,17 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     let r = { x: x - rx - 4, y: y - ry - 6, w: 2 * rx + 9, h: 2 * ry + 12 };
     // a banner trailing behind while a pitch waits for your answer
     if (z.waiting.length) {
-      const label = z.waiting.length === 1 ? "PITCH " + z.waiting[0].n : z.waiting.length + " PITCHES", w = textW(label) + 5, h = 8;
+      const pitch = z.waiting.length === 1 ? "PITCH " + z.waiting[0].n : z.waiting.length + " PITCHES", ask = z.shift ? "SHIFT " + z.shift.n + "?" : "";
+      const label = ask && (reduced || Math.floor(tt / 2600) % 2 === 1) ? ask : pitch, h = 8;
+      const w = Math.max(textW(pitch), ask ? textW(ask) : 0) + 5;
       const x0 = d > 0 ? tail - 6 - w : tail + 6, flap = reduced ? 0 : Math.floor(tt / 420) % 2;
-      const cloth = mix(L("#f6f2e6"), "#f6f2e6", 0.35 * night), ink = mix(L("#d6402f"), "#ff6a55", 0.4 * night);
+      const cloth = mix(L("#f6f2e6"), "#f6f2e6", 0.35 * night);
+      const ink = label === ask ? mix(L("#2f7f7a"), "#5fd0c4", 0.4 * night) : mix(L("#d6402f"), "#ff6a55", 0.4 * night);
       line(g, tail - d, y + 1, d > 0 ? x0 + w : x0, y + 4, edge);
       px(g, x0, y + 1, w, h, cloth);
       const far = d > 0 ? x0 : x0 + w - 1;
       px(g, far, y + 1 + flap, 1, h - 1, mix(cloth, edge, 0.35));
-      text(g, label, x0 + 3, y + 2, ink);
+      text(g, label, x0 + 3 + Math.floor((w - 5 - textW(label)) / 2), y + 2, ink);
       r = { x: Math.min(r.x, x0 - 1), y: r.y, w: Math.max(r.x + r.w, x0 + w + 1) - Math.min(r.x, x0 - 1), h: r.h };
     }
     // the lights: red on the tail, white on the nose, after dark
@@ -2411,6 +2446,43 @@ html.lot-full, html.lot-full body { overflow: hidden; }
       g.restore();
     }
     return r;
+  }
+
+  // Flyers for "shift 3": they flutter down from under the gondola, one after another, onto the
+  // roof of each stage the shift would change, and a few already lie there. Without motion,
+  // only the ones on the roofs.
+  const FLY_MS = 3600, FLY_EVERY = 900, FLY_PAPER = ["#ffd84a", "#ff9fb0", "#8ce8d8", "#fff4d6"];
+  function flyer(g, x, y, k, paper, ink) {  // a sheet of paper with a line of print: flat, tilted or edge on
+    x = Math.round(x); y = Math.round(y);
+    if (k === 0) { px(g, x - 2, y, 4, 3, paper); px(g, x - 1, y + 1, 2, 1, ink); }
+    else if (k === 1) { px(g, x - 2, y, 2, 2, paper); px(g, x, y + 1, 2, 2, paper); px(g, x - 1, y + 1, 1, 1, ink); }
+    else { px(g, x, y - 1, 1, 4, paper); px(g, x, y, 1, 1, ink); }
+  }
+  function flyers(g, t, Lt) {
+    const z = trendsState();
+    if (!castBy.has(TRENDS) || !z.shift || !z.key || z.broken) return;
+    const sts = shiftStages(z);
+    if (!sts.length) return;
+    const night = clamp01((Lt.dark - 0.25) / 0.35), ink = mix(litCol("#1f5f5a", Lt), "#3fb0a4", 0.4 * night);
+    const paper = (h) => { const c = FLY_PAPER[h % FLY_PAPER.length]; return mix(litCol(c, Lt), c, 0.35 * night); };
+    // a spot on the front of the arched roof, clear of the air handler and below the stage's name
+    const onRoof = (st, h) => { const v = -0.9 - ((h >>> 5) % 8) / 10; return S(st, 2.1 + (h % 21) / 10, v, WH + RH * Math.sin(Math.PI * (1 + v / SD))); };
+    sts.forEach((st, k) => {
+      for (let i = 0; i < 4; i++) {  // the ones that have landed
+        const h = hash(st.key + ":flyer:" + i), at = onRoof(st, h);
+        flyer(g, at[0], at[1], (h >>> 9) % 2, paper(h >>> 3), ink);
+      }
+      if (reduced) return;
+      const off = k * 310, last = Math.floor((t - off) / FLY_EVERY);
+      for (let j = 0; j * FLY_EVERY < FLY_MS; j++) {
+        const t0 = (last - j) * FLY_EVERY + off, age = t - t0;
+        if (age < 0 || age >= FLY_MS) continue;
+        const h = hash(st.key + ":" + (last - j)), to = onRoof(st, h), seed = (h % 628) / 100;
+        const from = zepAt(t0), sx = from.x + from.d * 3, sy = from.y + 9, p = age / FLY_MS;
+        const fx = sx + (to[0] - sx) * p + Math.sin(age / 260 + seed) * 5 * (1 - p), fy = sy + (to[1] - sy) * (0.7 * p + 0.3 * p * p);
+        flyer(g, fx, fy, p > 0.97 ? h % 2 : Math.floor(age / 160 + seed) % 3, paper(h >>> 3), ink);
+      }
+    });
   }
 
   let courierAt = () => ({ gx: G - 5.9, gy: 10.3, dir: "x-", moving: false });
@@ -2442,6 +2514,8 @@ html.lot-full, html.lot-full body { overflow: hidden; }
         ["Up for", s.uptime_s != null ? upFor(s.uptime_s) : "?"], ["Worker", s.worker_version || "?"], ["Reboot", s.reboot_required ? "needed for security updates" : "not needed"]]
         : [["VPS", nm], ["Channels", chs], ["Lamp", ss.sign + ", " + ss.note]].concat(n.error ? [["Error", n.error]] : []),
       cmd: "fleet status " + nm });
+    const trend = stageTrend(nm);  // on the stage's own card too: what "shift" would change here
+    if (trend.length) castBy.get(st.key + ":stage").params.push(...trend);
     const load = Number(s.load1) || 0, cpus = Number(s.cpus) || 1, busy = load / cpus;
     add({ key: st.key + ":unit", name: "Air handler", role: "Rooftop unit", where, group: grp, order: 50, object: "unit", busy: up ? busy : 0,
       stands: "how hard " + nm + " works: load, memory and disk",
@@ -3257,6 +3331,7 @@ html.lot-full, html.lot-full body { overflow: hidden; }
     ctx.drawImage(litFrontC, 0, 0);
     if (haloOn) { ctx.globalCompositeOperation = "lighter"; ctx.drawImage(haloC, 0, 0); ctx.globalCompositeOperation = "source-over"; }
     bulbs(ctx, city.bulbsF, t, Lt);
+    flyers(ctx, t, Lt);
     const zr = zeppelin(ctx, t, Lt);  // the highest thing over the lot: drawn over it, picked first
     if (zr) hits.push(Object.assign({ key: TRENDS }, zr));
     veil(ctx, Lt, 0.2);

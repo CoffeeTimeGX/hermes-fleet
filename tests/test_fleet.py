@@ -987,7 +987,8 @@ class DirectorProfileTest(TempDirTest):
         trends = creates["fleet-trends"]  # an agent job that sleeps unless its script finds something to pitch
         self.assertEqual(trends[2], "0 8,13,18 * * *")
         self.assertIn("fleet trends pitch", trends[3])
-        self.assertIn("Never say go yourself", trends[3])
+        self.assertIn("Never say go or shift yourself", trends[3])
+        self.assertIn("--swap", trends[3])
         self.assertEqual(trends[trends.index("--script") + 1], "fleet_trends.py")
         self.assertNotIn("--no-agent", trends)
         scripts = self.tmp / "profiles" / "director" / "scripts"
@@ -2204,7 +2205,7 @@ class TrendsTest(TempDirTest):
 
     def trends(self, action="show", *args, **kw):
         base = dict(action=action, args=list(args), brief=None, source=None, words=None, region=None, language=None,
-                    min=None, off=False, on=False, wake=False, json=False)
+                    min=None, off=False, on=False, wake=False, json=False, swap=None)
         base.update(kw)
         return quietly(fleet.cmd_trends, self.cfg, argparse.Namespace(**base))
 
@@ -2400,6 +2401,187 @@ class TrendsTest(TempDirTest):
         x = self.data()["pitches"][0]
         self.assertEqual((x["status"], x["node"], x["job_id"], "error" in x), ("go", "vps2", jid, False))
 
+    def plan(self, *items):
+        """Week plan items (channel, days from today, time, title, status[, more fields]), numbered from 1."""
+        today = fleet.datetime.now().date()
+        rows = [dict({"id": k, "channel": ch, "day": (today + fleet.timedelta(days=day)).isoformat(), "time": t,
+                      "title": title, "brief": f"All about {title}.", "status": status}, **(more[0] if more else {}))
+                for k, (ch, day, t, title, status, *more) in enumerate(items, 1)]
+        fleet.save_plan(self.cfg, {"version": 1, "next_id": len(rows) + 1, "items": rows})
+
+    def dispatch(self, sent):
+        """A dispatch_jobs that queues every job: on the first VPS named, or on its channel's own."""
+        def fake(cfg, jobs, spec, dry_run, as_json, first=False):
+            sent.append((spec, jobs, first))
+            pool = [n for n in cfg.nodes.values() if n.enabled]
+            print(json.dumps([{"node": spec.split(",")[0] if spec != "auto" else
+                               fleet.channel_home(pool, j["channel"])[0][0].name,
+                               "id": j["id"], "channel": j["channel"]} for j in jobs]))
+            return 0
+        return fake
+
+    def test_shift_turns_the_rest_of_today_to_the_trend(self):
+        self.rising()
+        self.plan(("History", 0, "00:00", "The first maps", "draft"),
+                  ("History", 0, "00:00", "Old coins", "approved"),
+                  ("Space Facts", 0, "00:00", "Saturn's rings", "approved"),
+                  ("History", 1, "09:00", "Roman roads", "approved"),
+                  ("History", 0, "00:00", "Clay tablets", "queued", {"job_id": "j5", "node": "vps2"}),
+                  ("History", 0, "00:00", "Papyrus", "rejected"))
+        out = self.trends("look", wake=True)[1]
+        self.assertIn("Today's videos that no VPS has yet. A pitch can give them new topics on its subject", out)
+        self.assertIn('  #1 00:00 History on vps2: "The first maps" [draft]\n  #2 00:00 History on vps2: "Old coins" '
+                      '[approved]\n  #3 00:00 Space Facts on vps1: "Saturn\'s rings" [approved]\nAdd --swap', out)
+        brief = "What a black hole does to a star that comes too close, in simple words."
+        swaps = [["1", "Maps of the night sky", "How sailors found their way by the stars, and what a black hole "
+                                                 "would do to them."],
+                 ["#2", "Coins from space metal", "Meteorites, the iron they bring, and the first coins made from it."],
+                 ["3", "Could Saturn fall into a black hole?", "What would happen to Saturn's rings near a black hole."]]
+        for swap, msg in [([["4", "T", brief]], r"--swap 4: not one of today's videos that no VPS has yet \(those "
+                                                r"are: #1, #2, #3; fleet plan show\)"),
+                          ([["5", "T", brief]], "not one of today's"), ([["99", "T", brief]], "not one of today's"),
+                          ([["x", "T", brief]], "not one of today's"),
+                          ([swaps[0], ["1", "Other", brief]], "--swap 1 is there twice"),
+                          ([["1", "why black holes make SPAGHETTI", brief]], "already the pitch's or another swap's"),
+                          ([swaps[0], ["2", "Maps of the night sky", brief]], "already the pitch's or another swap's"),
+                          ([["1", "T", "short"]], "--swap 1: a brief of two or three sentences"),
+                          ([["1", "x" * 101, brief]], "--swap 1: a title of at most 100"),
+                          ([swaps[0]] * 9, "at most 8 --swap")]:
+            with self.subTest(swap=swap), self.assertRaisesRegex(fleet.FleetError, msg):
+                self.trends("pitch", "Space Facts", "Why black holes make spaghetti", brief=brief, source="yt:a",
+                            swap=swap)
+        self.assertEqual(self.data()["pitches"], [])  # a refused pitch keeps nothing
+        rc, out, _ = self.trends("pitch", "Space Facts", "Why black holes make spaghetti", brief=brief, source="yt:a",
+                                 swap=swaps)
+        self.assertEqual(out, 'pitch 1 for Space Facts: "Why black holes make spaghetti". Answer "go 1" to make it next '
+                              'on vps1, "shift 1" to also turn today\'s 3 other video(s) to its subject, or "drop 1":\n'
+                              '  #1 00:00 History on vps2: "The first maps" becomes "Maps of the night sky"\n'
+                              '  #2 00:00 History on vps2: "Old coins" becomes "Coins from space metal"\n'
+                              '  #3 00:00 Space Facts on vps1: "Saturn\'s rings" becomes "Could Saturn fall into a '
+                              'black hole?"\n')
+        self.assertIn('Answer "go 1" for this video, "shift 1" to also turn today\'s 3 other video(s) to its subject, '
+                      'or "drop 1":\n     #1 00:00 History on vps2: "The first maps" becomes', self.trends()[1])
+        x = fleet.studio_trends(self.cfg)["trends"]["pitches"][0]
+        self.assertTrue(x["can_shift"])
+        self.assertEqual([(w["id"], w["was"]["on"], w["was"]["channel"]) for w in x["swaps"]],
+                         [(1, "vps2", "History"), (2, "vps2", "History"), (3, "vps1", "Space Facts")])
+        with mock.patch.object(fleet, "parallel", return_value={"vps1": healthy(), "vps2": healthy()}), \
+                mock.patch.object(fleet, "fetch_jobs", return_value=([], [])):
+            needs = fleet.report_data(self.cfg, 24)["needs"]
+        self.assertIn('Trend looker: pitch 1 for Space Facts waits for your answer: "Why black holes make spaghetti". '
+                      'Say "go 1", "shift 1" (it also turns today\'s 3 other video(s) to it) or "drop 1"', needs)
+        plan = fleet.load_plan(self.cfg)
+        plan["items"][1]["title"] = "Old coins, again"  # the owner changed #2 since the pitch
+        fleet.save_plan(self.cfg, plan)
+        sent = []
+        with mock.patch.object(fleet, "dispatch_jobs", self.dispatch(sent)):
+            rc, out, _ = self.trends("shift", "1")
+        self.assertEqual(rc, 0)
+        jid = sent[0][1][0]["id"]
+        self.assertEqual([(spec, first) for spec, _, first in sent], [("auto", True)])  # the pitch's own video, as go
+        lines = out.splitlines()
+        self.assertEqual(lines[0], f'queued pitch 1 "Why black holes make spaghetti" on vps1 as {jid}, first in its queue')
+        self.assertEqual(lines[1], "turned today's 2 other video(s) to Space Facts, each one on its VPS and at its time:")
+        self.assertRegex(lines[2], r'^  #1 \w{3} \d\d \w{3} 00:00 Space Facts: "Maps of the night sky" on vps2 '
+                                   r'\(was History: "The first maps"\)$')
+        self.assertRegex(lines[3], r'^  #3 .* Space Facts: "Could Saturn fall into a black hole\?" on vps1 '
+                                   r'\(was Space Facts: "Saturn\'s rings"\)$')
+        self.assertEqual(lines[4], "The hourly week plan run queues each one when its time comes.")
+        self.assertRegex(lines[5], r'^#2 changed since the pitch \(now #2 .* History: "Old coins, again"\), so it '
+                                   r'stays as it is$')
+        self.assertEqual(len(lines), 6, out)
+        items = {i["id"]: i for i in fleet.load_plan(self.cfg)["items"]}
+        one = items[1]
+        self.assertEqual((one["channel"], one["title"], one["status"], one["on"], one["shifted_from"], one["trend_pitch"]),
+                         ("Space Facts", "Maps of the night sky", "approved", "vps2", "History", 1))
+        self.assertIn("approved_at", one)
+        self.assertIn("Why now: a video on this subject is rising fast on YouTube", one["why"])
+        self.assertEqual((items[2]["channel"], items[2]["title"], "on" in items[2]), ("History", "Old coins, again", False))
+        self.assertEqual((items[4]["title"], items[5]["status"], items[6]["status"]), ("Roman roads", "queued", "rejected"))
+        x = self.data()["pitches"][0]
+        self.assertEqual((x["status"], x["shifted"]), ("go", [1, 3]))
+        self.assertTrue(self.trends("shift", "1")[1].startswith("today's other videos already turned to pitch 1 at "))
+        self.assertIn(f"queued on vps1 as {jid}, and today's 2 other video(s) turned to it", self.trends()[1])
+        shown = quietly(fleet.plan_show, self.cfg, argparse.Namespace(week=None, status=None, channel=None, json=False))[1]
+        self.assertIn('"Maps of the night sky" [approved] (shifted from History by pitch 1, made on vps2)', shown)
+        # the History slot at 00:00 today stays #1's, though #1 is a Space Facts video now
+        added = quietly(fleet.plan_add_items, self.cfg, [{"channel": "History", "day": one["day"], "time": "00:00",
+                                                           "title": "Ink", "brief": ""}])[1]
+        self.assertIn('already planned as #1 "Maps of the night sky"', added)
+        sent.clear()
+        with mock.patch.object(fleet, "dispatch_jobs", self.dispatch(sent)):
+            rc, out, _ = quietly(fleet.plan_run, self.cfg, argparse.Namespace(dry_run=False, quiet=False))
+        self.assertEqual([(spec, [j["plan_id"] for j in jobs]) for spec, jobs, _ in sent],
+                         [("vps2", [1]), ("auto", [2]), ("vps1", [3])])  # each on the VPS it had
+        job = sent[0][1][0]
+        self.assertEqual((job["channel"], job["title"]), ("Space Facts", "Maps of the night sky"))
+        topic = next(f["content"] for f in job["files"] if f["path"] == "topic.md")
+        self.assertIn("Why now: a video on this subject is rising fast on YouTube", topic)
+        self.assertIn("queued #1 ", out)
+        items = {i["id"]: i for i in fleet.load_plan(self.cfg)["items"]}
+        self.assertEqual([(items[k]["status"], items[k]["node"]) for k in (1, 2, 3)],
+                         [("queued", "vps2"), ("queued", "vps2"), ("queued", "vps1")])
+
+    def test_a_vps_a_shift_kept_can_leave_the_inventory(self):
+        self.plan(("History", 0, "00:00", "Maps", "approved", {"on": "vps9", "shifted_from": "Space Facts"}))
+        rc, out, _ = quietly(fleet.plan_run, self.cfg, argparse.Namespace(dry_run=False, quiet=False))
+        self.assertIn("NOT QUEUED #1 ", out)
+        self.assertIn("unknown node 'vps9'", out)
+        self.assertEqual(fleet.load_plan(self.cfg)["items"][0]["tries"], 1)
+
+    def test_a_shift_still_turns_the_day_when_its_go_fails(self):
+        self.plan(("Space Facts", 0, "00:00", "Saturn's rings", "draft"))
+        self.trends("pitch", "History", "The first coins", brief="Why people made coins, and what came before them.",
+                    swap=[["1", "Coins in space", "What astronauts carry, and whether money works on the Moon."]])
+
+        def refused(cfg, jobs, spec, dry_run, as_json, first=False):
+            print(f"fleet: {jobs[0]['id']}: channel 'History' is made on vps2, and no VPS can take a claude job",
+                  file=sys.stderr)
+            print("[]")
+            return 1
+        with mock.patch.object(fleet, "dispatch_jobs", refused), \
+                self.assertRaisesRegex(fleet.FleetError, "pitch 1 was not queued"):
+            self.trends("shift", "1")
+        i = fleet.load_plan(self.cfg)["items"][0]
+        self.assertEqual((i["channel"], i["title"], i["status"], i["on"]), ("History", "Coins in space", "approved", "vps1"))
+        x = self.data()["pitches"][0]
+        self.assertEqual((x["status"], x["shifted"]), ("waiting", [1]))
+        self.assertFalse(fleet.can_shift(x))
+        self.assertIn('Answer "go 1" or "drop 1".', fleet.pitch_line(x))
+        sent = []
+        with mock.patch.object(fleet, "dispatch_jobs", self.dispatch(sent)):
+            out = self.trends("shift", "1")[1]  # the go again; the day turned once
+        self.assertEqual(len(sent), 1)
+        self.assertIn('queued pitch 1 "The first coins" on vps2', out)
+        self.assertIn("today's other videos already turned to pitch 1", out)
+        # a pitch without new topics is a go; one with yesterday's leaves today as it is
+        self.trends("pitch", "Space Facts", "Rockets", brief="How a rocket gets off the ground, step by step.")
+        with mock.patch.object(fleet, "dispatch_jobs", self.dispatch(sent)):
+            out = self.trends("shift", "2")[1]
+        self.assertIn('queued pitch 2 "Rockets" on vps1', out)
+        self.assertIn("pitch 2 came with no new topics for other videos, so only its own video changes the day", out)
+        self.trends("pitch", "History", "Gold rush", brief="Why so many people ran to find gold, and who got rich.",
+                    swap=[["1", "Gold from dying stars", "Where gold comes from, from a neutron star crash to a ring."]])
+        d = self.data()
+        d["pitches"][-1]["swap_day"] = (fleet.datetime.now().date() - fleet.timedelta(days=1)).isoformat()
+        fleet.save_trends(self.cfg, d)
+        self.assertIn('Answer "go 3" or "drop 3".', self.trends()[1])
+        with mock.patch.object(fleet, "dispatch_jobs", self.dispatch(sent)):
+            out = self.trends("shift", "3")[1]
+        self.assertIn("pitch 3's new topics were for the videos of", out)
+        self.assertEqual(fleet.load_plan(self.cfg)["items"][0]["title"], "Coins in space")
+        d = self.data()
+        d["pitches"].append({"n": 9, "channel": "Space Facts", "title": "X", "status": "waiting", "at": fleet.now_iso(),
+                             "shifted": [1], "shifted_at": fleet.now_iso()})
+        fleet.save_trends(self.cfg, d)
+        self.assertEqual(self.trends("drop", "9")[1], 'dropped pitch 9 (Space Facts: "X")\nToday\'s videos it turned '
+                                                      "keep their new topics (1); change them with fleet plan edit, or "
+                                                      "fleet plan reject\n")
+        quietly(fleet.plan_edit, self.cfg, argparse.Namespace(args=["1"], channel="Space Facts", day=None, time=None,
+                                                              title=None, brief=None))
+        i = fleet.load_plan(self.cfg)["items"][0]
+        self.assertEqual((i["channel"], "on" in i, "shifted_from" in i), ("Space Facts", False, False))
+
     def test_pitches_expire_and_old_ones_go(self):
         old, now = "2020-01-01T00:00:00Z", fleet.now_iso()
         ago = (fleet.datetime.now(fleet.timezone.utc) - fleet.timedelta(hours=49)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2451,7 +2633,7 @@ class TrendsTest(TempDirTest):
         with mock.patch.object(fleet, "parallel", return_value={"vps1": healthy(), "vps2": healthy()}), \
                 mock.patch.object(fleet, "fetch_jobs", return_value=([], [])):
             d = fleet.report_data(self.cfg, 24)
-        self.assertEqual(d["trends"], {"key": True, "looks": 1, "pitched": 1, "went": 0, "waiting": 1})
+        self.assertEqual(d["trends"], {"key": True, "looks": 1, "pitched": 1, "went": 0, "shifted": 0, "waiting": 1})
         out = fleet.report_text(d)
         self.assertIn("Trend looker: 1 look(s), 1 pitch(es), 0 sent to a VPS", out)
         self.assertIn('- Trend looker: pitch 1 for Space Facts waits for your answer: "Spaghetti". Say "go 1" or "drop 1"', out)
@@ -2480,6 +2662,11 @@ class TrendsTest(TempDirTest):
         a = fleet.parse_cli(["trends", "watch", "History", "--words", "coins, maps", "--min", "500", "--off"])
         self.assertEqual((a.args, a.words, a.min, a.off), (["History"], "coins, maps", 500, True))
         self.assertTrue(fleet.parse_cli(["trends", "look", "--wake"]).wake)
+        a = fleet.parse_cli(["trends", "pitch", "Space Facts", "T", "--brief", "b", "--swap", "3", "New", "Its brief",
+                             "--swap", "#4", "Two", "B2"])
+        self.assertEqual(a.swap, [["3", "New", "Its brief"], ["#4", "Two", "B2"]])
+        self.assertEqual(fleet.parse_cli(["trends", "shift", "3"]).action, "shift")
+        self.assertIsNone(fleet.parse_cli(["trends", "go", "3"]).swap)
         self.assertTrue(fleet.parse_cli(["dispatch", "--prompt", "x", "--channel", "History", "--first"]).first)
         self.assertFalse(fleet.parse_cli(["dispatch", "job.json"]).first)
 

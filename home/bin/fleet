@@ -21,9 +21,10 @@ Everyday
   fleet plan show|slots|import|approve|reject|edit|remove|run
                                            the week plan: topics you approve, queued on time
   fleet ideas [add|edit|move|remove]       the ideas list: notes and features for later, best first
-  fleet trends [look|go N|drop N|watch|key]
+  fleet trends [look|go N|shift N|drop N|watch|key]
                                            the trend looker: what is rising on YouTube in each
-                                           channel's niche; "go N" makes a pitch next on its VPS
+                                           channel's niche; "go N" makes a pitch next on its VPS,
+                                           "shift N" also turns today's other videos to it
   fleet publish NODE JOB_ID --to youtube[,tiktok,instagram]
                                            a YouTube private draft, the TikTok inbox, or (with
                                            --now) an Instagram Reel; --login PLATFORM first
@@ -80,7 +81,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 IS_WINDOWS = os.name == "nt"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOME = Path.home()
@@ -1530,8 +1531,9 @@ def report_data(cfg: Config, hours: float) -> dict:
     if trends.get("error"):
         needs.append(f"Trend looker: {trends['error']}")
     for x in trends.get("waiting", [])[:5]:
-        needs.append(f"Trend looker: pitch {x['n']} for {x['channel']} waits for your answer: \"{x['title']}\". "
-                     f"Say \"go {x['n']}\" or \"drop {x['n']}\"")
+        say = (f"Say \"go {x['n']}\", \"shift {x['n']}\" (it also turns today's {len(x['swaps'])} other video(s) to "
+               f"it) or \"drop {x['n']}\"" if can_shift(x) else f"Say \"go {x['n']}\" or \"drop {x['n']}\"")
+        needs.append(f"Trend looker: pitch {x['n']} for {x['channel']} waits for your answer: \"{x['title']}\". {say}")
     needs += [f"Trend looker: {e}" for e in trends.get("problems", [])]
     return {"hours": hours, "nodes": per_node, "problems": with_problems, "failed": failed, "needs": needs,
             "plan": {k: len(v) for k, v in plan.items() if isinstance(v, list)},
@@ -1583,7 +1585,8 @@ def report_text(d: dict) -> str:
             lines.append("Trend looker: off until it has a YouTube API key (fleet trends key)")
         elif t.get("looks") or t.get("pitched"):
             lines.append(f"Trend looker: {t.get('looks', 0)} look(s), {t.get('pitched', 0)} pitch(es), "
-                         f"{t.get('went', 0)} sent to a VPS")
+                         f"{t.get('went', 0)} sent to a VPS"
+                         + (f", {t['shifted']} shifted the day" if t.get("shifted") else ""))
         elif d["hours"] >= 24:
             lines.append("Trend looker: no look in that time. Is its Hermes job there? (fleet hermes-cron)")
     if d["needs"]:
@@ -1758,6 +1761,11 @@ def plan_line(i: dict) -> str:
     return f"#{i['id']} {day} {i.get('channel')}: \"{i.get('title')}\""
 
 
+def plan_keys(i: dict) -> set:
+    """The channels whose slot a plan item holds: its own, and the one a shift took it from."""
+    return {channel_key(c) for c in (i.get("channel"), i.get("shifted_from")) if c}
+
+
 def compact_ids(items: list) -> str:
     """[3, 4, 5, 7] -> "3-5,7" """
     ids, out = sorted({i["id"] for i in items}), []
@@ -1853,8 +1861,9 @@ def topic_job(cfg: Config, channel: str, title: str, brief: str, day: str, more:
 
 
 def plan_job(cfg: Config, i: dict) -> dict:
-    """The job for a plan item: its topic, on the channel's own job file."""
-    job = topic_job(cfg, i["channel"], i["title"], i.get("brief") or "", i["day"])
+    """The job for a plan item: its topic, on the channel's own job file, and for a video a
+    shift turned to a trend, why it is made now."""
+    job = topic_job(cfg, i["channel"], i["title"], i.get("brief") or "", i["day"], str(i.get("why") or ""))
     job.update(plan_id=i["id"], id=i.get("job_id") or make_job_id(i["channel"]))
     return validate_job(job, f"plan item #{i['id']} ({channels_dir(cfg) / (channel_key(i['channel']) + '.json')})")
 
@@ -1885,6 +1894,8 @@ def plan_show(cfg: Config, a) -> int:
             day = when.date()
             print(when.strftime("%A %d %B") if when != datetime.max else str(i.get("day")))
         note = {"queued": f" (queued on {i.get('node')} as {i.get('job_id')})"}.get(i.get("status"), "")
+        if i.get("shifted_from") and i.get("status") == "approved":
+            note = f" (shifted from {i['shifted_from']} by pitch {i.get('trend_pitch')}, made on {i.get('on')})"
         if i.get("error") and i.get("status") == "approved":
             note = f" (not queued yet: {i['error'][:120]})"
         print(f"  #{i['id']} {i.get('time')} {i.get('channel')}: \"{i.get('title')}\" [{i.get('status')}]{note}")
@@ -1897,8 +1908,7 @@ def plan_show(cfg: Config, a) -> int:
 def plan_slots(cfg: Config, a) -> int:
     which = a.week if a.week in ("this", "next") else "next"
     lo, hi = week_range(which)
-    taken = {(channel_key(i.get("channel", "")), i.get("day")) for i in load_plan(cfg)["items"]
-             if i.get("status") != "rejected"}
+    taken = {(k, i.get("day")) for i in load_plan(cfg)["items"] if i.get("status") != "rejected" for k in plan_keys(i)}
     now, slots = datetime.now(), []
     for ch in plan_channels(cfg):
         if a.channel and channel_key(ch) != channel_key(a.channel):
@@ -1930,8 +1940,7 @@ def plan_add_items(cfg: Config, new: list) -> int:
         plan = load_plan(cfg)
         for it in new:
             dup = next((i for i in plan["items"] if i.get("status") != "rejected" and i.get("day") == it["day"]
-                        and i.get("time") == it["time"] and channel_key(i.get("channel", "")) == channel_key(it["channel"])),
-                       None)
+                        and i.get("time") == it["time"] and channel_key(it["channel"]) in plan_keys(i)), None)
             if dup:
                 skipped.append((it, dup))
                 continue
@@ -2014,6 +2023,9 @@ def plan_edit(cfg: Config, a) -> int:
             raise FleetError(f"#{k} is already queued on {i.get('node')} as {i.get('job_id')}: change that job instead")
         changed = dict(i, **{key: getattr(a, key) for key in ("channel", "day", "time", "title", "brief")
                              if getattr(a, key) is not None})
+        if a.channel is not None and channel_key(a.channel) != channel_key(i.get("channel", "")):
+            i.pop("on", None)  # a channel the owner sets goes to that channel's VPS, not where a shift kept it
+            i.pop("shifted_from", None)
         i.update(plan_item(cfg, changed, f"#{k}"), edited_at=now_iso())
         save_plan(cfg, plan)
     print(f"changed {plan_line(i)} [{i.get('status')}]")
@@ -2036,7 +2048,8 @@ def plan_remove(cfg: Config, a) -> int:
 
 
 def plan_run(cfg: Config, a) -> int:
-    """Queue the approved items whose time has come, on their channel's VPS."""
+    """Queue the approved items whose time has come, on their channel's VPS, or for a video a
+    shift turned to a trend, on the VPS it had before."""
     lines, now = [], datetime.now()
     with plan_locked(cfg):
         plan = load_plan(cfg)
@@ -2057,11 +2070,18 @@ def plan_run(cfg: Config, a) -> int:
                 print(json.dumps(job, indent=2, ensure_ascii=False))
             return 0
         if ready:
-            out, err = io.StringIO(), io.StringIO()
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                dispatch_jobs(cfg, [job for _, job in ready], "auto", False, True)
-            queued = {q["id"]: q for q in last_json(out.getvalue().encode("utf-8"), [])}
-            said = [x.strip() for x in err.getvalue().splitlines() if x.strip()]
+            queued, said = {}, []
+            for spec in dict.fromkeys(str(i.get("on") or "auto") for i, _ in ready):
+                jobs = [job for i, job in ready if str(i.get("on") or "auto") == spec]
+                out, err = io.StringIO(), io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        dispatch_jobs(cfg, jobs, spec, False, True)
+                except FleetError as e:  # the VPS a shift kept is no longer in fleet.ini
+                    said += [f"{job['id']}: {e}" for job in jobs]
+                queued.update({q["id"]: q for q in last_json(out.getvalue().encode("utf-8"), [])})
+                said += [x.strip() for x in err.getvalue().splitlines() if x.strip()
+                         and not x.strip().startswith("note: ")]  # "does not make videos for": the shift said so
             for i, job in ready:
                 about = "; ".join(x for x in said if job["id"] in x)
                 q = queued.get(job["id"])
@@ -3012,7 +3032,9 @@ def publish_summary(cfg: Config, since: float) -> dict:
 # --wake`: one YouTube search per channel for the videos of the last two days in the channel's
 # niche, most watched first, and their views an hour. When one is new and rising fast, Hermes
 # pitches the owner a video on it, and "go 3" queues that video first on the channel's own VPS.
-# It watches YouTube only, through Google's official YouTube Data API.
+# A pitch can also give today's other planned videos new topics on the same subject: "shift 3"
+# swaps them in, so the rest of the day rides the trend. It watches YouTube only, through
+# Google's official YouTube Data API.
 TRENDS_HOURS = 48           # how far back a look searches
 TRENDS_ASK = 10             # videos asked for per channel and look
 TRENDS_KEEP = 5             # the fastest of them kept per channel
@@ -3023,6 +3045,7 @@ TRENDS_SEEN_DAYS = 7        # a video found once is not news again for this long
 TRENDS_PITCH_HOURS = 48     # a pitch nobody answered expires after this long: trends fade
 TRENDS_KEEP_DAYS = 30       # answered pitches leave trends.json after this long
 TREND_WORDS_MAX = 8
+TRENDS_SWAP_MAX = 8         # today's videos one pitch can turn to its trend
 PITCH_TITLE_MAX = 100       # YouTube's limit for a title
 PITCH_STATUSES = ("waiting", "go", "dropped", "expired")
 WAKE_NOT = '{"wakeAgent": false}'  # the last line of a Hermes cron script that lets the agent sleep
@@ -3032,9 +3055,10 @@ TRENDS_PROMPT = (
     "make a good video for that channel: a fresh angle on the same subject, never a copy, and nothing close to a "
     "topic already planned or made (`fleet plan show --week all --json`, `fleet jobs --json`). For at most one find "
     "per channel, run `fleet trends pitch \"<channel>\" \"<title>\" --brief \"<two or three sentences>\" --from "
-    "<find id>`. Then send the owner the new pitches as `fleet trends` prints them under Pitches, and say how to "
-    "answer: \"go 3\" makes that video next on its channel's VPS, \"drop 3\" lets it go. Never say go yourself. If "
-    "no find is worth a video, answer with only [SILENT].")
+    "<find id>`, with one --swap for each of today's videos the list says no VPS has yet, so the owner can shift the "
+    "day. Then send the owner the new pitches as `fleet trends` prints them under Pitches, and say how to answer: "
+    "\"go 3\" makes that video next on its channel's VPS, \"shift 3\" also turns today's other videos to it, \"drop "
+    "3\" lets it go. Never say go or shift yourself. If no find is worth a video, answer with only [SILENT].")
 
 
 def trends_file(cfg: Config) -> Path:
@@ -3135,6 +3159,39 @@ def made_on(cfg: Config, channel: str) -> str:
     return ", ".join(n.name for n in nodes) or "no VPS yet"
 
 
+def slot_on(cfg: Config, i: dict) -> str:
+    """Where a plan item is made: the VPS a shift kept for it, or its channel's own."""
+    return str(i.get("on") or "") or made_on(cfg, str(i.get("channel")))
+
+
+def day_left(cfg: Config, d: dict) -> list:
+    """Today's planned videos that no VPS has yet, for the channels the looker watches: the
+    ones "shift" can turn to a trend. Those already sent to a VPS stay as they are."""
+    try:
+        items = load_plan(cfg)["items"]
+    except FleetError:
+        return []
+    today = datetime.now().date().isoformat()
+    watched = {channel_key(w["channel"]) for w in trend_channels(cfg, d) if not w["off"]}
+    return sorted((i for i in items if i.get("day") == today and i.get("status") in ("draft", "approved")
+                   and not i.get("job_id") and channel_key(str(i.get("channel"))) in watched),
+                  key=lambda i: (plan_due(i), i["id"]))
+
+
+def swap_line(s: dict) -> str:
+    """One of today's videos as a pitch would change it."""
+    was = s.get("was") or {}
+    return (f"#{s['id']} {was.get('time') or ''} {was.get('channel')} on {was.get('on') or '?'}: "
+            f"\"{was.get('title')}\" becomes \"{s['title']}\"")
+
+
+def can_shift(x: dict) -> bool:
+    """Whether "shift N" can still turn today's other videos to a pitch: it came with new
+    topics for them today, and they are not swapped in yet."""
+    return (bool(x.get("swaps")) and x.get("swap_day") == datetime.now().date().isoformat()
+            and not x.get("shifted_at") and x.get("status") in ("waiting", "go"))
+
+
 def youtube_data(key: str, what: str, **params) -> dict:
     """GET from the YouTube Data API with the owner's API key (public data only)."""
     url = f"{api('youtube_data')}/{what}?" + urlencode(dict(params, key=key))
@@ -3197,11 +3254,20 @@ def watch_line(cfg: Config, w: dict) -> str:
 
 
 def pitch_line(x: dict) -> str:
-    s = f"{x['n']}. {x['channel']}: \"{x['title']}\""
+    """A pitch as `fleet trends` lists it, with the videos "shift" would change on the lines under it."""
+    n, s = x["n"], f"{x['n']}. {x['channel']}: \"{x['title']}\""
+    k = len(x.get("swaps") or [])
     if x["status"] == "waiting":
-        return s + f" ({x.get('brief', '')}) Answer \"go {x['n']}\" or \"drop {x['n']}\"."
+        if not can_shift(x):
+            return s + f" ({x.get('brief', '')}) Answer \"go {n}\" or \"drop {n}\"."
+        return (s + f" ({x.get('brief', '')}) Answer \"go {n}\" for this video, \"shift {n}\" to also turn today's "
+                f"{k} other video(s) to its subject, or \"drop {n}\":"
+                + "".join(f"\n     {swap_line(w)}" for w in x["swaps"]))
     if x["status"] == "go":
-        return s + f", queued on {x.get('node')} as {x.get('job_id')}"
+        s += f", queued on {x.get('node')} as {x.get('job_id')}"
+        if x.get("shifted"):
+            return s + f", and today's {len(x['shifted'])} other video(s) turned to it"
+        return s + (f". \"shift {n}\" still turns today's {k} other video(s) to it" if can_shift(x) else "")
     return s + f", {x['status']}"
 
 
@@ -3300,6 +3366,15 @@ def look_once(cfg: Config, a) -> int:
         for w, fs in news:
             lines.append(watch_line(cfg, w))
             lines += [f"  {find_line(f)}. {f['url']}" for f in fs]
+        left = day_left(cfg, d)
+        if left:
+            lines += ["", "Today's videos that no VPS has yet. A pitch can give them new topics on its subject, so "
+                      "the owner can shift the day:"]
+            lines += [f"  #{i['id']} {i.get('time')} {i['channel']} on {slot_on(cfg, i)}: \"{i['title']}\" "
+                      f"[{i['status']}]" for i in left]
+            lines.append("Add --swap <number> \"<title>\" \"<brief>\" to the pitch for each of them: a fresh angle on "
+                         "the pitch's subject each, all different. The owner answers \"go N\" for the pitched video "
+                         "only, \"shift N\" to also swap these in, or \"drop N\".")
         print("\n".join(lines))
         return 0
     else:
@@ -3362,9 +3437,41 @@ def find_pitch(d: dict, n: int) -> dict:
     return x
 
 
+def pitch_swaps(cfg: Config, d: dict, title: str, raw: list) -> list:
+    """The pitch's --swap NUMBER TITLE BRIEF: a new topic on its subject for each of today's
+    videos that no VPS has yet, checked, with what each video was until then."""
+    if len(raw) > TRENDS_SWAP_MAX:
+        raise FleetError(f"at most {TRENDS_SWAP_MAX} --swap for one pitch")
+    left = {i["id"]: i for i in day_left(cfg, d)}
+    out, titles = [], {title.casefold()}
+    for num, t, b in raw:
+        k = str(num).strip().lstrip("#")
+        if not k.isdigit() or int(k) not in left:
+            raise FleetError(f"--swap {num}: not one of today's videos that no VPS has yet (those are: "
+                             f"{', '.join(f'#{i}' for i in left) or 'none'}; fleet plan show)")
+        i = left[int(k)]
+        t, b = " ".join(str(t).split()), " ".join(str(b).split())
+        if not t or len(t) > PITCH_TITLE_MAX:
+            raise FleetError(f"--swap {k}: a title of at most {PITCH_TITLE_MAX} characters (YouTube's limit)")
+        if not 20 <= len(b) <= 1500:
+            raise FleetError(f"--swap {k}: a brief of two or three sentences (20 to 1500 characters) that says what "
+                             "the video shows")
+        if any(w["id"] == i["id"] for w in out):
+            raise FleetError(f"--swap {k} is there twice: one new topic for each video")
+        if t.casefold() in titles:
+            raise FleetError(f"--swap {k}: \"{t}\" is already the pitch's or another swap's title; each video needs "
+                             "its own angle")
+        titles.add(t.casefold())
+        out.append({"id": i["id"], "title": t, "brief": b,
+                    "was": {"channel": i["channel"], "title": i.get("title"), "time": i.get("time"),
+                            "status": i.get("status"), "on": slot_on(cfg, i)}})
+    return out
+
+
 def trends_pitch(cfg: Config, a) -> int:
     if len(a.args) != 2:
-        raise FleetError("fleet trends pitch \"<channel>\" \"<title>\" --brief \"...\" [--from yt:...]")
+        raise FleetError("fleet trends pitch \"<channel>\" \"<title>\" --brief \"...\" [--from yt:...] "
+                         "[--swap NUMBER \"<title>\" \"<brief>\" ...]")
     ch, title = pitch_channel(cfg, a.args[0]), " ".join(str(a.args[1]).split())
     brief = " ".join((a.brief or "").split())
     if not title or len(title) > PITCH_TITLE_MAX:
@@ -3382,30 +3489,45 @@ def trends_pitch(cfg: Config, a) -> int:
         waiting = [x for x in d["pitches"] if x["channel"] == ch and x["status"] == "waiting"]
         if waiting:
             raise FleetError(f"pitch {waiting[0]['n']} for {ch} still waits for an answer: one at a time for a channel")
+        swaps = pitch_swaps(cfg, d, title, getattr(a, "swap", None) or [])
         x = {"n": d["next"], "channel": ch, "title": title, "brief": brief, "status": "waiting", "at": now_iso()}
         if src:
             x["source"] = {k: src.get(k) for k in ("id", "title", "by", "url", "views", "hours", "vph")}
+        if swaps:
+            x.update(swaps=swaps, swap_day=datetime.now().date().isoformat())
         d["pitches"].append(x)
         d["next"] += 1
         save_trends(cfg, d)
-    print(f"pitch {x['n']} for {ch}: \"{title}\". Answer \"go {x['n']}\" to make it next on {made_on(cfg, ch)}, "
-          f"or \"drop {x['n']}\".")
+    n = x["n"]
+    if not swaps:
+        print(f"pitch {n} for {ch}: \"{title}\". Answer \"go {n}\" to make it next on {made_on(cfg, ch)}, "
+              f"or \"drop {n}\".")
+        return 0
+    print(f"pitch {n} for {ch}: \"{title}\". Answer \"go {n}\" to make it next on {made_on(cfg, ch)}, \"shift {n}\" "
+          f"to also turn today's {len(swaps)} other video(s) to its subject, or \"drop {n}\":")
+    for w in swaps:
+        print(f"  {swap_line(w)}")
     return 0
+
+
+def trend_why(x: dict) -> str:
+    """Why a video on a pitch's subject is made now, for its topic.md."""
+    src = x.get("source") or {}
+    return (f"Why now: a video on this subject is rising fast on YouTube: \"{src.get('title')}\" by {src.get('by')}, "
+            f"{int(number(src.get('views'), 0)):,} views in {number(src.get('hours'), 0):g} hours ({src.get('url')}). "
+            "Make our own video with a fresh angle; do not copy theirs.") if src else ""
 
 
 def trend_job(cfg: Config, x: dict) -> dict:
     """The job for a pitch: the channel's own job file, like a week plan topic, with why it is
     made now in topic.md."""
-    src = x.get("source") or {}
-    why = (f"Why now: a video on this subject is rising fast on YouTube: \"{src.get('title')}\" by {src.get('by')}, "
-           f"{int(number(src.get('views'), 0)):,} views in {number(src.get('hours'), 0):g} hours ({src.get('url')}). "
-           "Make our own video with a fresh angle; do not copy theirs.") if src else ""
-    job = topic_job(cfg, x["channel"], x["title"], x.get("brief") or "", datetime.now().date().isoformat(), why)
+    job = topic_job(cfg, x["channel"], x["title"], x.get("brief") or "", datetime.now().date().isoformat(),
+                    trend_why(x))
     job.update(trend_pitch=x["n"], id=x["job_id"])
     return validate_job(job, f"pitch {x['n']} ({channels_dir(cfg) / (channel_key(x['channel']) + '.json')})")
 
 
-def trends_go(cfg: Config, a) -> int:
+def trends_go(cfg: Config, a, hint: bool = True) -> int:
     n = pitch_number(a.args)
     with trends_locked(cfg):
         d = load_trends(cfg)
@@ -3434,6 +3556,75 @@ def trends_go(cfg: Config, a) -> int:
     notes = [re.sub(r"^(warning|note): ", "", s) for s in said]
     print(f"queued pitch {n} \"{x['title']}\" on {q['node']} as {q['id']}, first in its queue"
           + (f" ({'; '.join(notes)})" if notes else ""))
+    if hint and can_shift(x):
+        print(f"\"shift {n}\" also turns today's {len(x['swaps'])} other video(s) to it, each on its VPS and at its time")
+    return 0
+
+
+def trends_shift(cfg: Config, a) -> int:
+    """"shift 3": the pitch's video, as "go 3" makes it, and today's other videos that no VPS has
+    yet turned to its subject: the new topics the pitch came with, each one made on the VPS and
+    at the time it had. The owner's answer is what lets them leave their own channel for the day."""
+    n = pitch_number(a.args)
+    with trends_locked(cfg):
+        x = find_pitch(load_trends(cfg), n)
+    failed = None
+    if x["status"] != "go":
+        try:
+            trends_go(cfg, a, hint=False)
+        except FleetError as e:  # the day still turns: the pitch's own video can follow with "go"
+            failed = e
+    today, done, notes = datetime.now().date().isoformat(), [], []
+    with trends_locked(cfg):  # the trends lock first, then the plan's, as everywhere
+        d = load_trends(cfg)
+        x = find_pitch(d, n)
+        if x.get("shifted_at"):
+            at = short_time(parse_stamp(x["shifted_at"]))
+            notes.append(f"today's other videos already turned to pitch {n} at {at}" if x.get("shifted") else
+                         f"pitch {n} already tried to shift the day at {at}, and no video could change")
+        elif not x.get("swaps"):
+            notes.append(f"pitch {n} came with no new topics for other videos, so only its own video changes the day")
+        elif x.get("swap_day") != today:
+            notes.append(f"pitch {n}'s new topics were for the videos of {x.get('swap_day')}, so today's plan stays "
+                         "as it is")
+        else:
+            pool = [m for m in cfg.nodes.values() if m.enabled]
+            with plan_locked(cfg):
+                plan = load_plan(cfg)
+                by_id = {i["id"]: i for i in plan["items"]}
+                for w in x["swaps"]:
+                    i, was = by_id.get(w["id"]), w.get("was") or {}
+                    if i is None:
+                        notes.append(f"#{w['id']} is no longer in the week plan")
+                    elif i.get("job_id") or i.get("status") not in ("draft", "approved"):
+                        where = f"queued on {i.get('node')}" if i.get("status") == "queued" else i.get("status")
+                        notes.append(f"#{w['id']} is already {where or 'sent to a VPS'}, so it stays as it was")
+                    elif i.get("day") != today or i.get("title") != was.get("title"):
+                        notes.append(f"#{w['id']} changed since the pitch (now {plan_line(i)}), so it stays as it is")
+                    else:
+                        on = str(i.get("on") or "") or ",".join(m.name for m in channel_home(pool, str(i["channel"]))[0])
+                        if not on:
+                            notes.append(f"#{w['id']}: no VPS makes {i['channel']}, so it stays as it was")
+                            continue
+                        if i.get("status") == "draft":
+                            i["approved_at"] = now_iso()
+                        i.setdefault("shifted_from", i["channel"])
+                        i.update(channel=x["channel"], title=w["title"], brief=w["brief"], status="approved", on=on,
+                                 trend_pitch=n, why=trend_why(x), shifted_at=now_iso())
+                        i.pop("error", None)
+                        done.append((i, was))
+                save_plan(cfg, plan)
+            x.update(shifted_at=now_iso(), shifted=[i["id"] for i, _ in done])
+            save_trends(cfg, d)
+    if done:
+        print(f"turned today's {len(done)} other video(s) to {x['channel']}, each one on its VPS and at its time:")
+        for i, was in done:
+            print(f"  {plan_line(i)} on {i['on']} (was {was.get('channel')}: \"{was.get('title')}\")")
+        print("The hourly week plan run queues each one when its time comes.")
+    for s in notes:
+        print(s)
+    if failed:
+        raise failed
     return 0
 
 
@@ -3448,6 +3639,9 @@ def trends_drop(cfg: Config, a) -> int:
         x.update(status="dropped", answered_at=now_iso())
         save_trends(cfg, d)
     print(f"dropped pitch {n} ({x['channel']}: \"{x['title']}\")")
+    if x.get("shifted"):
+        print(f"Today's videos it turned keep their new topics ({compact_ids([{'id': k} for k in x['shifted']])}); "
+              "change them with fleet plan edit, or fleet plan reject")
     return 0
 
 
@@ -3512,8 +3706,8 @@ def trends_set_key(cfg: Config, a) -> int:
 
 
 def cmd_trends(cfg: Config, a) -> int:
-    return {"show": trends_show, "look": trends_look, "pitch": trends_pitch, "go": trends_go, "drop": trends_drop,
-            "watch": trends_watch, "key": trends_set_key}[a.action](cfg, a)
+    return {"show": trends_show, "look": trends_look, "pitch": trends_pitch, "go": trends_go, "shift": trends_shift,
+            "drop": trends_drop, "watch": trends_watch, "key": trends_set_key}[a.action](cfg, a)
 
 
 def studio_trends(cfg: Config) -> dict:
@@ -3522,8 +3716,8 @@ def studio_trends(cfg: Config) -> dict:
         d = load_trends(cfg)
     except FleetError as e:
         return {"trends": {"error": str(e)[:300]}}
-    last = d["looks"][-1] if d["looks"] else {}
-    chans = [{"channel": w["channel"], "words": w["words"], "off": w["off"], "min_vph": w["min_vph"],
+    last, today = d["looks"][-1] if d["looks"] else {}, datetime.now().date().isoformat()
+    chans =[{"channel": w["channel"], "words": w["words"], "off": w["off"], "min_vph": w["min_vph"],
               "on": made_on(cfg, w["channel"]),
               "finds": [{k: f.get(k) for k in ("id", "title", "by", "views", "hours", "vph", "url")}
                         for f in d["finds"].get(channel_key(w["channel"]), [])[:3]]} for w in trend_channels(cfg, d)]
@@ -3533,7 +3727,11 @@ def studio_trends(cfg: Config) -> dict:
         "key": bool(trends_key(cfg)), "last_look": last.get("at"), "errors": (last.get("errors") or [])[:3],
         "quota": {"used": d["quota"]["units"] if d["quota"]["day"] == quota_day() else 0, "budget": cfg.trends_budget},
         "channels": chans,
-        "pitches": [{k: x.get(k) for k in ("n", "channel", "title", "brief", "status", "at", "node", "job_id")}
+        "pitches": [dict({k: x.get(k) for k in ("n", "channel", "title", "brief", "status", "at", "node", "job_id",
+                                                "shifted_at", "shifted")},
+                         can_shift=can_shift(x),
+                         swaps=[{"id": w.get("id"), "title": w.get("title"), "was": w.get("was") or {}}
+                                for w in x.get("swaps") or []] if x.get("swap_day") == today else [])
                     for x in shown]}}
 
 
@@ -3548,6 +3746,7 @@ def trends_summary(cfg: Config, since: float) -> dict:
     return {"key": bool(trends_key(cfg)), "looks": len(looks),
             "pitched": sum(1 for x in d["pitches"] if at(x, "at") >= since),
             "went": sum(1 for x in d["pitches"] if x["status"] == "go" and at(x, "answered_at") >= since),
+            "shifted": sum(1 for x in d["pitches"] if x.get("shifted") and at(x, "shifted_at") >= since),
             "waiting": [x for x in d["pitches"] if x["status"] == "waiting"],
             "problems": [str(e) for e in looks[-1].get("errors") or []][:2] if looks else []}
 
@@ -4708,13 +4907,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s = sp.add_parser("trends", help="the trend looker: what is rising on YouTube in each channel's niche, and the "
                                      "videos Hermes pitches on it")
-    s.add_argument("action", nargs="?", default="show", choices=["show", "look", "pitch", "go", "drop", "watch", "key"],
+    s.add_argument("action", nargs="?", default="show",
+                   choices=["show", "look", "pitch", "go", "shift", "drop", "watch", "key"],
                    help="show (the default); look: look now; pitch: Hermes pitches a video; go N: make pitch N next "
-                        "on its channel's VPS; drop N: let it go; watch: what to look for; key: save the API key")
+                        "on its channel's VPS; shift N: that, and today's other videos turn to its subject; drop N: "
+                        "let it go; watch: what to look for; key: save the API key")
     s.add_argument("args", nargs="*", metavar="CHANNEL|TITLE|NUMBER",
-                   help="pitch: the channel and the title; go, drop: the pitch number; watch: the channel")
+                   help="pitch: the channel and the title; go, shift, drop: the pitch number; watch: the channel")
     s.add_argument("--brief", help="pitch: what the video shows, in two or three sentences")
     s.add_argument("--from", dest="source", metavar="FIND", help="pitch: the find it comes from, like yt:abc123")
+    s.add_argument("--swap", nargs=3, action="append", metavar=("NUMBER", "TITLE", "BRIEF"),
+                   help="pitch: a new topic on its subject for one of today's planned videos, for \"shift\" "
+                        "(once for each)")
     s.add_argument("--words", help="watch: what to search for, separated by commas (\"\" for the week plan ideas)")
     s.add_argument("--region", help="watch: a two-letter country code, like US (\"\" for anywhere)")
     s.add_argument("--language", help="watch: a language code, like en (\"\" for any)")

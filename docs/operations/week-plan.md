@@ -118,6 +118,10 @@ here: change or cancel its job instead.
   hourly run.
 - **Work stays on its channel's VPS.** When that VPS cannot be reached, the topic waits
   and is tried again every hour. The report tells you.
+- **A trend can take the rest of the day.** When you answer *shift 3* to a trend pitch,
+  today's topics that no VPS has yet get new topics on the trend. Each one keeps its VPS
+  and its time. `fleet plan show` marks them `shifted from` their old channel. See
+  [Shift the day](trends.md#shift-the-day).
 - **The schedule decides when it starts.** The plan's time is when the job joins the
   queue. A VPS that is off duty starts it in its next work time.
 - **Old topics leave the plan.** Queued and rejected topics older than 60 days are

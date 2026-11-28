@@ -195,12 +195,16 @@ channel's niche.
   last look had a problem.
 - While a pitch waits for your answer, a banner trails behind it: **PITCH 3**. Say *go 3*
   to Hermes and the video is next on its channel's VPS.
+- When the pitch can [shift the day](trends.md#shift-the-day), the banner also asks
+  **SHIFT 3?**, and flyers flutter down from the gondola onto the roofs of the stages whose
+  videos of today would turn to the trend. Each of those stages' cards says what would
+  change there. Say *shift 3* to Hermes to do it.
 - After dark its lights blink, and a searchlight sweeps the lot.
 
 Click it to open its card: the last look, each channel's top find and how fast it
 rises, the pitches and what became of them, and the YouTube quota used today.
 
-![The trend looker's card: a pitch that waits for go, and each channel's top find](../assets/studio-pixel-trends.png){ width="480" }
+![The trend looker's card: a pitch that can shift the day, and what each of today's other videos would become](../assets/studio-pixel-trends.png){ width="480" }
 
 ### All day and all night
 

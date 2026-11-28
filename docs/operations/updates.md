@@ -41,6 +41,21 @@ Two things are not covered by `fleet sync`:
   `fleet bootstrap vps1 --skip-upgrade`. It is safe to repeat, keeps public SSH closed
   on a locked-down VPS, and does not stop running jobs.
 
+### From version 1.9 to 1.10
+
+Version 1.10 lets a trend take the rest of the day: answer *shift 3* to a pitch, and
+today's other videos turn to its subject, each on its usual VPS and at its usual time.
+On the pixel lot, the zeppelin drops flyers on the stages that would change. See
+[Shift the day](trends.md#shift-the-day). After `git pull`:
+
+```powershell
+fleet sync
+```
+
+It keeps the VPSs on the same version number as your PC; nothing else changes on them.
+Hermes' skill comes with `git pull`, and so does the new message of its `fleet-trends`
+job, so there is no need to run `fleet hermes-cron` or `fleet init` again.
+
 ### From version 1.8 to 1.9
 
 Version 1.9 adds the [trend looker](trends.md), the zeppelin over the pixel lot: three

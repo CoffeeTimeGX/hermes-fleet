@@ -38,7 +38,8 @@ lockdown, worker, provider scripts or the CLI's SSH paths change.
   `director` profile (`hermes -p director`).
 - Each VPS makes the videos of its own channels (`channels` in `fleet.ini`). Work moves to
   another VPS only when the owner asks: `fleet handover`, `--to` or `fleet retry --to`.
-  Nothing moves it automatically.
+  `fleet trends shift` is the owner's answer too: today's planned videos keep their VPS
+  and time and take the trend's topic. Nothing moves work automatically.
 - One Claude account per VPS, used openly. Do not add anything that hides the link
   between accounts or switches accounts to get around usage limits.
 - Bump `VERSION` in `home/bin/fleet` and `WORKER_VERSION` in `vps/worker/fleet-worker`

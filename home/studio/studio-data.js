@@ -344,7 +344,13 @@
       ],
       pitches: [
         { n: 3, channel: "Space Facts", title: "Why black holes make spaghetti", status: "waiting", at: iso(2 * hr + 10 * 60000),
-          brief: "What a black hole does to a star that comes too close, in simple words, with a fresh angle." },
+          brief: "What a black hole does to a star that comes too close, in simple words, with a fresh angle.",
+          // "shift 3" would also turn today's other planned videos to the trend, each on its own VPS
+          can_shift: true, swaps: [
+            { id: 41, title: "The oldest maps of the stars", was: { channel: "History", title: "How Rome built its roads", time: "15:00", on: "vps2", status: "approved" } },
+            { id: 42, title: "What astronauts eat for dinner", was: { channel: "Cooking", title: "One-pan lemon chicken", time: "17:00", on: "vps3", status: "approved" } },
+            { id: 43, title: "Animals that went to space", was: { channel: "Nature", title: "Why owls turn their heads", time: "19:00", on: "vps4", status: "draft" } },
+          ] },
         { n: 2, channel: "History", title: "The coins that built Rome", status: "go", at: iso(26 * hr), node: "vps2", job_id: "" },
       ],
     };
@@ -357,11 +363,11 @@
     const claude = [{ provider: "claude", installed: true, ok: true, version: "2.1.300 (Claude Code)", auth: "oauth-token", credential_age_days: 23 }];
     const status = (o) => Object.assign({ service: "active", heartbeat_age_s: 2, paused: false, limit: null, low_disk: false,
       disk_free_gb: 71.3, disk_free_pct: 74, min_free_gb: 5, load1: 0.4, cpus: 2, mem_available_mb: 6100, mem_total_mb: 7900,
-      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.9.0",
+      uptime_s: 12 * 86400 + 3 * 3600, max_parallel: 1, stuck_handovers: 0, reboot_required: false, worker_version: "1.10.0",
       providers: claude, queue: {} }, o);
     const SF = "Space Facts", HI = "History", CO = "Cooking", NA = "Nature";
     const snap = {
-      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.9.0",
+      demo: true, generated_at: iso(6000), every: 20, fleet_version: "1.10.0",
       ideas: IDEAS.map((i) => Object.assign({}, i)), ideas_starter: true,
       trends: exampleTrends(t, iso),
       nodes: [

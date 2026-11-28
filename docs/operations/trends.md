@@ -2,11 +2,12 @@
 
 The trend looker watches what is rising on YouTube in each channel's niche. When a video
 takes off, Hermes pitches you a video on the same subject, with its own angle. Answer
-*go 3* and that video is next in the channel's queue. On the studio's pixel lot, the
-trend looker is the zeppelin over the lot.
+*go 3* and that video is next in the channel's queue. Answer *shift 3* and the rest of
+today's videos turn to that subject too. On the studio's pixel lot, the trend looker is
+the zeppelin over the lot.
 
 It runs on your PC, beside Hermes, never on a VPS. It only reads public YouTube data,
-with your own key, and it makes nothing without your *go*.
+with your own key, and it makes nothing without your *go* or *shift*.
 
 ## How a day goes
 
@@ -32,17 +33,69 @@ with your own key, and it makes nothing without your *go*.
     | You write | Hermes runs |
     | --- | --- |
     | *go 3* | `fleet trends go 3` |
+    | *shift 3* | `fleet trends shift 3` |
     | *drop 3* | `fleet trends drop 3` |
 
     *go 3* queues the video on the channel's own VPS, first in its queue. It starts as
-    soon as that VPS is free and its [schedule](schedule.md) lets it. A pitch you do not
-    answer expires after two days, because trends fade.
+    soon as that VPS is free and its [schedule](schedule.md) lets it. *shift 3* does the
+    same, and also turns today's other videos to the trend: see
+    [Shift the day](#shift-the-day). A pitch you do not answer expires after two days,
+    because trends fade.
 
 5. **Each morning**, the [daily report](scheduled-checks.md#the-daily-report) says how
    many looks and pitches there were, and which pitches still wait for your answer.
 
 Only you say go. Hermes pitches, but it never queues a pitch by itself, and a pitch never
 moves to another VPS.
+
+## Shift the day
+
+When more videos are planned for today, a pitch can take the rest of the day with it.
+Hermes then gives the pitch a new topic on the trend for each of today's videos that no
+VPS has yet, and the message lists them under the pitch:
+
+```
+Pitch 3, Space Facts: "Why black holes make spaghetti"
+What a black hole does to a star that comes too close, in simple words.
+
+"shift 3" also changes today's other videos:
+#41 15:00 History on vps2: "How Rome built its roads" becomes "The oldest maps of the stars"
+#42 17:00 Cooking on vps3: "One-pan lemon chicken" becomes "What astronauts eat for dinner"
+
+Answer "go 3", "shift 3" or "drop 3".
+```
+
+- *go 3* makes only the pitched video. Today's plan stays as it is.
+- *shift 3* makes the pitched video next, as *go 3* does, and gives today's other videos
+  their new topics. Each one is still made by the same VPS, at the same time: only its
+  subject changes. Your *shift* is the yes for those topics, so there is nothing more to
+  approve.
+- *drop 3* lets it go.
+
+A video that a VPS already has, or that you changed since the pitch, keeps its topic.
+*shift* works on the day of the pitch; the day after, the pitched video alone is made.
+
+On the pixel lot, the zeppelin's banner asks **SHIFT 3?**, and flyers flutter down onto
+the roofs of the stages whose videos would change. Click a stage to read what would change
+there.
+
+`fleet plan show` marks each video a shift changed: `(shifted from History by pitch 3, made
+on vps2)`. Change one back like any planned video, with `fleet plan edit 41 --title "..."`,
+or leave it out with `fleet plan reject 41`.
+
+## One channel, several subjects
+
+The trend looker watches each channel of the fleet on its own. When your YouTube channel
+covers several subjects, make each subject a channel of the fleet, one VPS each: for
+example `channels = Space` for vps1 and `channels = Animals` for vps2 in `fleet.ini`. Then:
+
+- each subject has its own words to watch: `fleet trends watch "Space" --words "black
+  holes, planets"`;
+- each subject has its own days, time and ideas in the [week plan](week-plan.md);
+- when one subject trends, *shift* turns the rest of the day to it, each video on its
+  usual VPS and at its usual time;
+- to [publish](publishing.md), sign each subject in to the same YouTube channel:
+  `fleet publish --login youtube --channel "Space"`, and pick that channel each time.
 
 ## Set it up
 

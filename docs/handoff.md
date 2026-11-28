@@ -28,7 +28,7 @@ reach the PC or each other.
 | This documentation site, with runbooks | The channel templates: `CLAUDE.md` files and Claude Code skills per channel in `vps/templates/`. The owner keeps this for a later step. |
 | The studio (`fleet studio`): a page on the owner's PC that shows every VPS at work, from above | Optional: the Hostinger API MCP servers for Hermes |
 | The video check, the daily report, the week plan, publishing to YouTube, TikTok and Instagram, the work schedule of each VPS, and the owner's ideas list (`fleet ideas`) | The owner's own apps on Google Cloud, TikTok for Developers and Meta, and TikTok's app review ([Publishing](operations/publishing.md)) |
-| The trend looker (`fleet trends`), the zeppelin over the lot: on the PC beside Hermes, it looks at what rises on YouTube in each channel's niche; Hermes pitches a video and "go 3" queues it first on the channel's VPS | The owner's YouTube Data API key (`fleet trends key`, [Trend looker](operations/trends.md)) |
+| The trend looker (`fleet trends`), the zeppelin over the lot: on the PC beside Hermes, it looks at what rises on YouTube in each channel's niche; Hermes pitches a video and "go 3" queues it first on the channel's VPS; "shift 3" also turns the rest of today's planned videos to the trend, each on its own VPS and at its own time | The owner's YouTube Data API key (`fleet trends key`, [Trend looker](operations/trends.md)) |
 | | The other ideas on the owner's list (`fleet ideas`). The starter list is `STARTER_IDEAS` in `home/bin/fleet`. |
 
 When you help with the set-up, follow [Getting started](getting-started.md) in order. The
@@ -85,7 +85,9 @@ owner can give you their PC through Remote Control; the VPSs are reached only th
   only to the VPS whose `channels` names its channel, and the job waits there when that
   VPS is busy, paused or at its limit. Work moves to another VPS only when the owner
   asks: `fleet handover`, `--to` or `fleet retry --to`. Hermes offers a handover, and
-  never does one on its own.
+  never does one on its own. A trend pitch's `shift` is the owner's answer too: each of
+  today's planned videos keeps its VPS and its time, and only its topic and channel
+  change.
 - **One Claude account per VPS, used openly.** Never add anything that hides the link
   between the accounts or rotates accounts to get around limits. See
   [Claude accounts](providers/claude-accounts.md).
