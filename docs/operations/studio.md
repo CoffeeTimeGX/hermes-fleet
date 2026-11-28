@@ -248,21 +248,26 @@ remembers what you picked.
 ### Sound
 
 The lot is quiet until you click **Sound off** at the top right of the picture. It then
-says **Sound on**, and you hear the town: traffic as busy as the roads, birds by day,
-crickets on warm nights, the rain and the wind. You also hear the fleet, from the side of
-the lot where it happens:
+says **Sound on**, and you hear the town: a streetcar on the far side of the street, as
+busy as the roads, sparrows and robins by day, crickets on warm nights, the rain and the
+wind. You also hear the fleet, from the side of the lot where it happens:
 
 | You hear | It means |
 | --- | --- |
-| A clapperboard | A job started rolling. |
-| Applause | A video is done. |
-| A low horn | A job failed. |
-| A falling note | A VPS reached its usage limit. |
+| The clap of the slate | A job started rolling. |
+| A chime | A video is done. |
+| An error buzz | A job failed. |
+| A machine powering down | A VPS reached its usage limit. |
+| A bright chime | The zeppelin brought a new pitch. |
 
 Your browser remembers the choice. Browsers play sound only after you click, tap or press
 a key on the page, so a lot left with sound on stays quiet until you do. The sound stops
-while the tab is hidden. All of it is made in the page as it plays: there are no sound
-files.
+while the tab is hidden.
+
+The sounds are recordings made with [Lumina SFX](../providers/skills.md#lumina-sfx), the
+same sound library the VPSs use, in `home/studio/sounds/` (about 400 KB, loaded when you
+turn sound on). A lot opened as a plain file cannot load them, so it makes simpler sounds
+of its own in the page instead.
 
 ### The screening room
 

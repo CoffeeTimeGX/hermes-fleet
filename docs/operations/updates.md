@@ -57,6 +57,10 @@ It syncs the fleet code to the VPSs, then installs Lumina SFX on each VPS, with 
 Node.js it needs, for the `fleet` user only (a few minutes the first time). Running jobs
 are not interrupted. Check the result with `fleet skills`.
 
+The pixel lot plays Lumina SFX recordings too when you turn its sound on: the clap of the
+slate, a chime for a finished video, birds, crickets, rain, wind and the town. They come
+with `git pull`; restart `fleet studio` if it is running.
+
 ### From version 1.9 to 1.10
 
 Version 1.10 lets a trend take the rest of the day: answer *shift 3* to a pitch, and

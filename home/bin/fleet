@@ -4653,14 +4653,17 @@ def studio_page_html() -> bytes:
 
 
 def studio_files() -> dict:
-    """What the studio serves, by path: the board, the pixel lot, and the script they
-    share, marked live so that both ask this computer for the fleet instead of showing
-    their example lot."""
+    """What the studio serves, by path: the board, the pixel lot, the script they share,
+    marked live so that both ask this computer for the fleet instead of showing their
+    example lot, and the pixel lot's sounds (Lumina SFX recordings, sounds/CREDITS.md)."""
     html, js = "text/html; charset=utf-8", "text/javascript; charset=utf-8"
     board = studio_page_html()
     data = b"window.FLEET_STUDIO_LIVE = true;\n" + (STUDIO_DIR / "studio-data.js").read_bytes()
-    return {"/": (board, html), "/index.html": (board, html),
-            "/pixel.html": ((STUDIO_DIR / "pixel.html").read_bytes(), html), "/studio-data.js": (data, js)}
+    files = {"/": (board, html), "/index.html": (board, html),
+             "/pixel.html": ((STUDIO_DIR / "pixel.html").read_bytes(), html), "/studio-data.js": (data, js)}
+    for f in sorted((STUDIO_DIR / "sounds").glob("lot-*.mp3")):
+        files[f"/sounds/{f.name}"] = (f.read_bytes(), "audio/mpeg")
+    return files
 
 
 def studio_host_ok(host: str, allowed: set) -> bool:

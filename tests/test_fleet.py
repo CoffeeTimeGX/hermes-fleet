@@ -1426,7 +1426,16 @@ class StudioTest(TempDirTest):
             self.assertLessEqual(set(re.findall(r"https?://([^/\"'\s?)]+)", text)),
                                  {"fonts.googleapis.com", "fonts.gstatic.com"})
         files = fleet.studio_files()
-        self.assertEqual(set(files), {"/", "/index.html", "/pixel.html", "/studio-data.js"})
+        sounds = {f"/sounds/lot-{n}.mp3" for n in re.findall(r'"([a-z0-9-]+)"', re.search(
+            r"const SOUND_FILES = \[([^\]]*)\]", pixel).group(1))}
+        self.assertEqual(len(sounds), 13)  # every sound the lot asks for is served
+        self.assertEqual(set(files), {"/", "/index.html", "/pixel.html", "/studio-data.js"} | sounds)
+        for path in sounds:
+            body, ctype = files[path]
+            self.assertEqual(ctype, "audio/mpeg")
+            self.assertTrue(body[:3] == b"ID3" or body[0] == 0xFF, path)  # an MP3 file
+            self.assertLess(len(body), 120_000, path)
+        self.assertIn("Lumina Open Game Audio License", (fleet.STUDIO_DIR / "sounds" / "CREDITS.md").read_text(encoding="utf-8"))
         page = files["/"][0].decode("utf-8")
         self.assertTrue(page.startswith("<!doctype html>") and page.rstrip().endswith("</html>"))
         self.assertNotIn("FLEET_STUDIO_LIVE = true", page)
