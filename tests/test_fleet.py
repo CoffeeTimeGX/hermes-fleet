@@ -866,30 +866,35 @@ class SkillsTest(TempDirTest):
         self.assertEqual((a.action, a.targets), ("install", "vps1,vps3"))
         self.assertEqual(fleet.parse_cli(["skills", "list"]).action, "list")
 
+    def vps_cfg(self, *names):  # the VPS side's paths are POSIX paths, on Windows too
+        cfg = make_cfg(self.tmp, *names)
+        cfg.remote_root = "/home/fleet/fleet-{node}"
+        return cfg
+
     def test_install_syncs_then_runs_the_installer_as_the_fleet_user(self):
-        cfg = make_cfg(self.tmp, "vps1", "vps2")
+        cfg = self.vps_cfg("vps1", "vps2")
         with mock.patch.object(fleet, "push_code", return_value="synced worker x") as push, \
                 mock.patch.object(fleet, "remote", return_value=ran(0, b"lumina-sfx: installed v1.5.0\n")) as remote:
             rc, out, _ = quietly(fleet.cmd_skills, cfg, argparse.Namespace(action="install", targets="all"))
         self.assertEqual(rc, 0)
         self.assertEqual(push.call_count, 2)
         cmds = sorted(c.args[2] for c in remote.call_args_list)
-        self.assertEqual(cmds, [f"bash {self.tmp}/nodes/{n}/app/skills/install.sh" for n in ("vps1", "vps2")])
+        self.assertEqual(cmds, [f"bash /home/fleet/fleet-{n}/app/skills/install.sh" for n in ("vps1", "vps2")])
         self.assertTrue(all("user" not in c.kwargs for c in remote.call_args_list))
         self.assertIn("--- vps1 (exit 0)\nlumina-sfx: installed v1.5.0", out)
 
     def test_check_reports_a_problem_and_does_not_sync(self):
-        cfg = make_cfg(self.tmp, "vps1")
+        cfg = self.vps_cfg("vps1")
         with mock.patch.object(fleet, "push_code") as push, \
                 mock.patch.object(fleet, "remote", return_value=ran(1, b"lumina-sfx v1.5.0: missing\n")) as remote:
             rc, out, _ = quietly(fleet.cmd_skills, cfg, argparse.Namespace(action="check", targets="vps1"))
         self.assertEqual(rc, 1)
         push.assert_not_called()
-        self.assertTrue(remote.call_args.args[2].endswith("/app/skills/install.sh --check"))
+        self.assertEqual(remote.call_args.args[2], "bash /home/fleet/fleet-vps1/app/skills/install.sh --check")
         self.assertIn("missing", out)
 
     def test_installing_claude_brings_the_skills_where_it_worked(self):
-        cfg = make_cfg(self.tmp, "vps1", "vps2")
+        cfg = self.vps_cfg("vps1", "vps2")
 
         def fake_remote(cfg, n, cmd, **kw):
             if "providers/claude/install.sh" in cmd:
