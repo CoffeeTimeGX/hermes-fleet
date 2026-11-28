@@ -3366,7 +3366,7 @@ def look_once(cfg: Config, a) -> int:
         for w, fs in news:
             lines.append(watch_line(cfg, w))
             lines += [f"  {find_line(f)}. {f['url']}" for f in fs]
-        left = day_left(cfg, d)
+        left = day_left(cfg, d)[:TRENDS_SWAP_MAX]  # the soonest: a pitch takes no more
         if left:
             lines += ["", "Today's videos that no VPS has yet. A pitch can give them new topics on its subject, so "
                       "the owner can shift the day:"]

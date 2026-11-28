@@ -72,8 +72,10 @@ Answer "go 3", "shift 3" or "drop 3".
   approve.
 - *drop 3* lets it go.
 
-A video that a VPS already has, or that you changed since the pitch, keeps its topic.
-*shift* works on the day of the pitch; the day after, the pitched video alone is made.
+A video that a VPS already has, or that you changed since the pitch, keeps its topic. So
+do the videos of a channel the trend looker does not watch (`fleet trends watch
+"<channel>" --off`). A pitch changes at most 8 videos, the soonest first. *shift* works on
+the day of the pitch; the day after, the pitched video alone is made.
 
 On the pixel lot, the zeppelin's banner asks **SHIFT 3?**, and flyers flutter down onto
 the roofs of the stages whose videos would change. Click a stage to read what would change

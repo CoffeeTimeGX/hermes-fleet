@@ -2451,6 +2451,11 @@ class TrendsTest(TempDirTest):
                 self.trends("pitch", "Space Facts", "Why black holes make spaghetti", brief=brief, source="yt:a",
                             swap=swap)
         self.assertEqual(self.data()["pitches"], [])  # a refused pitch keeps nothing
+        d = self.data()
+        d["seen"] = {}  # the same finds, news again
+        fleet.save_trends(self.cfg, d)
+        with mock.patch.object(fleet, "TRENDS_SWAP_MAX", 2):  # the wake lists only as many as a pitch takes, soonest first
+            self.assertEqual(re.findall(r"(?m)^  (#\d) ", self.trends("look", wake=True)[1]), ["#1", "#2"])
         rc, out, _ = self.trends("pitch", "Space Facts", "Why black holes make spaghetti", brief=brief, source="yt:a",
                                  swap=swaps)
         self.assertEqual(out, 'pitch 1 for Space Facts: "Why black holes make spaghetti". Answer "go 1" to make it next '
